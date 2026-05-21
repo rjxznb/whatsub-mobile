@@ -1,0 +1,70 @@
+name: whatsub-mobile
+options:
+  bundleIdPrefix: cc.eversay.whatsub
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: zh-Hans
+  xcodeVersion: "15.4"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: Q3BK52FQT9
+    MARKETING_VERSION: "0.0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.10"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    # Phase 1 keeps signing simple: use automatic + the team's distribution
+    # cert that App Store Connect cloud-manages. The CI workflow passes
+    # -allowProvisioningUpdates so xcodebuild fetches profile+cert as needed.
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
+    # Localization defaults to Chinese (matches spec § 5.1 "仅中文 hardcoded")
+    SWIFT_EMIT_LOC_STRINGS: NO
+  configs:
+    Debug:
+      ENABLE_TESTABILITY: YES
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+
+targets:
+  whatsub-mobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: whatsub-mobile
+        excludes:
+          - "Info.plist"
+          - "PrivacyInfo.xcprivacy"
+    resources:
+      - whatsub-mobile/Assets.xcassets
+      - whatsub-mobile/PrivacyInfo.xcprivacy
+    info:
+      path: whatsub-mobile/Info.plist
+      properties:
+        CFBundleDisplayName: whatSub
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: AccentColor
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIApplicationSupportsIndirectInputEvents: true
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cc.eversay.whatsub.mobile
+        INFOPLIST_KEY_CFBundleDisplayName: whatSub
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
