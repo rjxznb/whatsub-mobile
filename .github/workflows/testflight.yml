@@ -12,7 +12,9 @@ concurrency:
 jobs:
   upload:
     name: Archive + Upload to TestFlight
-    runs-on: macos-14
+    # macos-15 has Xcode 16+ by default (matches ci.yml — current XcodeGen
+    # emits objectVersion 77 which Xcode 15 can't read).
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 

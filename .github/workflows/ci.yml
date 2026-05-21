@@ -12,7 +12,9 @@ concurrency:
 jobs:
   build-simulator:
     name: Build for iOS Simulator + Screenshot
-    runs-on: macos-14
+    # macos-15 has Xcode 16+ by default. macos-14 (Xcode 15.4) can't read
+    # the objectVersion 77 .xcodeproj that current XcodeGen generates.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
