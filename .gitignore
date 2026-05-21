@@ -35,3 +35,8 @@ secrets/
 *.swp
 *.swo
 Thumbs.db
+
+# Stray setup screenshots (kept locally, not in repo)
+*.png
+!whatsub-mobile/**/*.png
+!whatsub-mobile/Assets.xcassets/**
