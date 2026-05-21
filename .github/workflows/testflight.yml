@@ -1,0 +1,101 @@
+name: TestFlight
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false  # never cancel an upload in flight
+
+jobs:
+  upload:
+    name: Archive + Upload to TestFlight
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen + xcbeautify
+        run: brew install xcodegen xcbeautify
+
+      - name: Generate .xcodeproj
+        run: xcodegen generate --quiet
+
+      - name: Write ASC API key to disk
+        env:
+          ASC_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          # altool + xcodebuild both look up the key by ID in this dir,
+          # with filename pattern AuthKey_<KEY_ID>.p8.
+          printf '%s' "$ASC_API_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          # Also drop a copy at $RUNNER_TEMP for explicit-path tools:
+          cp ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8 $RUNNER_TEMP/AuthKey.p8
+
+      - name: Set CURRENT_PROJECT_VERSION = run_number + 100
+        run: |
+          # Bump build number so each TestFlight upload is unique. App Store
+          # Connect rejects duplicate (version, build) tuples.
+          BUILD_NUM=$((${{ github.run_number }} + 100))
+          echo "Setting CURRENT_PROJECT_VERSION=$BUILD_NUM"
+          echo "BUILD_NUM=$BUILD_NUM" >> $GITHUB_ENV
+
+      - name: Archive
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project whatsub-mobile.xcodeproj \
+            -scheme whatsub-mobile \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath ./build/whatsub-mobile.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            CURRENT_PROJECT_VERSION=$BUILD_NUM \
+            archive | xcbeautify
+
+      - name: Export IPA
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -exportArchive \
+            -archivePath ./build/whatsub-mobile.xcarchive \
+            -exportPath ./build/export \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" | xcbeautify
+          ls -la ./build/export/
+
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          IPA=$(find ./build/export -name "*.ipa" | head -1)
+          echo "Uploading $IPA"
+          xcrun altool --upload-app \
+            -f "$IPA" \
+            -t ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Upload archive artifact (for forensics on failed uploads)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcarchive-${{ github.sha }}
+          path: build/whatsub-mobile.xcarchive
+          retention-days: 7
