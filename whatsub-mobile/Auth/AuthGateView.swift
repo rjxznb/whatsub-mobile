@@ -29,7 +29,7 @@ struct AuthGateView: View {
                     codeField
                 }
 
-                if let error = vm.error {
+                if let error = vm.errorMessage {
                     Text(error)
                         .font(.footnote)
                         .foregroundStyle(.red)

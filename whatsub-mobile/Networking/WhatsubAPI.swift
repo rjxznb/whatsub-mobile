@@ -30,7 +30,9 @@ actor WhatsubAPI {
         return try decode(MeResponse.self, from: data)
     }
 
-    func logout(token: String) async throws {
+    /// Best-effort — swallows errors (logout shouldn't block the UI on a
+    /// flaky network; the local session is cleared regardless). Non-throwing.
+    func logout(token: String) async {
         _ = try? await postExpectingOk(Endpoints.auth("logout"), body: Data("{}".utf8), bearer: token)
     }
 
