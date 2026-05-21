@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-simulator:
+    name: Build for iOS Simulator + Screenshot
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen + xcbeautify
+        run: |
+          brew install xcodegen xcbeautify
+
+      - name: Show Xcode + SDK
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-version --sdk iphonesimulator
+
+      - name: Generate .xcodeproj
+        run: xcodegen generate --quiet
+
+      - name: Pick a stable iOS Simulator
+        id: pick-sim
+        run: |
+          xcrun simctl list devices available | sed -n '/-- iOS [0-9.]* --/,/^--/p' | head -50
+          # Prefer iPhone 15 Pro; fall back to first available iPhone
+          DEVICE_NAME="iPhone 15 Pro"
+          DEVICE_UDID=$(xcrun simctl list devices available -j | jq -r --arg name "$DEVICE_NAME" '.devices | to_entries | .[] | select(.key | contains("iOS")) | .value[] | select(.name == $name) | .udid' | head -1)
+          if [ -z "$DEVICE_UDID" ]; then
+            DEVICE_UDID=$(xcrun simctl list devices available -j | jq -r '.devices | to_entries | .[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone")) | .udid' | head -1)
+          fi
+          echo "Using device UDID: $DEVICE_UDID"
+          echo "udid=$DEVICE_UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Build for Simulator
+        env:
+          UDID: ${{ steps.pick-sim.outputs.udid }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project whatsub-mobile.xcodeproj \
+            -scheme whatsub-mobile \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${UDID}" \
+            -derivedDataPath ./DerivedData \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            build | xcbeautify || (echo "build failed"; exit 1)
+
+      - name: Boot simulator + install app
+        env:
+          UDID: ${{ steps.pick-sim.outputs.udid }}
+        run: |
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          APP_PATH=$(find DerivedData/Build/Products/Debug-iphonesimulator -maxdepth 2 -name "whatsub-mobile.app" | head -1)
+          echo "App: $APP_PATH"
+          test -d "$APP_PATH"
+          xcrun simctl install "$UDID" "$APP_PATH"
+          xcrun simctl launch "$UDID" cc.eversay.whatsub.mobile
+          # Wait for first frame
+          sleep 3
+
+      - name: Screenshot the launch tab
+        env:
+          UDID: ${{ steps.pick-sim.outputs.udid }}
+        run: |
+          mkdir -p screenshots
+          # Phase 1 takes ONE screenshot of the default 语料库 tab.
+          # Phase 2 will add a UI test target that taps through all tabs/states.
+          xcrun simctl io "$UDID" screenshot screenshots/01-corpus.png
+          ls -la screenshots/
+
+      - name: Upload screenshots artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-screenshots-${{ github.sha }}
+          path: screenshots/
+          retention-days: 14
+          if-no-files-found: error
