@@ -40,15 +40,15 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            CorpusPlaceholderView()
-                .tabItem {
-                    Label("语料库", systemImage: "books.vertical")
-                }
-                .tag(0)
-
             LibraryPlaceholderView()
                 .tabItem {
                     Label("Library", systemImage: "play.rectangle")
+                }
+                .tag(0)
+
+            CorpusPlaceholderView()
+                .tabItem {
+                    Label("语料库", systemImage: "books.vertical")
                 }
                 .tag(1)
 
