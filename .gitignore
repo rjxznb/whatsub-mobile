@@ -1,0 +1,37 @@
+# macOS
+.DS_Store
+
+# Xcode build artifacts
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdata/
+xcuserdata/
+*.moved-aside
+
+# XcodeGen-generated project — checked in OR not? See README. Default: not checked in.
+# Comment the next line if you want to commit the .xcodeproj instead.
+whatsub-mobile.xcodeproj/
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+Package.resolved
+
+# Secrets — never commit
+*.p12
+*.p8
+*.mobileprovision
+AuthKey_*.p8
+secrets/
+
+# Environment
+.env
+.env.local
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
