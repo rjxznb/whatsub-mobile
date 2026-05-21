@@ -18,6 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Select latest Xcode
+        # Apple now requires iOS 26 SDK (Xcode 26+) for App Store submission.
+        # macos-15 image ships multiple Xcode versions side-by-side; this
+        # picks the newest installed.
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Install XcodeGen + xcbeautify
         run: |
           brew install xcodegen xcbeautify
