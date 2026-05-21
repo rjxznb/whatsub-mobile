@@ -17,10 +17,16 @@ settings:
     SWIFT_VERSION: "5.10"
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     TARGETED_DEVICE_FAMILY: "1,2"
-    # Automatic signing: the CI workflow passes -allowProvisioningUpdates +
-    # ASC API key so xcodebuild fetches the cert + provisioning profile
-    # from Apple's servers per-config (Development for Debug, Distribution
-    # for Release/Archive).
+    # Automatic signing — Xcode's Cloud Signing flow:
+    # • Debug builds: simulator builds in ci.yml pass CODE_SIGNING_REQUIRED=NO
+    #   so signing is bypassed entirely for those.
+    # • Release/Archive in testflight.yml: -allowProvisioningUpdates + ASC API
+    #   key let xcodebuild fetch/create the Distribution cert + App Store
+    #   provisioning profile from Apple servers without any local cert mgmt.
+    # We intentionally do NOT set CODE_SIGN_IDENTITY here — Automatic mode
+    # picks the right identity per-config, and forcing a specific one
+    # ("Apple Distribution" / "Apple Development") causes the "conflicting
+    # signing settings" error when xcodebuild tries to reconcile them.
     CODE_SIGN_STYLE: Automatic
     # Localization defaults to Chinese (matches spec § 5.1 "仅中文 hardcoded")
     SWIFT_EMIT_LOC_STRINGS: NO
@@ -28,15 +34,8 @@ settings:
     Debug:
       ENABLE_TESTABILITY: YES
       SWIFT_OPTIMIZATION_LEVEL: "-Onone"
-      # Development profile (requires team to have registered devices, but
-      # simulator builds in ci.yml pass CODE_SIGNING_REQUIRED=NO so this is
-      # only relevant for local device-runs from Xcode).
-      CODE_SIGN_IDENTITY: "Apple Development"
     Release:
       SWIFT_OPTIMIZATION_LEVEL: "-O"
-      # App Store Distribution profile: no device list required, signed for
-      # App Store / TestFlight upload. testflight.yml archives in this config.
-      CODE_SIGN_IDENTITY: "Apple Distribution"
 
 targets:
   whatsub-mobile:

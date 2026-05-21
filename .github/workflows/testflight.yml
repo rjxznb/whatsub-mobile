@@ -51,11 +51,11 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           set -o pipefail
-          # Force CODE_SIGN_IDENTITY + DEVELOPMENT_TEAM + CODE_SIGN_STYLE on the
-          # command line to override whatever .xcodeproj has. "Apple Distribution"
-          # signs for App Store / TestFlight (no registered devices needed).
-          # The "Apple Development" identity in project.yml is only for Debug runs
-          # from Xcode (which we never do — CI is the only path).
+          # Automatic signing + ASC API key + -allowProvisioningUpdates
+          # lets xcodebuild fetch/create the right cert+profile per config
+          # (Distribution for archive). We don't pass CODE_SIGN_IDENTITY here
+          # — forcing it conflicts with Automatic mode (see "Apple Distribution
+          # has been manually specified" error pattern in CLAUDE.md).
           xcodebuild \
             -project whatsub-mobile.xcodeproj \
             -scheme whatsub-mobile \
@@ -67,8 +67,6 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
             CURRENT_PROJECT_VERSION=$BUILD_NUM \
-            CODE_SIGN_STYLE=Automatic \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
             DEVELOPMENT_TEAM=Q3BK52FQT9 \
             archive | xcbeautify
 
