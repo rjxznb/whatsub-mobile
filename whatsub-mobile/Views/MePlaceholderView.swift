@@ -9,15 +9,24 @@ struct MePlaceholderView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("账号") {
-                    Text("未登录 · Phase 2 接邮箱 OTP")
-                        .foregroundStyle(.secondary)
+            ZStack {
+                Color.whatsubBg.ignoresSafeArea()
+                List {
+                    Section("账号") {
+                        Text("未登录 · Phase 2 接邮箱 OTP")
+                            .foregroundStyle(.whatsubInkMuted)
+                    }
+                    .listRowBackground(Color.whatsubBgElev)
+
+                    Section("关于") {
+                        LabeledContent("版本", value: versionString)
+                            .foregroundStyle(.whatsubInk)
+                        Link("官网 whatsub.eversay.cc", destination: URL(string: "https://whatsub.eversay.cc")!)
+                            .foregroundStyle(.whatsubAccent)
+                    }
+                    .listRowBackground(Color.whatsubBgElev)
                 }
-                Section("关于") {
-                    LabeledContent("版本", value: versionString)
-                    Link("官网 whatsub.eversay.cc", destination: URL(string: "https://whatsub.eversay.cc")!)
-                }
+                .scrollContentBackground(.hidden)
             }
             .navigationTitle("我的")
         }
