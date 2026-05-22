@@ -26,4 +26,26 @@ final class AnalysisDecodeTests: XCTestCase {
         XCTAssertEqual(a.subtitles[0].highlightWords, [])
         XCTAssertFalse(a.subtitles[0].isKeyPoint)
     }
+
+    /// Real prod data has cues whose keyNotes contains a non-string value
+    /// (a nested `highlightTranslations` object merged in by the desktop
+    /// pipeline). Strict [String:String] decode would fail the whole entry;
+    /// lenient decode must keep the string entries + drop the junk.
+    func testKeyNotesToleratesNonStringValues() throws {
+        let json = #"""
+        {"subtitles":[
+          {"time":0,"endTime":2,"text":"He runs on the wheels.","translation":"他跑滚轮。",
+           "highlightWords":["runs on"],
+           "keyNotes":{"runs on":"运转","highlightTranslations":{"runs on the wheels":"跑滚轮"}},
+           "highlightTranslations":{"runs on":"运转"}}
+        ],"keyPhrases":[]}
+        """#.data(using: .utf8)!
+        let a = try JSONDecoder().decode(AnalysisJson.self, from: json)
+        XCTAssertEqual(a.subtitles.count, 1)
+        // The valid string entry is kept...
+        XCTAssertEqual(a.subtitles[0].keyNotes["runs on"], "运转")
+        // ...and the non-string "highlightTranslations" junk entry is dropped.
+        XCTAssertNil(a.subtitles[0].keyNotes["highlightTranslations"])
+        XCTAssertEqual(a.subtitles[0].highlightTranslations["runs on"], "运转")
+    }
 }

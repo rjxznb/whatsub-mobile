@@ -40,6 +40,15 @@ struct LibraryListResponse: Decodable {
     let entries: [LibraryListItem]
 }
 
+/// A CodingKey that accepts any string — lets us iterate a JSON object's keys
+/// without a fixed schema (used for the lenient string-map decode below).
+private struct DynamicKey: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
+}
+
 /// One subtitle cue from analysisJson.subtitles — already bilingual + highlighted.
 struct Cue: Decodable, Identifiable {
     var id: Int { index }
@@ -68,8 +77,31 @@ struct Cue: Decodable, Identifiable {
         translation = try c.decodeIfPresent(String.self, forKey: .translation) ?? ""
         isKeyPoint = try c.decodeIfPresent(Bool.self, forKey: .isKeyPoint) ?? false
         highlightWords = try c.decodeIfPresent([String].self, forKey: .highlightWords) ?? []
-        keyNotes = try c.decodeIfPresent([String: String].self, forKey: .keyNotes) ?? [:]
-        highlightTranslations = try c.decodeIfPresent([String: String].self, forKey: .highlightTranslations) ?? [:]
+        // The desktop pipeline occasionally emits a non-string value inside
+        // keyNotes (e.g. a nested `highlightTranslations` object got merged in),
+        // which would make a strict `[String: String]` decode throw and fail the
+        // ENTIRE entry. Decode leniently: keep only string values, skip the rest.
+        keyNotes = Cue.lenientStringMap(c, .keyNotes)
+        highlightTranslations = Cue.lenientStringMap(c, .highlightTranslations)
+    }
+
+    /// Decode a JSON object as `[String: String]`, keeping only entries whose
+    /// value is actually a string. Non-string values (nested objects, numbers,
+    /// null) are silently dropped instead of failing the whole decode.
+    private static func lenientStringMap(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        _ key: CodingKeys
+    ) -> [String: String] {
+        guard let nested = try? container.nestedContainer(keyedBy: DynamicKey.self, forKey: key) else {
+            return [:]
+        }
+        var out: [String: String] = [:]
+        for k in nested.allKeys {
+            if let s = try? nested.decode(String.self, forKey: k) {
+                out[k.stringValue] = s
+            }
+        }
+        return out
     }
 }
 
