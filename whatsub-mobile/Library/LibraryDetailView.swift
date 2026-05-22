@@ -28,8 +28,10 @@ struct LibraryDetailView: View {
         }
         .navigationTitle(vm.entry?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
-        // Landscape = fullscreen: hide the nav bar + status bar; portrait restores them.
+        // Landscape = fullscreen: hide the nav bar + tab bar + status bar so the
+        // video is truly edge-to-edge; portrait restores them.
         .toolbar(isLandscape ? .hidden : .automatic, for: .navigationBar)
+        .toolbar(isLandscape ? .hidden : .automatic, for: .tabBar)
         .statusBarHidden(isLandscape)
         .task {
             guard let token = appState.session?.sessionToken else { return }
