@@ -17,6 +17,12 @@ final class LibraryDetailViewModel: ObservableObject {
 
     private var cues: [Cue] { entry?.analysisJson.subtitles ?? [] }
 
+    /// The cue at the current playhead (for the on-video caption overlay).
+    var currentCue: Cue? {
+        guard let idx = currentIndex, cues.indices.contains(idx) else { return nil }
+        return cues[idx]
+    }
+
     func load(id: String, token: String) async {
         loading = true; errorMessage = nil
         do {
