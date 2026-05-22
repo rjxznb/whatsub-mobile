@@ -134,3 +134,95 @@ struct LibraryEntryDetail: Decodable {
     let transcriptSrt: String?
     let analysisJson: AnalysisJson
 }
+
+// ----- Corpus -----
+
+struct CorpusTag: Decodable, Identifiable {
+    var id: String { tag }
+    let tag: String
+    let count: Int
+}
+struct CorpusTagsResponse: Decodable { let tags: [CorpusTag] }
+
+/// A contribution's source. JSONB written by the plugin — camelCase on the wire
+/// in BOTH /mine and /lookup. Only `youtube` carries `timestampSec`.
+struct CorpusSource: Decodable {
+    let kind: String   // youtube | webpage | pdf | curator
+    let url: String
+    let title: String?
+    let timestampSec: Double?
+}
+
+/// /browse phrase — snake_case, phrase-level (no per-instance source).
+struct BrowsePhrase: Decodable, Identifiable {
+    var id: String { phraseNormalized }
+    let phraseNormalized: String
+    let phraseRaw: String
+    let meaningZh: String?
+    let usageNote: String?
+    let tags: [String]
+    enum CodingKeys: String, CodingKey {
+        case phraseNormalized = "phrase_normalized"
+        case phraseRaw = "phrase_raw"
+        case meaningZh = "meaning_zh"
+        case usageNote = "usage_note"
+        case tags
+    }
+}
+struct BrowseResponse: Decodable { let phrases: [BrowsePhrase]; let total: Int }
+
+/// /mine item — camelCase, instance-level (one row per save).
+struct MineItem: Decodable, Identifiable {
+    let phraseNormalized: String
+    let phraseRaw: String
+    let meaningZh: String?
+    let usageNote: String?
+    let contextSentence: String
+    let source: CorpusSource
+    let contributedAt: Int64
+    let tags: [String]
+    var id: String { "\(phraseNormalized)#\(contributedAt)" }
+}
+struct MineResponse: Decodable { let items: [MineItem]; let total: Int }
+
+/// /lookup contribution — snake_case row; its `source` JSONB is camelCase.
+struct CorpusContribution: Decodable, Identifiable {
+    let id: Int
+    let contextSentence: String
+    let source: CorpusSource
+    let contributedAt: Int64
+    enum CodingKeys: String, CodingKey {
+        case id
+        case contextSentence = "context_sentence"
+        case source
+        case contributedAt = "contributed_at"
+    }
+}
+
+/// /lookup phrase — snake_case; `tags` arrives wrapped as `{ list: [...] }`.
+struct LookupPhrase: Decodable {
+    let phraseRaw: String
+    let meaningZh: String?
+    let usageNote: String?
+    let tags: [String]
+    enum CodingKeys: String, CodingKey {
+        case phraseRaw = "phrase_raw"
+        case meaningZh = "meaning_zh"
+        case usageNote = "usage_note"
+        case tags
+    }
+    private struct TagWrapper: Decodable { let list: [String]? }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        phraseRaw = try c.decodeIfPresent(String.self, forKey: .phraseRaw) ?? ""
+        meaningZh = try c.decodeIfPresent(String.self, forKey: .meaningZh)
+        usageNote = try c.decodeIfPresent(String.self, forKey: .usageNote)
+        let wrapped = try c.decodeIfPresent(TagWrapper.self, forKey: .tags)
+        tags = wrapped?.list ?? []
+    }
+}
+struct LookupResponse: Decodable {
+    let phrase: LookupPhrase
+    let publicContributions: [CorpusContribution]
+    let personalContributions: [CorpusContribution]
+}

@@ -20,6 +20,9 @@ struct YouTubeEmbedView: UIViewRepresentable {
     var onReady: () -> Void
     /// Called ~4x/sec with the player's current time (seconds).
     var onTime: (Double) -> Void
+    /// If set, the player starts at this timestamp (seconds). Default nil = no start offset.
+    /// Pass this for corpus phrase instances that have a `timestampSec`; omit for Library callers.
+    var startSeconds: Double? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(onReady: onReady, onTime: onTime) }
 
@@ -32,7 +35,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         webView.isOpaque = false
         webView.backgroundColor = .black
-        webView.loadHTMLString(Self.html(videoId: videoId), baseURL: URL(string: "https://www.youtube-nocookie.com"))
+        webView.loadHTMLString(Self.html(videoId: videoId, startSeconds: startSeconds), baseURL: URL(string: "https://www.youtube-nocookie.com"))
         context.coordinator.webView = webView
         return webView
     }
@@ -70,8 +73,9 @@ struct YouTubeEmbedView: UIViewRepresentable {
         }
     }
 
-    private static func html(videoId: String) -> String {
-        """
+    private static func html(videoId: String, startSeconds: Double?) -> String {
+        let startVar = startSeconds.map { ", start: \(Int($0))" } ?? ""
+        return """
         <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
         <style>html,body{margin:0;background:#000;height:100%;overflow:hidden}#player{width:100%;height:100%}</style></head>
         <body><div id="player"></div>
@@ -82,7 +86,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
             window.player = new YT.Player('player', {
               videoId: '\(videoId)',
               host: 'https://www.youtube-nocookie.com',
-              playerVars: { playsinline: 1, modestbranding: 1, rel: 0 },
+              playerVars: { playsinline: 1, modestbranding: 1, rel: 0\(startVar) },
               events: {
                 onReady: function() {
                   try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'ready' }); } catch (e) {}

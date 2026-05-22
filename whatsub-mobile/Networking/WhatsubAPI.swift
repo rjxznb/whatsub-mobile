@@ -49,6 +49,45 @@ actor WhatsubAPI {
         return try decode(LibraryEntryDetail.self, from: data)
     }
 
+    // ----- Corpus -----
+
+    /// scope = "public" (needs license) or "mine" (session only).
+    func corpusTags(scope: String, token: String) async throws -> [CorpusTag] {
+        let data = try await get(Endpoints.corpus("tags?scope=\(scope)"), bearer: token)
+        return try decode(CorpusTagsResponse.self, from: data).tags
+    }
+
+    func browseCorpus(tags: [String], token: String) async throws -> [BrowsePhrase] {
+        var path = "browse?limit=100"
+        if !tags.isEmpty {
+            let joined = tags.joined(separator: ",")
+            path += "&tags=\(joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? joined)"
+        }
+        let data = try await get(Endpoints.corpus(path), bearer: token)
+        return try decode(BrowseResponse.self, from: data).phrases
+    }
+
+    func mineCorpus(tags: [String], token: String) async throws -> [MineItem] {
+        var path = "mine?pageSize=100"
+        if !tags.isEmpty {
+            let joined = tags.joined(separator: ",")
+            path += "&tags=\(joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? joined)"
+        }
+        let data = try await get(Endpoints.corpus(path), bearer: token)
+        return try decode(MineResponse.self, from: data).items
+    }
+
+    /// Returns nil when the backend reports no_data (404).
+    func lookupPhrase(_ phrase: String, token: String) async throws -> LookupResponse? {
+        let enc = phrase.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? phrase
+        do {
+            let data = try await get(Endpoints.corpus("lookup?phrase=\(enc)&withScope=true"), bearer: token)
+            return try decode(LookupResponse.self, from: data)
+        } catch APIError.server(let code, _) where code == 404 {
+            return nil
+        }
+    }
+
     // ----- HTTP primitives -----
 
     private func get(_ url: URL, bearer: String?) async throws -> Data {
