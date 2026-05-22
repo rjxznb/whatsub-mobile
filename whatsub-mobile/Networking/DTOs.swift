@@ -133,6 +133,7 @@ struct LibraryEntryDetail: Decodable {
     let durationSec: Int?
     let transcriptSrt: String?
     let analysisJson: AnalysisJson
+    let videoUrl: String?
 }
 
 // ----- Corpus -----
