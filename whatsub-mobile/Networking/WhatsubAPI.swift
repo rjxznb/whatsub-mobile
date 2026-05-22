@@ -49,6 +49,11 @@ actor WhatsubAPI {
         return try decode(LibraryEntryDetail.self, from: data)
     }
 
+    func deleteLibraryEntry(id: String, token: String) async throws {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        _ = try await delete(Endpoints.library("sync/\(encoded)"), bearer: token)
+    }
+
     // ----- Corpus -----
 
     /// scope = "public" (needs license) or "mine" (session only).
@@ -93,6 +98,13 @@ actor WhatsubAPI {
     private func get(_ url: URL, bearer: String?) async throws -> Data {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
+        applyBearer(&req, bearer)
+        return try await send(req)
+    }
+
+    private func delete(_ url: URL, bearer: String?) async throws -> Data {
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
         applyBearer(&req, bearer)
         return try await send(req)
     }
