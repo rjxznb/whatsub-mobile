@@ -74,3 +74,25 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: whatSub
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+
+  whatsub-mobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - whatsub-mobileTests
+    dependencies:
+      - target: whatsub-mobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cc.eversay.whatsub.mobileTests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  whatsub-mobile:
+    build:
+      targets:
+        whatsub-mobile: all
+        whatsub-mobileTests: [test]
+    test:
+      targets:
+        - whatsub-mobileTests

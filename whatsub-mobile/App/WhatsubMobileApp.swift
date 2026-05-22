@@ -36,27 +36,34 @@ struct WhatsubMobileApp: App {
 }
 
 struct ContentView: View {
+    @EnvironmentObject var appState: AppState
     @State private var selectedTab: Int = 0
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            LibraryPlaceholderView()
-                .tabItem {
-                    Label("Library", systemImage: "play.rectangle")
-                }
-                .tag(0)
+        Group {
+            if appState.isAuthenticated {
+                TabView(selection: $selectedTab) {
+                    LibraryPlaceholderView()
+                        .tabItem {
+                            Label("Library", systemImage: "play.rectangle")
+                        }
+                        .tag(0)
 
-            CorpusPlaceholderView()
-                .tabItem {
-                    Label("语料库", systemImage: "books.vertical")
-                }
-                .tag(1)
+                    CorpusPlaceholderView()
+                        .tabItem {
+                            Label("语料库", systemImage: "books.vertical")
+                        }
+                        .tag(1)
 
-            MePlaceholderView()
-                .tabItem {
-                    Label("我的", systemImage: "person.crop.circle")
+                    MeView()
+                        .tabItem {
+                            Label("我的", systemImage: "person.crop.circle")
+                        }
+                        .tag(2)
                 }
-                .tag(2)
+            } else {
+                AuthGateView()
+            }
         }
     }
 }
