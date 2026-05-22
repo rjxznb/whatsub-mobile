@@ -11,6 +11,9 @@ struct LibraryView: View {
                 content
             }
             .navigationTitle("Library")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(Color.whatsubBg, for: .navigationBar)
             .task { if !vm.loadedOnce { await reload() } }
             .refreshable { await reload() }
         }
@@ -58,12 +61,24 @@ private struct LibraryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: entry.thumbUrl.flatMap(URL.init)) { img in
-                img.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color.whatsubBgSoft
+            AsyncImage(url: entry.thumbUrl.flatMap(URL.init)) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFill()
+                default:
+                    // i.ytimg.com is a Google CDN — unreachable in mainland China
+                    // without a VPN (same constraint as the YouTube player embed).
+                    // Show a play-icon placeholder instead of an empty box.
+                    ZStack {
+                        Color.whatsubBgSoft
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.whatsubInkFaint)
+                    }
+                }
             }
             .frame(width: 96, height: 54)
+            .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             VStack(alignment: .leading, spacing: 4) {
