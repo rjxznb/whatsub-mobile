@@ -7,6 +7,9 @@ struct LibraryDetailView: View {
     @Environment(\.verticalSizeClass) private var vSize
     @State private var playerReady = false
     @State private var playerTimedOut = false
+    @State private var showCaptions = true
+
+    private var isLandscape: Bool { vSize == .compact }
 
     var body: some View {
         ZStack {
@@ -16,7 +19,7 @@ struct LibraryDetailView: View {
             } else if let err = vm.errorMessage {
                 Text(err).foregroundStyle(.whatsubInkMuted).padding()
             } else if let entry = vm.entry {
-                if vSize == .compact {
+                if isLandscape {
                     landscape(entry)
                 } else {
                     portrait(entry)
@@ -25,6 +28,9 @@ struct LibraryDetailView: View {
         }
         .navigationTitle(vm.entry?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
+        // Landscape = fullscreen: hide the nav bar + status bar; portrait restores them.
+        .toolbar(isLandscape ? .hidden : .automatic, for: .navigationBar)
+        .statusBarHidden(isLandscape)
         .task {
             guard let token = appState.session?.sessionToken else { return }
             await vm.load(id: entryId, token: token)
@@ -32,7 +38,9 @@ struct LibraryDetailView: View {
         .overlay { if vm.showPopup { highlightPopup } }
     }
 
-    private func player(_ entry: LibraryEntryDetail) -> some View {
+    /// The video surface + loading state + the caption / CC-toggle overlays.
+    /// Sizing (16:9 box vs fullscreen fill) is applied by the caller.
+    private func player(_ entry: LibraryEntryDetail, fullscreen: Bool) -> some View {
         ZStack {
             if let v = entry.videoUrl, let url = URL(string: v) {
                 VideoPlayerView(
@@ -50,12 +58,57 @@ struct LibraryDetailView: View {
                 )
             }
             if !playerReady { playerOverlay(isYouTube: entry.videoUrl == nil) }
+            if playerReady {
+                VStack {
+                    HStack { Spacer(); captionToggle }
+                    Spacer()
+                    if showCaptions, let cue = vm.currentCue { captionBar(cue) }
+                }
+                .padding(fullscreen ? 16 : 8)
+            }
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
         .background(Color.black)
         .task {
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             if !playerReady { playerTimedOut = true }
+        }
+    }
+
+    // On-video bilingual caption (current cue): English with AI highlights in
+    // yellow + Chinese below. Toggleable via the CC button.
+    private func captionBar(_ cue: Cue) -> some View {
+        VStack(spacing: 3) {
+            captionEnglish(cue)
+                .font(.system(size: 17, weight: .medium))
+                .multilineTextAlignment(.center)
+            if !cue.translation.isEmpty {
+                Text(cue.translation)
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 12)
+    }
+
+    private func captionEnglish(_ cue: Cue) -> Text {
+        splitForHighlights(cue.text, highlights: cue.highlightWords).reduce(Text("")) { acc, run in
+            acc + Text(run.text)
+                .foregroundColor(run.highlight ? .whatsubHighlight : .white)
+                .fontWeight(run.highlight ? .semibold : .regular)
+        }
+    }
+
+    private var captionToggle: some View {
+        Button { showCaptions.toggle() } label: {
+            Image(systemName: showCaptions ? "captions.bubble.fill" : "captions.bubble")
+                .font(.title3)
+                .foregroundColor(.white)
+                .padding(8)
+                .background(.black.opacity(0.45), in: Circle())
         }
     }
 
@@ -93,18 +146,18 @@ struct LibraryDetailView: View {
 
     private func portrait(_ entry: LibraryEntryDetail) -> some View {
         VStack(spacing: 0) {
-            player(entry)
+            player(entry, fullscreen: false)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
             subtitleList(entry)
         }
     }
 
+    // Landscape = fullscreen: the player fills the screen (video letterboxed on
+    // black); the on-video caption overlay is the reading surface here (no list).
     private func landscape(_ entry: LibraryEntryDetail) -> some View {
-        ZStack(alignment: .bottom) {
-            player(entry)
-            subtitleList(entry)
-                .frame(maxHeight: 180)
-                .background(.black.opacity(0.55))
-        }
+        player(entry, fullscreen: true)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
     }
 
     private func subtitleList(_ entry: LibraryEntryDetail) -> some View {
