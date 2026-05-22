@@ -14,10 +14,14 @@ struct SeekRequest: Equatable {
 struct YouTubeEmbedView: UIViewRepresentable {
     let videoId: String
     var seek: SeekRequest?
+    /// Called once when the IFrame player has loaded + is ready to play.
+    /// Drives the SwiftUI loading overlay (the iframe API + first frame can
+    /// take several seconds, especially over a VPN).
+    var onReady: () -> Void
     /// Called ~4x/sec with the player's current time (seconds).
     var onTime: (Double) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onTime: onTime) }
+    func makeCoordinator() -> Coordinator { Coordinator(onReady: onReady, onTime: onTime) }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -41,17 +45,28 @@ struct YouTubeEmbedView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKScriptMessageHandler {
+        let onReady: () -> Void
         let onTime: (Double) -> Void
         weak var webView: WKWebView?
         var lastSeek: SeekRequest?
-        init(onTime: @escaping (Double) -> Void) { self.onTime = onTime }
+        private var didSignalReady = false
+        init(onReady: @escaping () -> Void, onTime: @escaping (Double) -> Void) {
+            self.onReady = onReady
+            self.onTime = onTime
+        }
 
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "iosBridge",
                   let dict = message.body as? [String: Any],
-                  let type = dict["type"] as? String, type == "time",
-                  let sec = dict["sec"] as? Double else { return }
-            onTime(sec)
+                  let type = dict["type"] as? String else { return }
+            switch type {
+            case "ready":
+                if !didSignalReady { didSignalReady = true; onReady() }
+            case "time":
+                if let sec = dict["sec"] as? Double { onTime(sec) }
+            default:
+                break
+            }
         }
     }
 
@@ -70,6 +85,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
               playerVars: { playsinline: 1, modestbranding: 1, rel: 0 },
               events: {
                 onReady: function() {
+                  try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'ready' }); } catch (e) {}
                   setInterval(function() {
                     if (window.player && window.player.getCurrentTime) {
                       try {
