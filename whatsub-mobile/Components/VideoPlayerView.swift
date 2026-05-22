@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import AVFoundation
 
 /// Native AVPlayer-backed video view. Input surface mirrors YouTubeEmbedView
 /// (url, seek, onReady, onTime) so LibraryDetailView can swap between them
@@ -13,6 +14,13 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onReady: onReady, onTime: onTime) }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
+        // Play audio even when the hardware ring/silent switch is on silent.
+        // Default AVAudioSession (.ambient/.soloAmbient) honors the silent
+        // switch → muted video. `.playback` is the standard category for a
+        // media app and makes the sound audible regardless of the switch.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+
         let player = AVPlayer(url: url)
         player.automaticallyWaitsToMinimizeStalling = true
         let vc = AVPlayerViewController()

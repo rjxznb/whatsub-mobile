@@ -49,7 +49,7 @@ struct LibraryDetailView: View {
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )
             }
-            if !playerReady { playerOverlay }
+            if !playerReady { playerOverlay(isYouTube: entry.videoUrl == nil) }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
         .background(Color.black)
@@ -59,7 +59,7 @@ struct LibraryDetailView: View {
         }
     }
 
-    private var playerOverlay: some View {
+    private func playerOverlay(isYouTube: Bool) -> some View {
         ZStack {
             Color.black
             VStack(spacing: 10) {
@@ -70,7 +70,7 @@ struct LibraryDetailView: View {
                     Text("视频加载失败")
                         .font(.callout)
                         .foregroundStyle(.whatsubInk)
-                    Text("YouTube 视频需挂 VPN 观看，\n确认 VPN 已开启后重进本页")
+                    Text(isYouTube ? "YouTube 视频需挂 VPN 观看，\n确认 VPN 已开启后重进本页" : "请检查网络后重进本页")
                         .font(.caption)
                         .foregroundStyle(.whatsubInkMuted)
                         .multilineTextAlignment(.center)
@@ -80,9 +80,11 @@ struct LibraryDetailView: View {
                     Text("视频加载中…")
                         .font(.callout)
                         .foregroundStyle(.whatsubInkSoft)
-                    Text("YouTube 视频需挂 VPN 观看")
-                        .font(.caption)
-                        .foregroundStyle(.whatsubInkFaint)
+                    if isYouTube {
+                        Text("YouTube 视频需挂 VPN 观看")
+                            .font(.caption)
+                            .foregroundStyle(.whatsubInkFaint)
+                    }
                 }
             }
             .padding(.horizontal, 20)
