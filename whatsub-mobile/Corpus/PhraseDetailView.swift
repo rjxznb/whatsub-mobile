@@ -1,13 +1,17 @@
 import SwiftUI
 
-// URL: Identifiable is not declared elsewhere in the project — add it once here.
-extension URL: Identifiable { public var id: String { absoluteString } }
+/// Wraps a URL for `.sheet(item:)` — avoids conforming Foundation's URL to
+/// Identifiable (which Apple may add and would then collide).
+private struct IdentifiedURL: Identifiable {
+    let id = UUID()
+    let url: URL
+}
 
 struct PhraseDetailView: View {
     let phrase: String
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = PhraseDetailViewModel()
-    @State private var safariURL: URL?
+    @State private var safariURL: IdentifiedURL?
     @State private var playing: CorpusContribution?
 
     var body: some View {
@@ -36,7 +40,7 @@ struct PhraseDetailView: View {
             guard let token = appState.session?.sessionToken else { return }
             await vm.load(phrase: phrase, token: token)
         }
-        .sheet(item: $safariURL) { url in SafariView(url: url) }
+        .sheet(item: $safariURL) { item in SafariView(url: item.url) }
     }
 
     private func header(_ p: LookupPhrase) -> some View {
@@ -84,7 +88,7 @@ struct PhraseDetailView: View {
             } else {
                 // webpage / pdf / curator → open the source URL in Safari.
                 sourceButton(icon: "safari", label: "打开来源") {
-                    if let u = URL(string: c.source.url) { safariURL = u }
+                    if let u = URL(string: c.source.url) { safariURL = IdentifiedURL(url: u) }
                 }
             }
         }
