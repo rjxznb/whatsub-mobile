@@ -5,6 +5,8 @@ struct LibraryDetailView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryDetailViewModel()
     @Environment(\.verticalSizeClass) private var vSize
+    @State private var playerReady = false
+    @State private var playerTimedOut = false
 
     var body: some View {
         ZStack {
@@ -31,10 +33,55 @@ struct LibraryDetailView: View {
     }
 
     private func player(_ entry: LibraryEntryDetail) -> some View {
-        YouTubeEmbedView(videoId: entry.youtubeId, seek: vm.seek) { sec in
-            vm.onPlayerTime(sec)
+        ZStack {
+            YouTubeEmbedView(
+                videoId: entry.youtubeId,
+                seek: vm.seek,
+                onReady: { playerReady = true },
+                onTime: { sec in vm.onPlayerTime(sec) }
+            )
+            if !playerReady {
+                playerOverlay
+            }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .background(Color.black)
+        .task {
+            // The IFrame API + first frame can take several seconds (more over
+            // a VPN). After 15s with no `ready`, surface the VPN hint.
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            if !playerReady { playerTimedOut = true }
+        }
+    }
+
+    private var playerOverlay: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 10) {
+                if playerTimedOut {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.title)
+                        .foregroundStyle(.whatsubInkMuted)
+                    Text("视频加载失败")
+                        .font(.callout)
+                        .foregroundStyle(.whatsubInk)
+                    Text("YouTube 视频需挂 VPN 观看，\n确认 VPN 已开启后重进本页")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                        .multilineTextAlignment(.center)
+                } else {
+                    ProgressView()
+                        .tint(.whatsubAccent)
+                    Text("视频加载中…")
+                        .font(.callout)
+                        .foregroundStyle(.whatsubInkSoft)
+                    Text("YouTube 视频需挂 VPN 观看")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkFaint)
+                }
+            }
+            .padding(.horizontal, 20)
+        }
     }
 
     private func portrait(_ entry: LibraryEntryDetail) -> some View {
