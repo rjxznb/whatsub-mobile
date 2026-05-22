@@ -2,7 +2,7 @@
 
 iOS consumer client for whatSub. SwiftUI native, iOS 16+. Reads public/private corpus + cloud-synced library subtitles from the [whatsub-license](https://github.com/rjxznb/whatsub-license) backend. Companion to the [desktop Tauri app](https://github.com/rjxznb/whatsub-releases) (private repo for source) which produces the data this app consumes.
 
-**Status**: v1 FEATURE-COMPLETE on TestFlight (2026-05-22). Phase 1 (scaffold + CI + TestFlight) ✅; Phase 2a (email-OTP auth + networking) ✅; Phase 2c (Library list + bilingual subtitle reader + embedded YouTube) ✅; Phase 2b (语料库 browse + phrase detail) ✅. Backend thumbnail sync ✅ (covers load without VPN). Three tabs live: Library / 语料库 / 我的. Next candidates: native AVPlayer + self-hosted video (replace YouTube embed for better seek, no VPN — under design); App Store public release; v1.5 share-to-import.
+**Status**: v1 FEATURE-COMPLETE + post-v1 video upgrades on TestFlight (2026-05-22/23). Phase 1 (scaffold + CI + TestFlight) ✅; Phase 2a (email-OTP auth) ✅; Phase 2c (Library list + bilingual subtitle reader) ✅; Phase 2b (语料库 browse + phrase detail) ✅. Backend thumbnail sync ✅ (covers without VPN). **Self-hosted video** ✅: synced videos play via native AVPlayer from Aliyun OSS+CDN (no VPN, instant seek); falls back to YouTube embed when no `videoUrl`. **Swipe-to-delete** ✅: left-swipe a Library card → confirm → removes from cloud (backend row + OSS object); desktop reconciles the stale badge, keeps local file. Three tabs: Library / 语料库 / 我的. Next: App Store public release; v1.5 share-to-import.
 
 ## Stack
 
