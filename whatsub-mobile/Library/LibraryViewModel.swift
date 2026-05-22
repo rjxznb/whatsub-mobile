@@ -8,6 +8,15 @@ final class LibraryViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var loadedOnce = false
 
+    func delete(_ id: String, token: String) async {
+        do {
+            try await WhatsubAPI.shared.deleteLibraryEntry(id: id, token: token)
+            entries.removeAll { $0.id == id }
+        } catch {
+            errorMessage = "删除失败，请稍后重试"
+        }
+    }
+
     func load(token: String) async {
         loading = true
         errorMessage = nil

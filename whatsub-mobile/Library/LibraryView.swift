@@ -3,6 +3,7 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryViewModel()
+    @State private var pendingDelete: LibraryListItem?
 
     var body: some View {
         NavigationStack {
@@ -63,8 +64,27 @@ struct LibraryView: View {
                     LibraryRow(entry: entry)
                 }
                 .listRowBackground(Color.whatsubBgElev)
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) { pendingDelete = entry } label: {
+                        Label("删除", systemImage: "trash")
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
+            .confirmationDialog(
+                "从云端删除「\(pendingDelete?.title ?? "")」？",
+                isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("删除", role: .destructive) {
+                    if let e = pendingDelete, let token = appState.session?.sessionToken {
+                        Task { await vm.delete(e.id, token: token); pendingDelete = nil }
+                    }
+                }
+                Button("取消", role: .cancel) { pendingDelete = nil }
+            } message: {
+                Text("将从云端移除该视频（含已上传的视频文件）。桌面端的本地副本保留，可重新同步。")
+            }
         }
     }
 }
