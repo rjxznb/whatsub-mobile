@@ -6,22 +6,32 @@ struct LibraryView: View {
 
     var body: some View {
         NavigationStack {
-            // Background as a `.background` MODIFIER (not a ZStack sibling layer)
-            // + navigationDestination at the STABLE root (not inside a conditional
-            // content branch). The old `ZStack { Color.ignoresSafeArea(); List }`
-            // + destination-inside-List caused the large title to collapse ~1s
-            // after popping back from a detail (nav-bar layout recomputed against
-            // the full-bleed background). This structure keeps the title sticky.
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.whatsubBg.ignoresSafeArea())
-                .navigationTitle("Library")
-                .navigationBarTitleDisplayMode(.large)
-                .navigationDestination(for: String.self) { id in
-                    LibraryDetailView(entryId: id)
-                }
-                .task { if !vm.loadedOnce { await reload() } }
-                .refreshable { await reload() }
+            // Custom "Library" header instead of the system large title.
+            // The system navigationTitle proved flaky here: with our global
+            // black UINavigationBarAppearance + custom background + the
+            // push/pop to detail, the large title intermittently collapsed
+            // OR rendered invisible (space reserved, no text). A plain Text
+            // header is 100% reliable + gives the exact top-left large-title
+            // look. System nav bar is hidden on this screen; the detail view
+            // shows its own bar (with back button) when pushed.
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Library")
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(.whatsubInk)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+                content
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color.whatsubBg.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: String.self) { id in
+                LibraryDetailView(entryId: id)
+            }
+            .task { if !vm.loadedOnce { await reload() } }
+            .refreshable { await reload() }
         }
     }
 
