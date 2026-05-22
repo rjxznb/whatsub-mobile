@@ -2,7 +2,7 @@
 
 iOS consumer client for whatSub. SwiftUI native, iOS 16+. Reads public/private corpus + cloud-synced library subtitles from the [whatsub-license](https://github.com/rjxznb/whatsub-license) backend. Companion to the [desktop Tauri app](https://github.com/rjxznb/whatsub-releases) (private repo for source) which produces the data this app consumes.
 
-**Status**: Phase 1 done (scaffold + CI + TestFlight). Phase 2 (auth + corpus + library detail features) in plan.
+**Status**: v1 FEATURE-COMPLETE on TestFlight (2026-05-22). Phase 1 (scaffold + CI + TestFlight) ✅; Phase 2a (email-OTP auth + networking) ✅; Phase 2c (Library list + bilingual subtitle reader + embedded YouTube) ✅; Phase 2b (语料库 browse + phrase detail) ✅. Backend thumbnail sync ✅ (covers load without VPN). Three tabs live: Library / 语料库 / 我的. Next candidates: native AVPlayer + self-hosted video (replace YouTube embed for better seek, no VPN — under design); App Store public release; v1.5 share-to-import.
 
 ## Stack
 
