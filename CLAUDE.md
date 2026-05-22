@@ -112,6 +112,14 @@ The `.p8` file should be deleted from local disk after upload to GitHub Secrets 
 
 - **`.foregroundStyle(.secondary)` works without our help** — `.secondary` is already a `ShapeStyle` static (`HierarchicalShapeStyle.secondary`). The trap is custom colors.
 
+- **Swift bare `catch {}` binds an implicit immutable constant named `error`** — which shadows any property/var named `error`, making `error = ...` fail with "cannot assign to value: 'error' is immutable". Don't name a `@Published` property `error`; use `errorMessage`. (Hit in AuthViewModel.)
+
+- **LLM/pipeline JSON is not schema-clean — decode external blobs leniently.** Prod `analysisJson.subtitles[].keyNotes` is declared `[String: String]` but the desktop pipeline occasionally merges a nested `highlightTranslations` object in as a value, so a strict `[String: String]` decode throws and fails the ENTIRE entry → user sees "数据格式不正确". Fix: decode such maps with a tolerant helper (`DynamicKey` keyed container, keep only string values, drop the rest) — see `Cue.lenientStringMap` in `Networking/DTOs.swift`. General rule: anything an LLM produced gets defensive parsing at the boundary; never let one malformed field nuke a whole response.
+
+### Networking / China reachability
+
+- **`i.ytimg.com` (YouTube thumbnail CDN) is GFW-blocked in mainland China** — `curl` without VPN times out (HTTP 000); with VPN it's 200. The iOS Library list uses `https://i.ytimg.com/vi/{id}/mqdefault.jpg` for covers, so without a VPN the thumbnails don't load (AsyncImage shows the placeholder). The YouTube player embed (youtube-nocookie.com) has the SAME constraint, so the feature already requires VPN to actually watch. Note: the DESKTOP app avoids this entirely by using locally-extracted thumbnails (ffmpeg frame grab → thumb.jpg), NOT Google's CDN. If the Library list must be browsable WITHOUT VPN, the proper fix is to sync the desktop's local thumb.jpg to our own backend (whatsub.eversay.cc, China-reachable) and serve it from there — a Plan 3 + backend + storage change, deferred. For now AsyncImage falls back to a play-icon placeholder.
+
 ### Local dev on Windows
 
 - **`localhost:3030` curl hits `http_proxy` instead of the loopback** when the user has a VPN/proxy env set (e.g. Clash on 127.0.0.1:7890). Symptom: `HTTP 502 Bad Gateway` with proxy headers in response. Fix: `unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY` in the same shell before curl, OR `curl --noproxy '*'`. Backend itself is fine; this is purely a client-side proxy interference.

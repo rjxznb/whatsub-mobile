@@ -13,11 +13,20 @@ struct CueRow: View {
                 .font(.system(size: 16))
                 .foregroundStyle(isCurrent ? .whatsubInkSoft : .whatsubInkMuted)
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isCurrent ? Color.whatsubAccent.opacity(0.12) : .clear,
-                    in: RoundedRectangle(cornerRadius: 8))
+        // Each cue is its own subtle card so segments read as distinct blocks
+        // against the pure-black page. Current cue: accent tint + accent border.
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isCurrent ? Color.whatsubAccent.opacity(0.18) : Color.whatsubBgElev)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(isCurrent ? Color.whatsubAccent.opacity(0.6) : Color.white.opacity(0.06),
+                              lineWidth: isCurrent ? 1.5 : 1)
+        )
         .contentShape(Rectangle())
         .onTapGesture { onTapCue() }
     }
