@@ -6,16 +6,22 @@ struct LibraryView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.whatsubBg.ignoresSafeArea()
-                content
-            }
-            .navigationTitle("Library")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color.whatsubBg, for: .navigationBar)
-            .task { if !vm.loadedOnce { await reload() } }
-            .refreshable { await reload() }
+            // Background as a `.background` MODIFIER (not a ZStack sibling layer)
+            // + navigationDestination at the STABLE root (not inside a conditional
+            // content branch). The old `ZStack { Color.ignoresSafeArea(); List }`
+            // + destination-inside-List caused the large title to collapse ~1s
+            // after popping back from a detail (nav-bar layout recomputed against
+            // the full-bleed background). This structure keeps the title sticky.
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.whatsubBg.ignoresSafeArea())
+                .navigationTitle("Library")
+                .navigationBarTitleDisplayMode(.large)
+                .navigationDestination(for: String.self) { id in
+                    LibraryDetailView(entryId: id)
+                }
+                .task { if !vm.loadedOnce { await reload() } }
+                .refreshable { await reload() }
         }
     }
 
@@ -49,9 +55,6 @@ struct LibraryView: View {
                 .listRowBackground(Color.whatsubBgElev)
             }
             .scrollContentBackground(.hidden)
-            .navigationDestination(for: String.self) { id in
-                LibraryDetailView(entryId: id)
-            }
         }
     }
 }
