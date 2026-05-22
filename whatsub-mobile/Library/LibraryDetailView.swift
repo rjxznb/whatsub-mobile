@@ -34,21 +34,26 @@ struct LibraryDetailView: View {
 
     private func player(_ entry: LibraryEntryDetail) -> some View {
         ZStack {
-            YouTubeEmbedView(
-                videoId: entry.youtubeId,
-                seek: vm.seek,
-                onReady: { playerReady = true },
-                onTime: { sec in vm.onPlayerTime(sec) }
-            )
-            if !playerReady {
-                playerOverlay
+            if let v = entry.videoUrl, let url = URL(string: v) {
+                VideoPlayerView(
+                    url: url,
+                    seek: vm.seek,
+                    onReady: { playerReady = true },
+                    onTime: { sec in vm.onPlayerTime(sec) }
+                )
+            } else {
+                YouTubeEmbedView(
+                    videoId: entry.youtubeId,
+                    seek: vm.seek,
+                    onReady: { playerReady = true },
+                    onTime: { sec in vm.onPlayerTime(sec) }
+                )
             }
+            if !playerReady { playerOverlay }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
         .background(Color.black)
         .task {
-            // The IFrame API + first frame can take several seconds (more over
-            // a VPN). After 15s with no `ready`, surface the VPN hint.
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             if !playerReady { playerTimedOut = true }
         }
