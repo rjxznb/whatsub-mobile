@@ -36,6 +36,19 @@ actor WhatsubAPI {
         _ = try? await postExpectingOk(Endpoints.auth("logout"), body: Data("{}".utf8), bearer: token)
     }
 
+    // ----- Library -----
+
+    func listLibrary(token: String) async throws -> [LibraryListItem] {
+        let data = try await get(Endpoints.library("list"), bearer: token)
+        return try decode(LibraryListResponse.self, from: data).entries
+    }
+
+    func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let data = try await get(Endpoints.library("entry/\(encoded)"), bearer: token)
+        return try decode(LibraryEntryDetail.self, from: data)
+    }
+
     // ----- HTTP primitives -----
 
     private func get(_ url: URL, bearer: String?) async throws -> Data {

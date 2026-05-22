@@ -43,7 +43,7 @@ struct ContentView: View {
         Group {
             if appState.isAuthenticated {
                 TabView(selection: $selectedTab) {
-                    LibraryPlaceholderView()
+                    LibraryView()
                         .tabItem {
                             Label("Library", systemImage: "play.rectangle")
                         }
