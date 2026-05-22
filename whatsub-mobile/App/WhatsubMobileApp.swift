@@ -49,7 +49,7 @@ struct ContentView: View {
                         }
                         .tag(0)
 
-                    CorpusPlaceholderView()
+                    CorpusView()
                         .tabItem {
                             Label("语料库", systemImage: "books.vertical")
                         }
