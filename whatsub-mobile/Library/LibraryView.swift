@@ -116,7 +116,10 @@ private struct LibraryRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.title).font(.subheadline).foregroundStyle(.whatsubInk).lineLimit(2)
-                Text(durationText).font(.caption).foregroundStyle(.whatsubInkMuted)
+                HStack(spacing: 8) {
+                    Text(durationText).font(.caption).foregroundStyle(.whatsubInkMuted)
+                    vpnBadge
+                }
             }
             Spacer()
         }
@@ -126,5 +129,20 @@ private struct LibraryRow: View {
     private var durationText: String {
         guard let s = entry.durationSec else { return "" }
         return "\(s / 60):" + String(format: "%02d", s % 60)
+    }
+
+    /// Self-hosted (OSS, has videoUrl) → plays without VPN; else YouTube-embed → needs VPN.
+    @ViewBuilder
+    private var vpnBadge: some View {
+        let selfHosted = entry.videoUrl != nil
+        Text(selfHosted ? "免 VPN" : "需 VPN")
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(
+                (selfHosted ? Color.green : Color.whatsubInkMuted).opacity(0.22),
+                in: Capsule()
+            )
+            .foregroundStyle(selfHosted ? Color.green : Color.whatsubInkMuted)
     }
 }

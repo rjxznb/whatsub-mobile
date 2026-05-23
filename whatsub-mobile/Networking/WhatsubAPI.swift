@@ -65,6 +65,7 @@ actor WhatsubAPI {
         durationSec: Int?,
         transcriptSrt: String,
         analysis: AnalysisJson,
+        thumbData: String? = nil,
         token: String
     ) async throws {
         let subtitlesDicts: [[String: Any]] = analysis.subtitles.map { cue in
@@ -97,6 +98,10 @@ actor WhatsubAPI {
             "analysisJson": analysisDict,
         ]
         if let dur = durationSec { body["durationSec"] = dur }
+        // Imported videos have no desktop thumb; the iOS import (VPN on) fetches
+        // the YouTube cover + sends it here so the backend serves a China-reachable
+        // thumbnail (cover shows in the list without VPN).
+        if let thumbData { body["thumbData"] = thumbData }
 
         let data = try JSONSerialization.data(withJSONObject: body)
         _ = try await postExpectingOk(Endpoints.library("sync"), body: data, bearer: token)

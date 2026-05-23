@@ -34,6 +34,9 @@ struct LibraryListItem: Decodable, Identifiable {
     let durationSec: Int?
     let thumbUrl: String?
     let syncedAt: Int64
+    /// Present (signed CDN URL) when the video is self-hosted on OSS → plays
+    /// in-app via AVPlayer with NO VPN. nil = YouTube-embed-only → needs VPN.
+    let videoUrl: String?
 }
 
 struct LibraryListResponse: Decodable {
