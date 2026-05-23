@@ -51,15 +51,17 @@ struct LibraryDetailView: View {
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )
-            } else {
+            } else if VideoSource.isLikelyYouTubeId(entry.youtubeId) {
                 YouTubeEmbedView(
                     videoId: entry.youtubeId,
                     seek: vm.seek,
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )
+            } else {
+                desktopOnlyPlaceholder
             }
-            if !playerReady { playerOverlay(isYouTube: entry.videoUrl == nil) }
+            if !playerReady && !isDesktopOnly(entry) { playerOverlay(isYouTube: entry.videoUrl == nil) }
             if playerReady {
                 VStack {
                     HStack { Spacer(); captionToggle }
@@ -144,6 +146,29 @@ struct LibraryDetailView: View {
             }
             .padding(.horizontal, 20)
         }
+    }
+
+    /// True when there is no OSS video AND the id isn't a real YouTube id —
+    /// i.e. a queue import whose video isn't on OSS (still processing / failed).
+    private func isDesktopOnly(_ entry: LibraryEntryDetail) -> Bool {
+        entry.videoUrl == nil && !VideoSource.isLikelyYouTubeId(entry.youtubeId)
+    }
+
+    private var desktopOnlyPlaceholder: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "desktopcomputer")
+                .font(.title)
+                .foregroundStyle(.whatsubInkMuted)
+            Text("此视频需在桌面端查看")
+                .font(.callout)
+                .foregroundStyle(.whatsubInk)
+            Text("云端尚无可播放的视频文件（可能仍在桌面端处理）。")
+                .font(.caption)
+                .foregroundStyle(.whatsubInkMuted)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func portrait(_ entry: LibraryEntryDetail) -> some View {

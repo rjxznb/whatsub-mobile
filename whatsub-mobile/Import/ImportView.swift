@@ -44,7 +44,9 @@ struct ImportView: View {
             case .error(let msg):
                 errorBody(msg)
             case .extractFailed(let msg):
-                extractFailedBody(msg)
+                pushOfferBody(title: "未找到字幕", message: msg)
+            case .needsDesktop(let msg):
+                pushOfferBody(title: "需在桌面端处理", message: msg)
             case .pushing:
                 progressBody(icon: "desktopcomputer.and.arrow.down", label: "推送到桌面端…", progress: nil)
             case .pushedToDesktop:
@@ -70,15 +72,16 @@ struct ImportView: View {
                 .font(.system(size: 48))
                 .foregroundStyle(.whatsubAccent)
 
-            Text("粘贴 YouTube 链接或 Video ID")
+            Text("粘贴 YouTube / B站 / 其它视频链接")
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
 
-            Text("解析需挂 VPN 连接 YouTube")
+            Text("YouTube 有字幕在手机端解析（需挂 VPN）；B站 / 其它将推送到桌面端用 whisper 处理")
                 .font(.caption)
                 .foregroundStyle(.whatsubInkMuted)
+                .multilineTextAlignment(.center)
 
-            TextField("https://youtube.com/watch?v=… 或 11 位 ID", text: $urlInput)
+            TextField("https://… 或 YouTube 11 位 ID", text: $urlInput)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
@@ -219,7 +222,7 @@ struct ImportView: View {
 
     // MARK: - Extract Failed (offer push to desktop)
 
-    private func extractFailedBody(_ message: String) -> some View {
+    private func pushOfferBody(title: String, message: String) -> some View {
         VStack(spacing: 20) {
             Spacer()
 
@@ -227,7 +230,7 @@ struct ImportView: View {
                 .font(.system(size: 48))
                 .foregroundStyle(.whatsubHighlight)
 
-            Text("未找到字幕")
+            Text(title)
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
 
