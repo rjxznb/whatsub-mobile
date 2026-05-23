@@ -68,12 +68,50 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: cc.eversay.whatsub.mobile
+            CFBundleURLSchemes: [whatsub]
+    entitlements:
+      path: whatsub-mobile/whatsub-mobile.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.cc.eversay.whatsub.mobile
+    dependencies:
+      - target: whatsub-share
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.eversay.whatsub.mobile
         INFOPLIST_KEY_CFBundleDisplayName: whatSub
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+
+  whatsub-share:
+    type: app-extension
+    platform: iOS
+    sources:
+      - whatsub-share
+      - whatsub-mobile/Shared/AppGroup.swift
+    info:
+      path: whatsub-share/Info.plist
+      properties:
+        CFBundleDisplayName: 导入到 whatSub
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cc.eversay.whatsub.mobile.share
+        INFOPLIST_KEY_CFBundleDisplayName: 导入到 whatSub
+    entitlements:
+      path: whatsub-share/whatsub-share.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.cc.eversay.whatsub.mobile
 
   whatsub-mobileTests:
     type: bundle.unit-test

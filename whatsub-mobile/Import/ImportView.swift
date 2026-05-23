@@ -6,6 +6,19 @@ struct ImportView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlInput = ""
+    @State private var didAutoRun = false
+
+    private let initialURL: String?
+
+    /// Default initialiser — used by the 我的 → 导入 entry point.
+    init() {
+        self.initialURL = nil
+    }
+
+    /// Deep-link initialiser — prefills the URL field and auto-runs on appear.
+    init(initialURL: String) {
+        self.initialURL = initialURL
+    }
 
     var body: some View {
         ZStack {
@@ -34,6 +47,12 @@ struct ImportView: View {
         }
         .navigationTitle("导入视频")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard !didAutoRun, let url = initialURL else { return }
+            didAutoRun = true
+            urlInput = url
+            await vm.run(urlOrId: url)
+        }
     }
 
     // MARK: - Idle
