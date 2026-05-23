@@ -11,6 +11,10 @@ final class ImportViewModel: ObservableObject {
         case syncing
         case done
         case error(String)
+        /// Caption extraction failed — push to desktop is available.
+        case extractFailed(message: String)
+        /// URL successfully enqueued to the backend import queue.
+        case pushedToDesktop
     }
 
     @Published var state: State = .idle
@@ -21,6 +25,9 @@ final class ImportViewModel: ObservableObject {
     private(set) var rawCues: [Cue] = []
     private(set) var videoId: String = ""
     private(set) var title: String = ""
+    /// The full YouTube watch URL entered/resolved by the user, kept so
+    /// pushToDesktop can enqueue it without requiring UI re-entry.
+    private(set) var resolvedSourceURL: String = ""
 
     // MARK: - Step 1: Extract + Analyse
 
@@ -39,6 +46,7 @@ final class ImportViewModel: ObservableObject {
         }
         videoId = resolvedId
         title = resolvedId  // v1 fallback: use videoId as title
+        resolvedSourceURL = "https://www.youtube.com/watch?v=\(resolvedId)"
 
         // Step 1: Extract captions.
         state = .extracting
@@ -47,7 +55,9 @@ final class ImportViewModel: ObservableObject {
             let extractor = CaptionExtractor()
             cues = try await extractor.extract(videoId: resolvedId)
         } catch {
-            state = .error(error.localizedDescription)
+            // Caption extraction failed — likely no captions on this video.
+            // Offer the user the option to push to desktop for whisper processing.
+            state = .extractFailed(message: error.localizedDescription)
             return
         }
         rawCues = cues
@@ -70,6 +80,18 @@ final class ImportViewModel: ObservableObject {
             }
             result = analysis
             state = .preview
+        } catch {
+            state = .error(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Step 1b: Push caption-less URL to desktop import queue
+
+    func pushToDesktop(token: String) async {
+        let url = resolvedSourceURL.isEmpty ? "https://www.youtube.com/watch?v=\(videoId)" : resolvedSourceURL
+        do {
+            try await WhatsubAPI.shared.enqueueImport(url: url, token: token)
+            state = .pushedToDesktop
         } catch {
             state = .error(error.localizedDescription)
         }

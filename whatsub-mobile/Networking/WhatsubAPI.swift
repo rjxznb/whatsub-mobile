@@ -54,6 +54,14 @@ actor WhatsubAPI {
         _ = try await delete(Endpoints.library("sync/\(encoded)"), bearer: token)
     }
 
+    func enqueueImport(url: String, token: String) async throws {
+        _ = try await postExpectingOk(
+            Endpoints.library("import-queue"),
+            body: try JSONSerialization.data(withJSONObject: ["url": url]),
+            bearer: token
+        )
+    }
+
     /// POST /api/library/sync — creates or replaces an entry with the full
     /// analysisJson payload. `analysisJson` is the assembled result from
     /// AnalysisEngine; we serialise it as a nested dict matching the backend's
