@@ -69,6 +69,20 @@ struct Cue: Decodable, Identifiable {
         case highlightWords, keyNotes, highlightTranslations
     }
 
+    /// Memberwise init for building a Cue from extracted caption data (no LLM yet).
+    /// translation / highlights are empty until AnalysisEngine fills them in.
+    init(index: Int, time: Double, endTime: Double, text: String) {
+        self.index = index
+        self.time = time
+        self.endTime = endTime
+        self.text = text
+        self.translation = ""
+        self.isKeyPoint = false
+        self.highlightWords = []
+        self.keyNotes = [:]
+        self.highlightTranslations = [:]
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         time = try c.decodeIfPresent(Double.self, forKey: .time) ?? 0
