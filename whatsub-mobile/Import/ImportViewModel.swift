@@ -16,6 +16,9 @@ final class ImportViewModel: ObservableObject {
         case pushing
         /// URL successfully enqueued to the backend import queue.
         case pushedToDesktop
+        /// A non-YouTube source (Bilibili / other) that has no client-side
+        /// caption path — offer to push it to the desktop queue.
+        case needsDesktop(message: String)
     }
 
     @Published var state: State = .idle
@@ -34,6 +37,17 @@ final class ImportViewModel: ObservableObject {
 
     func run(urlOrId: String) async {
         let trimmed = urlOrId.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Non-YouTube URLs have no phone-side caption path (Bilibili CC is
+        // Chinese/absent). Route straight to the desktop queue. A bare 11-char
+        // YouTube id has no "://" → falls through to the YouTube path below.
+        if trimmed.contains("://"), VideoSource.from(url: trimmed) != .youtube {
+            resolvedSourceURL = trimmed
+            videoId = ""
+            title = trimmed
+            state = .needsDesktop(message: "B站 / 其它来源无法在手机端取字幕，可推送到桌面端用 whisper 转录 + 解析（需桌面在线且登录同一账号）。")
+            return
+        }
 
         // Resolve video ID — accept a raw 11-char id or a full YouTube URL.
         let resolvedId: String
