@@ -62,6 +62,22 @@ actor WhatsubAPI {
         )
     }
 
+    func listImportQueue(token: String) async throws -> [ImportQueueItem] {
+        let data = try await get(Endpoints.library("import-queue"), bearer: token)
+        return try decode(ImportQueueListResponse.self, from: data).items
+    }
+
+    /// Retry a failed item by resetting it to `pending`; the desktop's atomic
+    /// claim re-picks it on the next poll. Reuses the row (no duplicate).
+    func retryImport(id: String, token: String) async throws {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        _ = try await postExpectingOk(
+            Endpoints.library("import-queue/\(encoded)/status"),
+            body: try JSONSerialization.data(withJSONObject: ["status": "pending"]),
+            bearer: token
+        )
+    }
+
     /// POST /api/library/sync — creates or replaces an entry with the full
     /// analysisJson payload. `analysisJson` is the assembled result from
     /// AnalysisEngine; we serialise it as a nested dict matching the backend's
