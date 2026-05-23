@@ -54,6 +54,54 @@ actor WhatsubAPI {
         _ = try await delete(Endpoints.library("sync/\(encoded)"), bearer: token)
     }
 
+    /// POST /api/library/sync — creates or replaces an entry with the full
+    /// analysisJson payload. `analysisJson` is the assembled result from
+    /// AnalysisEngine; we serialise it as a nested dict matching the backend's
+    /// expected shape (subtitles[] + keyPhrases[]).
+    func syncLibraryEntry(
+        youtubeId: String,
+        sourceUrl: String,
+        title: String,
+        durationSec: Int?,
+        transcriptSrt: String,
+        analysis: AnalysisJson,
+        token: String
+    ) async throws {
+        let subtitlesDicts: [[String: Any]] = analysis.subtitles.map { cue in
+            [
+                "time": cue.time,
+                "endTime": cue.endTime,
+                "text": cue.text,
+                "translation": cue.translation,
+                "isKeyPoint": cue.isKeyPoint,
+                "highlightWords": cue.highlightWords,
+                "keyNotes": cue.keyNotes,
+                "highlightTranslations": cue.highlightTranslations,
+            ]
+        }
+        let keyPhrasesDicts: [[String: Any]] = analysis.keyPhrases.map { kp in
+            ["expression": kp.expression, "meaningZh": kp.meaningZh, "usage": kp.usage]
+        }
+        let analysisDict: [String: Any] = [
+            "subtitles": subtitlesDicts,
+            "keyPhrases": keyPhrasesDicts,
+        ]
+
+        var body: [String: Any] = [
+            "id": youtubeId,
+            "youtubeId": youtubeId,
+            "sourceUrl": sourceUrl,
+            "title": title,
+            "thumbUrl": "https://i.ytimg.com/vi/\(youtubeId)/mqdefault.jpg",
+            "transcriptSrt": transcriptSrt,
+            "analysisJson": analysisDict,
+        ]
+        if let dur = durationSec { body["durationSec"] = dur }
+
+        let data = try JSONSerialization.data(withJSONObject: body)
+        _ = try await postExpectingOk(Endpoints.library("sync"), body: data, bearer: token)
+    }
+
     // ----- Corpus -----
 
     /// scope = "public" (needs license) or "mine" (session only).

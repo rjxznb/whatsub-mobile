@@ -69,6 +69,20 @@ struct Cue: Decodable, Identifiable {
         case highlightWords, keyNotes, highlightTranslations
     }
 
+    /// Memberwise init for building a Cue from extracted caption data (no LLM yet).
+    /// translation / highlights are empty until AnalysisEngine fills them in.
+    init(index: Int, time: Double, endTime: Double, text: String) {
+        self.index = index
+        self.time = time
+        self.endTime = endTime
+        self.text = text
+        self.translation = ""
+        self.isKeyPoint = false
+        self.highlightWords = []
+        self.keyNotes = [:]
+        self.highlightTranslations = [:]
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         time = try c.decodeIfPresent(Double.self, forKey: .time) ?? 0
@@ -123,6 +137,22 @@ struct AnalysisJson: Decodable {
         for i in subs.indices { subs[i].index = i }
         subtitles = subs
         keyPhrases = try c.decodeIfPresent([KeyPhrase].self, forKey: .keyPhrases) ?? []
+    }
+
+    /// Build from parts (used by AnalysisEngine after assembling batch results).
+    /// Skips the JSON round-trip that `init(from:)` requires.
+    static func assembled(subtitles: [Cue], keyPhrases: [KeyPhrase]) -> AnalysisJson {
+        // Use the Decodable init path by encoding + decoding, so index re-numbering
+        // stays in one place (init(from:) sets index = array position).
+        // Fast path: build via private memberwise init instead.
+        return AnalysisJson(_subtitles: subtitles, _keyPhrases: keyPhrases)
+    }
+
+    // Private memberwise init for assembled(). The caller (AnalysisEngine) has
+    // already re-indexed, so we store as-is without JSON round-trip.
+    private init(_subtitles: [Cue], _keyPhrases: [KeyPhrase]) {
+        subtitles = _subtitles
+        keyPhrases = _keyPhrases
     }
 }
 

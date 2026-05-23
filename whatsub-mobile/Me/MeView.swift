@@ -41,10 +41,15 @@ struct MeView: View {
                     }
                     .listRowBackground(Color.whatsubBgElev)
 
-                    // SPIKE — throwaway; remove in Phase 1
-                    Section {
-                        NavigationLink("🧪 字幕提取 spike") { CaptionSpikeView() }
-                            .foregroundStyle(.whatsubInkMuted)
+                    Section("工具") {
+                        NavigationLink(destination: ImportView()) {
+                            Label("导入 YouTube 视频", systemImage: "arrow.down.circle")
+                                .foregroundStyle(.whatsubInk)
+                        }
+                        NavigationLink(destination: LlmSettingsView()) {
+                            Label("LLM 设置", systemImage: "cpu")
+                                .foregroundStyle(.whatsubInk)
+                        }
                     }
                     .listRowBackground(Color.whatsubBgElev)
 

@@ -1,0 +1,124 @@
+import Foundation
+
+@MainActor
+final class ImportViewModel: ObservableObject {
+
+    enum State {
+        case idle
+        case extracting
+        case analyzing(done: Int, total: Int)
+        case preview
+        case syncing
+        case done
+        case error(String)
+    }
+
+    @Published var state: State = .idle
+
+    /// Extracted + analysed result, set once analysis completes.
+    private(set) var result: AnalysisJson?
+    /// Raw extracted cues (pre-analysis); kept for SRT generation.
+    private(set) var rawCues: [Cue] = []
+    private(set) var videoId: String = ""
+    private(set) var title: String = ""
+
+    // MARK: - Step 1: Extract + Analyse
+
+    func run(urlOrId: String) async {
+        let trimmed = urlOrId.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Resolve video ID — accept a raw 11-char id or a full YouTube URL.
+        let resolvedId: String
+        if let fromURL = extractYouTubeID(trimmed) {
+            resolvedId = fromURL
+        } else if trimmed.count == 11, trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }) {
+            resolvedId = trimmed
+        } else {
+            state = .error("无法识别的 YouTube URL 或 ID")
+            return
+        }
+        videoId = resolvedId
+        title = resolvedId  // v1 fallback: use videoId as title
+
+        // Step 1: Extract captions.
+        state = .extracting
+        let cues: [Cue]
+        do {
+            let extractor = CaptionExtractor()
+            cues = try await extractor.extract(videoId: resolvedId)
+        } catch {
+            state = .error(error.localizedDescription)
+            return
+        }
+        rawCues = cues
+
+        // Step 2: Guard LLM configured.
+        let settings = LlmSettingsStore.load()
+        guard settings.isConfigured else {
+            state = .error("请先配置 LLM（我的 → LLM 设置）")
+            return
+        }
+
+        // Step 3: Analyse with progress reporting.
+        state = .analyzing(done: 0, total: 1)
+        let engine = AnalysisEngine(client: OpenAICompatibleClient(settings: settings))
+        do {
+            let analysis = try await engine.analyze(cues) { [weak self] done, total in
+                Task { @MainActor [weak self] in
+                    self?.state = .analyzing(done: done, total: total)
+                }
+            }
+            result = analysis
+            state = .preview
+        } catch {
+            state = .error(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Step 2: Sync to cloud
+
+    func sync(token: String) async {
+        guard let analysis = result else {
+            state = .error("没有分析结果，请重新导入")
+            return
+        }
+        state = .syncing
+
+        let srt = buildSRT(from: rawCues)
+        let sourceUrl = "https://www.youtube.com/watch?v=\(videoId)"
+
+        do {
+            try await WhatsubAPI.shared.syncLibraryEntry(
+                youtubeId: videoId,
+                sourceUrl: sourceUrl,
+                title: title,
+                durationSec: nil,
+                transcriptSrt: srt,
+                analysis: analysis,
+                token: token
+            )
+            state = .done
+        } catch {
+            state = .error(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func buildSRT(from cues: [Cue]) -> String {
+        cues.enumerated().map { (i, cue) in
+            let start = srtTimestamp(cue.time)
+            let end = srtTimestamp(cue.endTime)
+            return "\(i + 1)\n\(start) --> \(end)\n\(cue.text)"
+        }.joined(separator: "\n\n")
+    }
+
+    private func srtTimestamp(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        let ms = Int((seconds - Double(total)) * 1000)
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        return String(format: "%02d:%02d:%02d,%03d", h, m, s, ms)
+    }
+}
