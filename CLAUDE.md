@@ -2,7 +2,7 @@
 
 iOS consumer client for whatSub. SwiftUI native, iOS 16+. Reads public/private corpus + cloud-synced library subtitles from the [whatsub-license](https://github.com/rjxznb/whatsub-license) backend. Companion to the [desktop Tauri app](https://github.com/rjxznb/whatsub-releases) (private repo for source) which produces the data this app consumes.
 
-**Status**: v1 FEATURE-COMPLETE + post-v1 video upgrades on TestFlight (2026-05-22/23). Phase 1 (scaffold + CI + TestFlight) ✅; Phase 2a (email-OTP auth) ✅; Phase 2c (Library list + bilingual subtitle reader) ✅; Phase 2b (语料库 browse + phrase detail) ✅. Backend thumbnail sync ✅ (covers without VPN). **Self-hosted video** ✅: synced videos play via native AVPlayer from Aliyun OSS+CDN (no VPN, instant seek); falls back to YouTube embed when no `videoUrl`. **Swipe-to-delete** ✅: left-swipe a Library card → confirm → removes from cloud (backend row + OSS object); desktop reconciles the stale badge, keeps local file. Three tabs: Library / 语料库 / 我的. Next: App Store public release; v1.5 share-to-import.
+**Status**: v1 + post-v1 features on TestFlight (2026-05-22/23). Phase 1 (scaffold + CI + TestFlight) ✅; Phase 2a (email-OTP auth) ✅; Phase 2c (Library list + bilingual subtitle reader) ✅; Phase 2b (语料库 browse + phrase detail) ✅. Backend thumbnail sync ✅. **Self-hosted video** ✅: native AVPlayer from Aliyun OSS+CDN (no VPN, instant seek), landscape→fullscreen, on-video bilingual captions + CC toggle, player loading overlay + VPN hint; fallback to YouTube embed. **Swipe-to-delete** ✅: left-swipe a Library card → confirm → removes from cloud (backend row + OSS object). **Share-to-import** ✅: in-app YouTube import (WKWebView+fetchHook caption intercept, bypassing po_token) + LLM analysis (user's openai-compatible key, client-side) → preview → sync; Share Extension (YouTube/Safari → whatSub via App Group + `whatsub://` deep link); push caption-less videos to desktop import queue. **Library VPN badge** ✅: 免VPN (OSS-hosted) vs 需VPN badge per card; imported videos upload their cover thumbnail. Three tabs: Library / 语料库 / 我的. Next: App Store public release.
 
 ## Stack
 
@@ -84,6 +84,35 @@ The `.p8` file should be deleted from local disk after upload to GitHub Secrets 
 - **iOS 16 minimum**: gives us NavigationStack + AsyncImage + the `.foregroundStyle` API; covers ~94% of devices in 2026.
 - **0 third-party Swift packages**: every line of code is auditable + builds are reproducible without dependency resolution. Trade-off: more boilerplate (URLSession wrapper, Keychain helper). Acceptable for v1's scope.
 
+## Post-v1 features shipped (2026-05-22/23)
+
+### Self-hosted video (OSS + CDN + AVPlayer)
+
+Library detail plays synced videos via native `AVPlayerViewController` (`Components/VideoPlayerView.swift`) when the backend returns a `videoUrl` (signed Aliyun CDN URL, 2h TTL). Falls back to `YouTubeEmbedView` when `videoUrl` is null.
+
+- Landscape orientation → fullscreen AVPlayer (standard iOS behavior via AVPlayerViewController).
+- On-video bilingual captions: `SubtitleOverlayView` composited over the player; CC toggle hides/shows.
+- Loading overlay with spinner + "正在连接…" until AVPlayer fires `.readyToPlay`; 15s timeout shows VPN hint (AVPlayer path: no VPN hint needed since OSS is China-reachable; YouTube embed path: shows VPN hint on timeout).
+- `LibraryEntryDetail.videoUrl` added to `DTOs.swift`.
+
+### Swipe-to-delete
+
+`LibraryView.swift` — `.swipeActions(edge: .trailing)` on each row → `pendingDelete` state → `.confirmationDialog("从云端删除…?")`. Confirm calls `vm.delete(id, token:)` → `WhatsubAPI.deleteLibraryEntry` → `DELETE /api/library/sync/:id` (backend also removes OSS object) → removes entry from local list. Desktop reconciles the stale ✓ badge on next Library mount.
+
+### Share-to-import (Phase 0-2)
+
+**In-app import flow** (`Import/` views): a URL field in the 我的 tab → `YouTubeCaptionExtractor` (hidden WKWebView + injected `fetchHook.js` + `WKScriptMessageHandler`) → `parseTimedtextJson3` (json3 → `[Cue]`) → `LLMAnalyzer` (user's openai-compatible key from Keychain; chunks cues → `/chat/completions` → `AnalysisJson`) → `ImportFlowView` preview (reuses bilingual cue renderer) → "同步到云库" → `WhatsubAPI.syncLibraryEntry` → `POST /api/library/sync`.
+
+**LLM Settings** added to 我的 tab: provider=openai-compatible, `baseUrl`/`apiKey`/`model` (default DeepSeek), stored in Keychain.
+
+**Share Extension** (`whatsub-share/` target): `ShareViewController.swift` (UIViewController extension principal class) — extracts URL from `NSExtensionItem` (`public.url` / `public.text` fallback) → writes to `AppGroup.pendingImportURL()` → `extensionContext?.open("whatsub://import?url=…")` + responder-chain fallback. Main app `WhatsubMobileApp.swift`: `.onOpenURL` → read AppGroup → set `pendingImportURL` state → present `ImportView` prefilled + auto-run.
+
+**Push to desktop import queue** (`推送到桌面`): on caption-extraction failure, `ImportViewModel` offers `pushToDesktop(token:)` → `WhatsubAPI.enqueueImport(url:, token:)` → `POST /api/library/import-queue`. The desktop poll loop picks it up and runs its full pipeline (yt-dlp + whisper + LLM + cloud sync).
+
+### Library VPN badge + imported cover upload
+
+Each Library card shows a badge: "免VPN" (blue, when `videoUrl` is non-nil = OSS-hosted = no VPN needed) or "需VPN" (gray, YouTube embed only). Imported videos (no desktop thumb) upload a thumbnail by fetching `i.ytimg.com/vi/{id}/mqdefault.jpg` and sending it as `thumbData` in the sync payload — so the Library card shows a cover without VPN on subsequent loads.
+
 ## 踩过的坑 (avoid repeating)
 
 ### CI / GitHub Actions / iOS toolchain
@@ -119,6 +148,14 @@ The `.p8` file should be deleted from local disk after upload to GitHub Secrets 
 - **System large nav title is flaky with a custom global `UINavigationBarAppearance` + custom full-bleed background + push/pop.** Symptom: the `.navigationTitle("Library")` large title intermittently (a) collapses ~1s after popping back from a pushed detail (nav bar disappears, list slides up), or (b) reserves space but renders no visible text. Multiple structural attempts (background as `.background` modifier vs ZStack sibling; navigationDestination at root vs in a conditional branch; `.toolbarBackground`) did NOT reliably fix it. The robust fix: **drop the system large title and render a custom `Text("Library")` header** inside the content + `.toolbar(.hidden, for: .navigationBar)` on the root screen (the pushed detail view still shows its own bar + back button). See `Library/LibraryView.swift`. Trade-off: lose the large-title shrink-on-scroll animation, but gain 100% reliable rendering + exact brand styling.
 
 - **LLM/pipeline JSON is not schema-clean — decode external blobs leniently.** Prod `analysisJson.subtitles[].keyNotes` is declared `[String: String]` but the desktop pipeline occasionally merges a nested `highlightTranslations` object in as a value, so a strict `[String: String]` decode throws and fails the ENTIRE entry → user sees "数据格式不正确". Fix: decode such maps with a tolerant helper (`DynamicKey` keyed container, keep only string values, drop the rest) — see `Cue.lenientStringMap` in `Networking/DTOs.swift`. General rule: anything an LLM produced gets defensive parsing at the boundary; never let one malformed field nuke a whole response.
+
+### Share-to-import + Share Extension
+
+- **YouTube timedtext requires a `po_token` (anti-scrape, 2024) that cannot be forged client-side.** URLSession `GET /api/timedtext` always returns 403. The only working path: **inject a MAIN-world fetch hook (`fetchHook.js`) into a WKWebView that loads the real YouTube player** — the player fetches timedtext with its own already-signed request; the hook intercepts the response body and posts it to the app via `WKScriptMessageHandler("whatsub-yt-fetch-hook")`. This is exactly what the browser plugin does. There is NO clean URLSession path. The hidden WKWebView + hook approach is also why import flow is slower than a direct API call (~10-30s for the player to load + CC to trigger).
+
+- **Share Extension is a separate target + separate bundle ID + App Group.** The extension (`cc.eversay.whatsub.mobile.share`) and the main app (`cc.eversay.whatsub.mobile`) share the `group.cc.eversay.whatsub.mobile` App Group entitlement. Both targets must have this entitlement, both must be registered in the Apple Developer portal (App Groups capability), and the provisioning profiles for BOTH must include the capability — otherwise the extension silently fails to read/write the shared UserDefaults. `AppGroup.swift` is compiled into both targets (listed in `project.yml` under both `sources`).
+
+- **iOS doesn't reliably auto-launch the host app from a Share Extension.** `extensionContext?.open(url)` works in theory but is blocked on some iOS versions when the app is not in the foreground. The robust pattern used here: call `extensionContext?.open(url, completionHandler:nil)` AND also try `self.view.window?.rootViewController?.open(url)` via the responder chain. The main app also has a `scenePhase`-based safety net: on `active` it reads `AppGroup.pendingImportURL()` and opens ImportView if a URL is waiting — this catches the case where the user was already in the app or navigated back before the deep link fired.
 
 ### Networking / China reachability
 
