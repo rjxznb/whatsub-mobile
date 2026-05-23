@@ -14,8 +14,10 @@ class ShareViewController: UIViewController {
         let urlString = await extractSharedURL()
         if let urlString {
             AppGroup.setPendingImportURL(urlString)
-            openHostApp()
+            await openHostApp()
         }
+        // Complete AFTER the open is initiated, so the share sheet doesn't
+        // dismiss + cancel the pending launch.
         extensionContext?.completeRequest(returningItems: nil)
     }
 
@@ -39,18 +41,30 @@ class ShareViewController: UIViewController {
         return nil
     }
 
-    /// Open the containing app via the custom scheme by walking the responder
-    /// chain to UIApplication (extensions can't call UIApplication.shared).
-    private func openHostApp() {
-        guard let url = URL(string: "whatsub://import") else { return }
+    /// Open the containing app via the `whatsub://` scheme.
+    /// 1) Official API: ask the HOST app (e.g. YouTube) to open our URL — iOS
+    ///    then routes the scheme to whatSub. Works on most modern iOS.
+    /// 2) Fallback: responder-chain `openURL:` (works on some older versions).
+    /// Either way the URL is already saved to the App Group, so the main app's
+    /// scenePhase safety-net picks it up even if neither auto-launches.
+    @discardableResult
+    private func openHostApp() async -> Bool {
+        guard let url = URL(string: "whatsub://import") else { return false }
+        if let ctx = extensionContext {
+            let opened = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                ctx.open(url) { cont.resume(returning: $0) }
+            }
+            if opened { return true }
+        }
         var responder: UIResponder? = self
         let selector = NSSelectorFromString("openURL:")
         while let r = responder {
             if r.responds(to: selector) && !(r is ShareViewController) {
                 r.perform(selector, with: url)
-                return
+                return true
             }
             responder = r.next
         }
+        return false
     }
 }
