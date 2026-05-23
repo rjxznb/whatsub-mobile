@@ -102,6 +102,16 @@ final class ImportViewModel: ObservableObject {
 
     // MARK: - Step 1b: Push caption-less URL to desktop import queue
 
+    /// Directly enqueue an entered/shared URL to the desktop queue (the explicit
+    /// "推送到桌面" choice — bypasses on-phone caption extraction).
+    func pushURL(_ urlOrId: String, token: String) async {
+        let trimmed = urlOrId.trimmingCharacters(in: .whitespacesAndNewlines)
+        resolvedSourceURL = trimmed.contains("://")
+            ? trimmed
+            : (VideoSource.isLikelyYouTubeId(trimmed) ? "https://www.youtube.com/watch?v=\(trimmed)" : trimmed)
+        await pushToDesktop(token: token)
+    }
+
     func pushToDesktop(token: String) async {
         let url = resolvedSourceURL.isEmpty ? "https://www.youtube.com/watch?v=\(videoId)" : resolvedSourceURL
         state = .pushing

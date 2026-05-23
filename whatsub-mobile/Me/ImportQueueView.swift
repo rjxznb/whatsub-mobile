@@ -58,6 +58,11 @@ struct ImportQueueView: View {
                     .disabled(retryingIds.contains(item.id))
                 }
             }
+            if item.status == "pending" {
+                Text("等待桌面端处理（桌面离线时排队，上线后自动处理）")
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkMuted)
+            }
             if item.status == "failed", let err = item.error, !err.isEmpty {
                 Text(err).font(.caption).foregroundStyle(.whatsubInkMuted)
             }
