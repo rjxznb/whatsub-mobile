@@ -41,6 +41,13 @@ struct MeView: View {
                     }
                     .listRowBackground(Color.whatsubBgElev)
 
+                    // SPIKE — throwaway; remove in Phase 1
+                    Section {
+                        NavigationLink("🧪 字幕提取 spike") { CaptionSpikeView() }
+                            .foregroundStyle(.whatsubInkMuted)
+                    }
+                    .listRowBackground(Color.whatsubBgElev)
+
                     Section {
                         Button(role: .destructive) {
                             appState.logout()
