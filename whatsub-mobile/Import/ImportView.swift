@@ -43,6 +43,10 @@ struct ImportView: View {
                 doneBody
             case .error(let msg):
                 errorBody(msg)
+            case .extractFailed(let msg):
+                extractFailedBody(msg)
+            case .pushedToDesktop:
+                pushedToDesktopBody
             }
         }
         .navigationTitle("导入视频")
@@ -211,6 +215,88 @@ struct ImportView: View {
         }
     }
 
+    // MARK: - Extract Failed (offer push to desktop)
+
+    private func extractFailedBody(_ message: String) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            Image(systemName: "captions.bubble.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.whatsubHighlight)
+
+            Text("未找到字幕")
+                .font(.headline)
+                .foregroundStyle(.whatsubInk)
+
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkMuted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Divider()
+                .background(Color.white.opacity(0.1))
+                .padding(.horizontal, 24)
+
+            Text("此视频可能没有字幕。可推送到桌面端处理（桌面会下载 + whisper 转录 + 解析，需桌面在线且登录同一账号）。")
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkMuted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Button(action: pushToDesktop) {
+                Label("推送到桌面端处理", systemImage: "desktopcomputer.and.arrow.down")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.whatsubAccent)
+                    .foregroundStyle(.black)
+                    .cornerRadius(12)
+            }
+            .padding(.horizontal)
+
+            Button("重试") {
+                vm.state = .idle
+            }
+            .buttonStyle(.bordered)
+            .tint(.whatsubAccent)
+
+            Spacer()
+        }
+        .padding()
+    }
+
+    // MARK: - Pushed to Desktop
+
+    private var pushedToDesktopBody: some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 60))
+                .foregroundStyle(.green)
+
+            Text("已推送到桌面端")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.whatsubInk)
+
+            Text("桌面端在线时会自动处理，完成后出现在 Library。")
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkMuted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Button("完成") { dismiss() }
+                .buttonStyle(.bordered)
+                .tint(.whatsubAccent)
+                .padding(.top, 8)
+
+            Spacer()
+        }
+    }
+
     // MARK: - Actions
 
     private func startImport() {
@@ -223,5 +309,13 @@ struct ImportView: View {
             return
         }
         Task { await vm.sync(token: token) }
+    }
+
+    private func pushToDesktop() {
+        guard let token = appState.session?.sessionToken else {
+            vm.state = .error("请先登录")
+            return
+        }
+        Task { await vm.pushToDesktop(token: token) }
     }
 }
