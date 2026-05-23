@@ -1,6 +1,13 @@
 import SwiftUI
 import UIKit
 
+/// Wrapper that gives a pending import URL a stable Identifiable identity so
+/// `.sheet(item:)` can drive presentation without repeated triggers.
+struct IdentifiedImportURL: Identifiable {
+    let id = UUID()
+    let url: String
+}
+
 @main
 struct WhatsubMobileApp: App {
     @StateObject private var appState = AppState()
@@ -37,7 +44,9 @@ struct WhatsubMobileApp: App {
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: Int = 0
+    @State private var pendingImport: IdentifiedImportURL?
 
     var body: some View {
         Group {
@@ -60,6 +69,27 @@ struct ContentView: View {
                             Label("我的", systemImage: "person.crop.circle")
                         }
                         .tag(2)
+                }
+                .onOpenURL { url in
+                    guard url.host == "import",
+                          let pending = AppGroup.pendingImportURL() else { return }
+                    AppGroup.clearPendingImportURL()
+                    pendingImport = IdentifiedImportURL(url: pending)
+                }
+                .onChange(of: scenePhase) { phase in
+                    // Safety-net: if the responder-chain openURL didn't fire but
+                    // the extension already saved the URL, pick it up on foreground.
+                    if phase == .active, pendingImport == nil,
+                       let saved = AppGroup.pendingImportURL() {
+                        AppGroup.clearPendingImportURL()
+                        pendingImport = IdentifiedImportURL(url: saved)
+                    }
+                }
+                .sheet(item: $pendingImport) { item in
+                    NavigationStack {
+                        ImportView(initialURL: item.url)
+                            .environmentObject(appState)
+                    }
                 }
             } else {
                 AuthGateView()
