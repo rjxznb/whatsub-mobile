@@ -45,6 +45,8 @@ struct ImportView: View {
                 errorBody(msg)
             case .extractFailed(let msg):
                 extractFailedBody(msg)
+            case .pushing:
+                progressBody(icon: "desktopcomputer.and.arrow.down", label: "推送到桌面端…", progress: nil)
             case .pushedToDesktop:
                 pushedToDesktopBody
             }

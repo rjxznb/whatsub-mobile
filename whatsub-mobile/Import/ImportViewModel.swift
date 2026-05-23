@@ -13,6 +13,7 @@ final class ImportViewModel: ObservableObject {
         case error(String)
         /// Caption extraction failed — push to desktop is available.
         case extractFailed(message: String)
+        case pushing
         /// URL successfully enqueued to the backend import queue.
         case pushedToDesktop
     }
@@ -89,6 +90,7 @@ final class ImportViewModel: ObservableObject {
 
     func pushToDesktop(token: String) async {
         let url = resolvedSourceURL.isEmpty ? "https://www.youtube.com/watch?v=\(videoId)" : resolvedSourceURL
+        state = .pushing
         do {
             try await WhatsubAPI.shared.enqueueImport(url: url, token: token)
             state = .pushedToDesktop
