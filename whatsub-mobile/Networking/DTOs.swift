@@ -159,6 +159,19 @@ struct AnalysisJson: Decodable {
     }
 }
 
+struct ImportQueueItem: Decodable, Identifiable {
+    let id: String
+    let url: String
+    let status: String        // pending | processing | done | failed
+    let error: String?
+    let createdAt: Int64
+    let updatedAt: Int64
+}
+
+struct ImportQueueListResponse: Decodable {
+    let items: [ImportQueueItem]
+}
+
 struct LibraryEntryDetail: Decodable {
     let id: String
     let youtubeId: String
