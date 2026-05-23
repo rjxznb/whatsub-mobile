@@ -43,11 +43,15 @@ struct MeView: View {
 
                     Section("工具") {
                         NavigationLink(destination: ImportView()) {
-                            Label("导入 YouTube 视频", systemImage: "arrow.down.circle")
+                            Label("导入视频", systemImage: "arrow.down.circle")
                                 .foregroundStyle(.whatsubInk)
                         }
                         NavigationLink(destination: LlmSettingsView()) {
                             Label("LLM 设置", systemImage: "cpu")
+                                .foregroundStyle(.whatsubInk)
+                        }
+                        NavigationLink(destination: ImportQueueView()) {
+                            Label("导入队列", systemImage: "tray.and.arrow.down")
                                 .foregroundStyle(.whatsubInk)
                         }
                     }
