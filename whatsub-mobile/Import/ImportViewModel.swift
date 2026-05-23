@@ -86,6 +86,10 @@ final class ImportViewModel: ObservableObject {
 
         let srt = buildSRT(from: rawCues)
         let sourceUrl = "https://www.youtube.com/watch?v=\(videoId)"
+        // Fetch the YouTube cover now (VPN is on for the import) + ship it as
+        // thumbData so the backend serves a China-reachable thumbnail — the
+        // imported video then shows a cover in the Library list WITHOUT VPN.
+        let thumbData = await fetchThumbBase64(videoId: videoId)
 
         do {
             try await WhatsubAPI.shared.syncLibraryEntry(
@@ -95,11 +99,25 @@ final class ImportViewModel: ObservableObject {
                 durationSec: nil,
                 transcriptSrt: srt,
                 analysis: analysis,
+                thumbData: thumbData,
                 token: token
             )
             state = .done
         } catch {
             state = .error(error.localizedDescription)
+        }
+    }
+
+    /// Best-effort: fetch the YouTube cover (mqdefault.jpg) + base64. Returns nil
+    /// on any failure (entry falls back to the i.ytimg URL, VPN-only).
+    private func fetchThumbBase64(videoId: String) async -> String? {
+        guard let url = URL(string: "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg") else { return nil }
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200, !data.isEmpty else { return nil }
+            return data.base64EncodedString()
+        } catch {
+            return nil
         }
     }
 
