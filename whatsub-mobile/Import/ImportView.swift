@@ -59,7 +59,7 @@ struct ImportView: View {
             guard !didAutoRun, let url = initialURL else { return }
             didAutoRun = true
             urlInput = url
-            await vm.run(urlOrId: url)
+            // No auto-run: the user chooses 手机解析 vs 推送桌面 on the idle screen.
         }
     }
 
@@ -76,7 +76,7 @@ struct ImportView: View {
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
 
-            Text("YouTube 有字幕在手机端解析（需挂 VPN）；B站 / 其它将推送到桌面端用 whisper 处理")
+            Text("推送到桌面端：桌面下载+转写后，手机免 VPN 流畅观看（需桌面在线，可离线排队）。手机解析：直接在手机抽取字幕，但观看走 YouTube 需挂 VPN。（仅 YouTube 支持手机解析；B站/其它仅支持推送桌面。）")
                 .font(.caption)
                 .foregroundStyle(.whatsubInkMuted)
                 .multilineTextAlignment(.center)
@@ -87,17 +87,38 @@ struct ImportView: View {
                 .textInputAutocapitalization(.never)
                 .padding(.horizontal)
 
-            Button(action: startImport) {
-                Text("解析导入")
+            let trimmed = urlInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isEmpty = trimmed.isEmpty
+            let isYouTube = VideoSource.from(url: trimmed) == .youtube || VideoSource.isLikelyYouTubeId(trimmed)
+
+            Button(action: startPush) {
+                Label("推送到桌面端（免 VPN 流畅观看）", systemImage: "desktopcomputer.and.arrow.down")
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.whatsubAccent)
+                    .background(isEmpty ? Color.whatsubAccent.opacity(0.4) : Color.whatsubAccent)
                     .foregroundStyle(.black)
                     .cornerRadius(12)
             }
             .padding(.horizontal)
-            .disabled(urlInput.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(isEmpty)
+
+            if isYouTube {
+                Button(action: startImport) {
+                    Label("手机解析（看时需挂 VPN）", systemImage: "iphone")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.whatsubAccent, lineWidth: 1.5)
+                        )
+                        .foregroundStyle(.whatsubAccent)
+                        .cornerRadius(12)
+                }
+                .padding(.horizontal)
+                .disabled(isEmpty)
+            }
 
             Spacer()
         }
@@ -287,7 +308,7 @@ struct ImportView: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.whatsubInk)
 
-            Text("桌面端在线时会自动处理，完成后出现在 Library。")
+            Text("已加入桌面处理队列。桌面端在线时会自动下载+解析；若当前不在线，任务会排队，等下次上线自动处理。可在「我的 → 导入队列」查看进度。")
                 .font(.subheadline)
                 .foregroundStyle(.whatsubInkMuted)
                 .multilineTextAlignment(.center)
@@ -306,6 +327,14 @@ struct ImportView: View {
 
     private func startImport() {
         Task { await vm.run(urlOrId: urlInput) }
+    }
+
+    private func startPush() {
+        guard let token = appState.session?.sessionToken else {
+            vm.state = .error("请先登录")
+            return
+        }
+        Task { await vm.pushURL(urlInput, token: token) }
     }
 
     private func startSync() {
