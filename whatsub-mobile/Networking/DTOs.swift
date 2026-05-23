@@ -124,6 +124,22 @@ struct AnalysisJson: Decodable {
         subtitles = subs
         keyPhrases = try c.decodeIfPresent([KeyPhrase].self, forKey: .keyPhrases) ?? []
     }
+
+    /// Build from parts (used by AnalysisEngine after assembling batch results).
+    /// Skips the JSON round-trip that `init(from:)` requires.
+    static func assembled(subtitles: [Cue], keyPhrases: [KeyPhrase]) -> AnalysisJson {
+        // Use the Decodable init path by encoding + decoding, so index re-numbering
+        // stays in one place (init(from:) sets index = array position).
+        // Fast path: build via private memberwise init instead.
+        return AnalysisJson(_subtitles: subtitles, _keyPhrases: keyPhrases)
+    }
+
+    // Private memberwise init for assembled(). The caller (AnalysisEngine) has
+    // already re-indexed, so we store as-is without JSON round-trip.
+    private init(_subtitles: [Cue], _keyPhrases: [KeyPhrase]) {
+        subtitles = _subtitles
+        keyPhrases = _keyPhrases
+    }
 }
 
 struct LibraryEntryDetail: Decodable {
