@@ -45,19 +45,24 @@ struct LibraryView: View {
     private var content: some View {
         if vm.loading && vm.entries.isEmpty {
             ProgressView().tint(.whatsubAccent)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let err = vm.errorMessage, vm.entries.isEmpty {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.whatsubInkMuted)
                 Text(err).font(.callout).foregroundStyle(.whatsubInkMuted).multilineTextAlignment(.center)
                 Text("下拉重试").font(.footnote).foregroundStyle(.whatsubInkFaint)
             }.padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if vm.entries.isEmpty {
+            // Center the empty state in the area below the header (the parent VStack
+            // is .leading/.top, so without this the placeholder hugs the top-left on iPad).
             VStack(spacing: 10) {
                 Image(systemName: "play.rectangle").font(.system(size: 48)).foregroundStyle(.whatsubAccent)
                 Text("还没有同步的视频").font(.headline).foregroundStyle(.whatsubInk)
                 Text("在桌面端 whatSub 的视频卡片上点 ☁️ 同步到云，\n这里下拉刷新就能看到").font(.footnote)
                     .foregroundStyle(.whatsubInkMuted).multilineTextAlignment(.center)
             }.padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(vm.entries) { entry in
                 NavigationLink(value: entry.id) {
