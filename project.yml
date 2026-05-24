@@ -46,11 +46,11 @@ targets:
         excludes:
           - "Info.plist"
           - "PrivacyInfo.xcprivacy"
-          - "Resources/ipa-en-us.json"
     resources:
       - whatsub-mobile/Assets.xcassets
       - whatsub-mobile/PrivacyInfo.xcprivacy
       - whatsub-mobile/Resources/ipa-en-us.json
+      - whatsub-mobile/Resources/correct.wav
     info:
       path: whatsub-mobile/Info.plist
       properties:
