@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MeView: View {
     @EnvironmentObject var appState: AppState
+    @State private var quota: LibraryQuota?
 
     private var versionString: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -18,6 +19,17 @@ struct MeView: View {
                         LabeledContent("邮箱", value: appState.session?.email ?? "—")
                             .foregroundStyle(.whatsubInk)
                         licenseRow
+                    }
+                    .listRowBackground(Color.whatsubBgElev)
+
+                    Section("云端同步") {
+                        if let q = quota {
+                            LabeledContent("云端视频", value: "\(q.used)/\(q.limit)")
+                                .foregroundStyle(.whatsubInk)
+                        }
+                        Text("免费 3 个视频；开通授权后 50 个。需要更多云端额度或手机端公共语料库，请在官网用同一邮箱开通授权后，回到这里登录即可生效。")
+                            .font(.footnote)
+                            .foregroundStyle(.whatsubInkMuted)
                     }
                     .listRowBackground(Color.whatsubBgElev)
 
@@ -69,7 +81,12 @@ struct MeView: View {
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("我的")
-            .task { await appState.refreshMe() }
+            .task {
+                await appState.refreshMe()
+                if let t = appState.session?.sessionToken {
+                    quota = try? await WhatsubAPI.shared.libraryQuota(token: t)
+                }
+            }
         }
     }
 

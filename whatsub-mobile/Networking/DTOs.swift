@@ -172,6 +172,11 @@ struct ImportQueueListResponse: Decodable {
     let items: [ImportQueueItem]
 }
 
+struct LibraryQuota: Decodable {
+    let used: Int
+    let limit: Int
+}
+
 struct LibraryEntryDetail: Decodable {
     let id: String
     let youtubeId: String
