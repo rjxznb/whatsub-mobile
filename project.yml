@@ -101,6 +101,12 @@ targets:
       path: whatsub-share/Info.plist
       properties:
         CFBundleDisplayName: 导入到 whatSub
+        # Must match the parent app (XcodeGen otherwise defaults a generated
+        # extension Info.plist to CFBundleVersion "1"; the CI build-number
+        # override sets CURRENT_PROJECT_VERSION, which only flows through if the
+        # plist references it). App Store validation rejects a mismatch.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
