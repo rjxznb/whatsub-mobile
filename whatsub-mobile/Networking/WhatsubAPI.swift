@@ -54,6 +54,11 @@ actor WhatsubAPI {
         _ = try await delete(Endpoints.library("sync/\(encoded)"), bearer: token)
     }
 
+    func libraryQuota(token: String) async throws -> LibraryQuota {
+        let data = try await get(Endpoints.library("quota"), bearer: token)
+        return try decode(LibraryQuota.self, from: data)
+    }
+
     func enqueueImport(url: String, token: String) async throws {
         _ = try await postExpectingOk(
             Endpoints.library("import-queue"),
