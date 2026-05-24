@@ -240,6 +240,10 @@ actor WhatsubAPI {
         }
         guard (200..<300).contains(http.statusCode) else {
             let err = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+            if http.statusCode == 403, err?.error == "quota_exceeded" {
+                let q = try? JSONDecoder().decode(QuotaErrorBody.self, from: data)
+                throw APIError.quotaExceeded(used: q?.used ?? 0, limit: q?.limit ?? 0)
+            }
             throw APIError.server(http.statusCode, err?.error)
         }
         return data

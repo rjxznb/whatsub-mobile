@@ -45,6 +45,8 @@ struct VerifyPurchaseRequest: Encodable { let signedTransactionInfo: String }
 /// Generic `{ ok: true }` or `{ error: "..." }` envelope used by several routes.
 struct OkResponse: Decodable { let ok: Bool? }
 struct ErrorResponse: Decodable { let error: String? }
+/// 403 quota_exceeded body from POST /sync and /import-queue: { error, used, limit }.
+struct QuotaErrorBody: Decodable { let error: String?; let used: Int?; let limit: Int? }
 
 // ----- Library -----
 

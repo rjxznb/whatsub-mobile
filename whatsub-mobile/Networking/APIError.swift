@@ -6,6 +6,7 @@ enum APIError: Error, Equatable {
     case server(Int, String?)    // non-2xx with a parsed `error` string if any
     case decoding(String)        // response didn't match the expected shape
     case badInput(String)        // client-side validation (e.g. bad email)
+    case quotaExceeded(used: Int, limit: Int)   // 403 from library sync/push — over the OSS-video cap
 
     /// Chinese message for display in the UI.
     var chinese: String {
@@ -28,6 +29,8 @@ enum APIError: Error, Equatable {
             return "数据解析失败：\(detail)"
         case .badInput(let detail):
             return detail
+        case .quotaExceeded(let used, let limit):
+            return "云端视频已达上限（\(used)/\(limit)）"
         }
     }
 }
