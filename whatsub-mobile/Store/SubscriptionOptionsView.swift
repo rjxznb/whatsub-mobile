@@ -14,8 +14,8 @@ struct SubscriptionOptionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let m = store.subMonth { planButton(m, label: "包月", note: "¥12/月") }
-            if let y = store.subYear { planButton(y, label: "包年", note: "¥88/年 · 更划算") }
+            if let m = store.subMonth { planButton(m, label: "包月", note: "每月") }
+            if let y = store.subYear { planButton(y, label: "包年", note: "每年 · 更划算") }
 
             if let err = store.lastError {
                 Text(err).font(.footnote).foregroundStyle(.red)
