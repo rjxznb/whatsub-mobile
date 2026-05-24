@@ -59,6 +59,14 @@ struct QuizView: View {
                         .font(.callout)
                         .foregroundStyle(.whatsubInkMuted)
                 }
+                Button { Speaker.speak(q.card.phraseRaw) } label: {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.title3)
+                        .foregroundStyle(.whatsubAccent)
+                        .padding(10)
+                        .background(Color.whatsubBgElev, in: Circle())
+                }
+                .padding(.bottom, 2)
                 ForEach(q.options, id: \.self) { opt in optionButton(q, opt) }
                 if vm.revealed { revealPanel(q) }
                 Spacer()
