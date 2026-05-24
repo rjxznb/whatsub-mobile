@@ -184,7 +184,7 @@ struct LibraryEntryDetail: Decodable {
 
 // ----- Corpus -----
 
-struct CorpusTag: Decodable, Identifiable {
+struct CorpusTag: Codable, Identifiable {
     var id: String { tag }
     let tag: String
     let count: Int
@@ -193,7 +193,7 @@ struct CorpusTagsResponse: Decodable { let tags: [CorpusTag] }
 
 /// A contribution's source. JSONB written by the plugin — camelCase on the wire
 /// in BOTH /mine and /lookup. Only `youtube` carries `timestampSec`.
-struct CorpusSource: Decodable {
+struct CorpusSource: Codable {
     let kind: String   // youtube | webpage | pdf | curator
     let url: String
     let title: String?
@@ -201,7 +201,7 @@ struct CorpusSource: Decodable {
 }
 
 /// /browse phrase — snake_case, phrase-level (no per-instance source).
-struct BrowsePhrase: Decodable, Identifiable {
+struct BrowsePhrase: Codable, Identifiable {
     var id: String { phraseNormalized }
     let phraseNormalized: String
     let phraseRaw: String
@@ -219,7 +219,7 @@ struct BrowsePhrase: Decodable, Identifiable {
 struct BrowseResponse: Decodable { let phrases: [BrowsePhrase]; let total: Int }
 
 /// /mine item — camelCase, instance-level (one row per save).
-struct MineItem: Decodable, Identifiable {
+struct MineItem: Codable, Identifiable {
     let phraseNormalized: String
     let phraseRaw: String
     let meaningZh: String?
@@ -233,7 +233,7 @@ struct MineItem: Decodable, Identifiable {
 struct MineResponse: Decodable { let items: [MineItem]; let total: Int }
 
 /// /lookup contribution — snake_case row; its `source` JSONB is camelCase.
-struct CorpusContribution: Decodable, Identifiable {
+struct CorpusContribution: Codable, Identifiable {
     let id: Int
     let contextSentence: String
     let source: CorpusSource
@@ -247,7 +247,7 @@ struct CorpusContribution: Decodable, Identifiable {
 }
 
 /// /lookup phrase — snake_case; `tags` arrives wrapped as `{ list: [...] }`.
-struct LookupPhrase: Decodable {
+struct LookupPhrase: Codable {
     let phraseRaw: String
     let meaningZh: String?
     let usageNote: String?
@@ -258,7 +258,7 @@ struct LookupPhrase: Decodable {
         case usageNote = "usage_note"
         case tags
     }
-    private struct TagWrapper: Decodable { let list: [String]? }
+    private struct TagWrapper: Codable { let list: [String]? }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         phraseRaw = try c.decodeIfPresent(String.self, forKey: .phraseRaw) ?? ""
@@ -267,8 +267,15 @@ struct LookupPhrase: Decodable {
         let wrapped = try c.decodeIfPresent(TagWrapper.self, forKey: .tags)
         tags = wrapped?.list ?? []
     }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(phraseRaw, forKey: .phraseRaw)
+        try c.encodeIfPresent(meaningZh, forKey: .meaningZh)
+        try c.encodeIfPresent(usageNote, forKey: .usageNote)
+        try c.encode(TagWrapper(list: tags), forKey: .tags) // re-wrap so init(from:) reads it back
+    }
 }
-struct LookupResponse: Decodable {
+struct LookupResponse: Codable {
     let phrase: LookupPhrase
     let publicContributions: [CorpusContribution]
     let personalContributions: [CorpusContribution]
