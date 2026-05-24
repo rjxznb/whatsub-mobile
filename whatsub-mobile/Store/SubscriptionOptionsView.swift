@@ -1,0 +1,63 @@
+import SwiftUI
+import StoreKit
+
+/// Shared subscription purchase UI: month/year buttons + 恢复购买 + the Apple-
+/// required auto-renew disclosure + 隐私/EULA links. The CALLER decides whether to
+/// show it (license-only); this view just sells. `onPurchased` fires after a
+/// successful subscribe so callers can refresh quota or retry a blocked action.
+struct SubscriptionOptionsView: View {
+    @EnvironmentObject var store: StoreManager
+    var onPurchased: (() -> Void)?
+
+    private let privacyURL = URL(string: "https://whatsub.eversay.cc/privacy")!
+    private let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let m = store.subMonth { planButton(m, label: "包月", note: "¥12/月") }
+            if let y = store.subYear { planButton(y, label: "包年", note: "¥88/年 · 更划算") }
+
+            if let err = store.lastError {
+                Text(err).font(.footnote).foregroundStyle(.red)
+            }
+
+            Button("恢复购买") { Task { await store.restore() } }
+                .font(.callout).foregroundStyle(.whatsubInkMuted)
+
+            Text("订阅自动续订，可随时在「设置 › Apple ID › 订阅」中取消。")
+                .font(.caption2).foregroundStyle(.whatsubInkFaint)
+
+            HStack(spacing: 16) {
+                Link("隐私政策", destination: privacyURL)
+                Link("服务条款", destination: termsURL)
+            }
+            .font(.caption2).foregroundStyle(.whatsubInkFaint)
+        }
+        .onAppear { store.start() }
+    }
+
+    private func planButton(_ product: Product, label: String, note: String) -> some View {
+        Button {
+            Task { if await store.purchaseSubscription(product) { onPurchased?() } }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(label) · \(product.displayPrice)").fontWeight(.semibold)
+                    Text(note).font(.caption).foregroundStyle(.black.opacity(0.7))
+                }
+                Spacer()
+                if store.purchaseInProgress {
+                    ProgressView().tint(.black)
+                } else {
+                    Text("升级到 50").fontWeight(.semibold)
+                }
+            }
+            .padding(.vertical, 12).padding(.horizontal, 14)
+            .frame(maxWidth: .infinity)
+            .background(Color.whatsubAccent)
+            .foregroundColor(.black)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .disabled(store.purchaseInProgress)
+    }
+}
