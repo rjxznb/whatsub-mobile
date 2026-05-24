@@ -35,12 +35,11 @@ struct MeView: View {
 
                     if appState.currentUser?.hasActiveLicense == false {
                         Section {
-                            Link(destination: URL(string: "https://whatsub.eversay.cc/#pricing")!) {
-                                Label("去网站购买授权", systemImage: "cart")
-                                    .foregroundStyle(.whatsubAccent)
-                            }
+                            // Plain text, no tappable purchase link (App Store anti-steering).
+                            Label("购买授权请前往官网", systemImage: "cart")
+                                .foregroundStyle(.whatsubInkMuted)
                         } footer: {
-                            Text("购买后用同一邮箱登录即可解锁公共语料库 + 云端 library。")
+                            Text("在官网用同一邮箱开通授权后，回到这里登录即可解锁公共语料库 + 云端 library。")
                         }
                         .listRowBackground(Color.whatsubBgElev)
                     }
