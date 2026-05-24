@@ -5,15 +5,24 @@ struct CorpusView: View {
     @StateObject private var vm = CorpusViewModel()
 
     private var token: String? { appState.session?.sessionToken }
+    @State private var showQuiz = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Text("语料库")
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(.whatsubInk)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
+                HStack {
+                    Text("语料库")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(.whatsubInk)
+                    Spacer()
+                    Button { showQuiz = true } label: {
+                        Label("单词卡", systemImage: "rectangle.stack.badge.play")
+                            .font(.subheadline).fontWeight(.semibold)
+                            .foregroundStyle(.whatsubAccent)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
 
                 Picker("", selection: Binding(
                     get: { vm.scope },
@@ -37,6 +46,9 @@ struct CorpusView: View {
             }
             .task { if let t = token, !vm.loadedOnce { await vm.reload(token: t) } }
             .refreshable { if let t = token { await vm.reload(token: t) } }
+            .sheet(isPresented: $showQuiz) {
+                QuizView().environmentObject(appState)
+            }
         }
     }
 
