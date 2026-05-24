@@ -10,13 +10,12 @@ struct AuthGateView: View {
             Color.whatsubBg.ignoresSafeArea()
             VStack(spacing: 24) {
                 Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "play.rectangle.fill")
-                        .font(.system(size: 56))
-                        .foregroundStyle(.whatsubAccent)
-                    Text("whatSub")
-                        .font(.largeTitle.weight(.bold))
-                        .foregroundStyle(.whatsubInk)
+                VStack(spacing: 10) {
+                    // Brand wordmark — matches the desktop onboarding intro:
+                    // Caveat (cursive) bold, "what" white + "Sub" brand-blue.
+                    (Text("what").foregroundColor(.white)
+                        + Text("Sub").foregroundColor(.whatsubAccent))
+                        .font(.custom("Caveat-Bold", size: 80))
                     Text(vm.step == .email ? "用邮箱登录 · 已购用户自动识别" : "验证码已发到 \(vm.email)")
                         .font(.callout)
                         .foregroundStyle(.whatsubInkMuted)
