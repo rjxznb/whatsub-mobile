@@ -14,10 +14,22 @@ final class PhraseDetailViewModel: ObservableObject {
     }
 
     func load(phrase: String, token: String) async {
+        let cache = CorpusCache.shared
+        // 1. Serve from cache when valid — no server call.
+        if let cached = cache.cachedLookup(phrase, now: Date()) {
+            result = cached
+            loading = false
+            return
+        }
         loading = true; errorMessage = nil
         do {
-            result = try await WhatsubAPI.shared.lookupPhrase(phrase, token: token)
-            if result == nil { errorMessage = "未找到该短语的数据" }
+            let resp = try await WhatsubAPI.shared.lookupPhrase(phrase, token: token)
+            result = resp
+            if let resp {
+                cache.storeLookup(phrase, resp, now: Date())
+            } else {
+                errorMessage = "未找到该短语的数据"
+            }
         } catch let e as APIError {
             errorMessage = e.chinese
         } catch {
