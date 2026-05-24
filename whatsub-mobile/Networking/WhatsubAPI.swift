@@ -139,6 +139,11 @@ actor WhatsubAPI {
         return try decode(CorpusTagsResponse.self, from: data).tags
     }
 
+    func corpusVersions(token: String) async throws -> CorpusVersions {
+        let data = try await get(Endpoints.corpus("versions"), bearer: token)
+        return try decode(CorpusVersions.self, from: data)
+    }
+
     func browseCorpus(tags: [String], token: String) async throws -> [BrowsePhrase] {
         var path = "browse?limit=100"
         if !tags.isEmpty {

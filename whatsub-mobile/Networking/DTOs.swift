@@ -184,6 +184,17 @@ struct LibraryEntryDetail: Decodable {
 
 // ----- Corpus -----
 
+/// GET /api/corpus/versions → { mine, public }. "public" is a Swift keyword,
+/// so it's decoded into `publicVersion`.
+struct CorpusVersions: Decodable {
+    let mine: Int
+    let publicVersion: Int
+    enum CodingKeys: String, CodingKey {
+        case mine
+        case publicVersion = "public"
+    }
+}
+
 struct CorpusTag: Codable, Identifiable {
     var id: String { tag }
     let tag: String
