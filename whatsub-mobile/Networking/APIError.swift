@@ -21,6 +21,7 @@ enum APIError: Error, Equatable {
             case "no_code": return "请先获取验证码"
             case "wrong_code": return "验证码错误"
             case "too_many_attempts": return "尝试次数过多，请重新获取验证码"
+            case "quota_exceeded": return "云端视频已达上限，先在 Library 删一个，或购买授权解锁更多"
             default: return "服务器错误（\(code)）"
             }
         case .decoding(let detail):
