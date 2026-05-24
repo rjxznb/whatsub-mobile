@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ImportView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var store: StoreManager
     @StateObject private var vm = ImportViewModel()
     @Environment(\.dismiss) private var dismiss
 
@@ -51,6 +52,8 @@ struct ImportView: View {
                 progressBody(icon: "desktopcomputer.and.arrow.down", label: "推送到桌面端…", progress: nil)
             case .pushedToDesktop:
                 pushedToDesktopBody
+            case .quotaWall(let used, let limit):
+                quotaWallBody(used: used, limit: limit)
             }
         }
         .navigationTitle("导入视频")
@@ -321,6 +324,49 @@ struct ImportView: View {
 
             Spacer()
         }
+    }
+
+    // MARK: - Quota wall (over cloud-video cap)
+
+    private func quotaWallBody(used: Int, limit: Int) -> some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 48))
+                .foregroundStyle(.whatsubHighlight)
+            Text("云端视频已达上限")
+                .font(.headline)
+                .foregroundStyle(.whatsubInk)
+            Text("已用 \(used)/\(limit) 个云端视频。")
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkMuted)
+
+            if appState.currentUser?.hasActiveLicense == true {
+                Text("订阅解锁 50 个云端额度，订阅成功会自动继续这次推送。")
+                    .font(.subheadline)
+                    .foregroundStyle(.whatsubInk)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                SubscriptionOptionsView(onPurchased: {
+                    guard let token = appState.session?.sessionToken else { return }
+                    Task { await vm.pushToDesktop(token: token) }
+                })
+                .padding(.horizontal)
+            } else {
+                Text("先在 Library 删一个，或在官网用同一邮箱购买授权后再订阅。")
+                    .font(.subheadline)
+                    .foregroundStyle(.whatsubInkMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
+            Button("完成") { dismiss() }
+                .buttonStyle(.bordered)
+                .tint(.whatsubAccent)
+                .padding(.top, 4)
+            Spacer()
+        }
+        .padding()
     }
 
     // MARK: - Actions

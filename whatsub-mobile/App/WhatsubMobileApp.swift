@@ -127,6 +127,7 @@ struct ContentView: View {
             NavigationStack {
                 ImportView(initialURL: item.url)
                     .environmentObject(appState)
+                    .environmentObject(store)
             }
         }
     }

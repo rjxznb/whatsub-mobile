@@ -1,13 +1,31 @@
 import SwiftUI
+import StoreKit
 
 struct MeView: View {
     @EnvironmentObject var appState: AppState
     @State private var quota: LibraryQuota?
+    @EnvironmentObject var store: StoreManager
+    @State private var showManageSubscriptions = false
 
     private var versionString: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
         return "v\(v) (\(b))"
+    }
+
+    private var subPlanName: String {
+        // `subProductId` is String?; plain == avoids switch-on-optional pattern subtleties.
+        let pid = appState.currentUser?.subProductId
+        if pid == StoreManager.subMonthID { return "包月" }
+        if pid == StoreManager.subYearID { return "包年" }
+        return "已订阅"
+    }
+
+    private func reloadQuota() async {
+        await appState.refreshMe()
+        if let t = appState.session?.sessionToken {
+            quota = try? await WhatsubAPI.shared.libraryQuota(token: t)
+        }
     }
 
     var body: some View {
@@ -27,11 +45,25 @@ struct MeView: View {
                             LabeledContent("云端视频", value: "\(q.used)/\(q.limit)")
                                 .foregroundStyle(.whatsubInk)
                         }
-                        Text("免费 3 个视频；开通授权后 50 个。需要更多云端额度或手机端公共语料库，请在官网用同一邮箱开通授权后，回到这里登录即可生效。")
-                            .font(.footnote)
-                            .foregroundStyle(.whatsubInkMuted)
+                        if appState.currentUser?.hasActiveLicense == true {
+                            if appState.currentUser?.iosSubActive == true {
+                                Label("已订阅 · \(subPlanName)", systemImage: "checkmark.seal.fill")
+                                    .foregroundStyle(.whatsubAccent)
+                                Button("管理订阅") { showManageSubscriptions = true }
+                                    .foregroundStyle(.whatsubAccent)
+                            } else {
+                                Text("订阅解锁 50 个云端视频额度。")
+                                    .font(.footnote).foregroundStyle(.whatsubInkMuted)
+                                SubscriptionOptionsView(onPurchased: { Task { await reloadQuota() } })
+                                    .padding(.vertical, 4)
+                            }
+                        } else {
+                            Text("免费 3 个云端视频。开通网站授权后可订阅解锁 50 个；需要手机端公共语料库也请在官网用同一邮箱开通授权后回到这里登录。")
+                                .font(.footnote).foregroundStyle(.whatsubInkMuted)
+                        }
                     }
                     .listRowBackground(Color.whatsubBgElev)
+                    .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
 
                     if appState.currentUser?.hasActiveLicense == false {
                         Section {
@@ -80,12 +112,7 @@ struct MeView: View {
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("我的")
-            .task {
-                await appState.refreshMe()
-                if let t = appState.session?.sessionToken {
-                    quota = try? await WhatsubAPI.shared.libraryQuota(token: t)
-                }
-            }
+            .task { await reloadQuota() }
         }
     }
 

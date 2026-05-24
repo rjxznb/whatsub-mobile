@@ -19,6 +19,9 @@ final class ImportViewModel: ObservableObject {
         /// A non-YouTube source (Bilibili / other) that has no client-side
         /// caption path — offer to push it to the desktop queue.
         case needsDesktop(message: String)
+        /// Push blocked by the OSS-video quota cap. Carries used/limit for display
+        /// + the license-holder upsell.
+        case quotaWall(used: Int, limit: Int)
     }
 
     @Published var state: State = .idle
@@ -118,6 +121,8 @@ final class ImportViewModel: ObservableObject {
         do {
             try await WhatsubAPI.shared.enqueueImport(url: url, token: token)
             state = .pushedToDesktop
+        } catch APIError.quotaExceeded(let used, let limit) {
+            state = .quotaWall(used: used, limit: limit)
         } catch let e as APIError {
             state = .error(e.chinese)
         } catch {
