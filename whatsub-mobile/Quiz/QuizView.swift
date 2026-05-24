@@ -25,6 +25,9 @@ struct QuizView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .navigationBarLeading) { Button("关闭") { dismiss() }.tint(.whatsubAccent) } }
             .navigationDestination(for: String.self) { PhraseDetailView(phrase: $0) }
+            .onChange(of: vm.revealed) { revealed in
+                if revealed { SoundFX.correct() }
+            }
         }
     }
 
@@ -51,6 +54,11 @@ struct QuizView: View {
                 Text(q.card.phraseRaw)
                     .font(.system(size: 26, weight: .bold)).foregroundStyle(.whatsubInk)
                     .multilineTextAlignment(.center).padding(.horizontal).padding(.top, 8)
+                if let ipa = IPADict.shared.lookup(q.card.phraseRaw) {
+                    Text("/\(ipa)/")
+                        .font(.callout)
+                        .foregroundStyle(.whatsubInkMuted)
+                }
                 ForEach(q.options, id: \.self) { opt in optionButton(q, opt) }
                 if vm.revealed { revealPanel(q) }
                 Spacer()
