@@ -36,6 +36,16 @@ actor WhatsubAPI {
         _ = try? await postExpectingOk(Endpoints.auth("logout"), body: Data("{}".utf8), bearer: token)
     }
 
+
+    // ----- IAP -----
+
+    /// Report a StoreKit-verified transaction (signed JWS) to the backend, which
+    /// re-verifies it and records the entitlement. Caller should refreshMe() after.
+    func verifyPurchase(token: String, signedTransactionInfo: String) async throws {
+        let body = try JSONEncoder().encode(VerifyPurchaseRequest(signedTransactionInfo: signedTransactionInfo))
+        _ = try await post(Endpoints.iap("verify"), body: body, bearer: token)
+    }
+
     // ----- Library -----
 
     func listLibrary(token: String) async throws -> [LibraryListItem] {
