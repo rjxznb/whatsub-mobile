@@ -33,6 +33,11 @@ struct SubscriptionOptionsView: View {
             }
             .font(.caption2).foregroundStyle(.whatsubInkFaint)
         }
+        // CRITICAL: this view is embedded in MeView's List. With the default button
+        // style, a List row treats its whole content as ONE tap target and fires every
+        // Button/Link in the row at once (tap 包月 → privacy link + 包年 + 恢复 all fire).
+        // .borderless makes each control its own hit target. Harmless in ImportView's VStack.
+        .buttonStyle(.borderless)
         .onAppear { store.start() }
     }
 
