@@ -51,6 +51,7 @@ targets:
       - whatsub-mobile/PrivacyInfo.xcprivacy
       - whatsub-mobile/Resources/ipa-en-us.json
       - whatsub-mobile/Resources/correct.wav
+      - whatsub-mobile/Resources/Caveat-Bold.ttf
     info:
       path: whatsub-mobile/Info.plist
       properties:
@@ -70,6 +71,8 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
+        UIAppFonts:
+          - Caveat-Bold.ttf
         CFBundleURLTypes:
           - CFBundleURLName: cc.eversay.whatsub.mobile
             CFBundleURLSchemes: [whatsub]
