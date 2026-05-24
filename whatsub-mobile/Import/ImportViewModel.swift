@@ -118,6 +118,8 @@ final class ImportViewModel: ObservableObject {
         do {
             try await WhatsubAPI.shared.enqueueImport(url: url, token: token)
             state = .pushedToDesktop
+        } catch let e as APIError {
+            state = .error(e.chinese)
         } catch {
             state = .error(error.localizedDescription)
         }
