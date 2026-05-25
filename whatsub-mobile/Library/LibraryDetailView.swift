@@ -60,6 +60,8 @@ struct LibraryDetailView: View {
                 VideoPlayerView(
                     player: p,
                     seek: vm.seek,
+                    currentCue: vm.currentCue,
+                    showCaptions: showCaptions,
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )
@@ -77,10 +79,13 @@ struct LibraryDetailView: View {
             // loading overlay below covers that brief window.)
             if !playerReady && !isDesktopOnly(entry) { playerOverlay(isYouTube: entry.videoUrl == nil) }
             if playerReady {
+                // CC toggle only (the caption itself now renders in the player's
+                // contentOverlayView so it survives native fullscreen). The toggle
+                // isn't reachable in native fullscreen — captions there follow the
+                // current showCaptions state.
                 VStack {
                     HStack { Spacer(); captionToggle }
                     Spacer()
-                    if showCaptions, let cue = vm.currentCue { captionBar(cue) }
                 }
                 .padding(fullscreen ? 16 : 8)
             }
@@ -89,34 +94,6 @@ struct LibraryDetailView: View {
         .task {
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             if !playerReady { playerTimedOut = true }
-        }
-    }
-
-    // On-video bilingual caption (current cue): English with AI highlights in
-    // yellow + Chinese below. Toggleable via the CC button.
-    private func captionBar(_ cue: Cue) -> some View {
-        VStack(spacing: 3) {
-            captionEnglish(cue)
-                .font(.system(size: 17, weight: .medium))
-                .multilineTextAlignment(.center)
-            if !cue.translation.isEmpty {
-                Text(cue.translation)
-                    .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.9))
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 12)
-    }
-
-    private func captionEnglish(_ cue: Cue) -> Text {
-        splitForHighlights(cue.text, highlights: cue.highlightWords).reduce(Text("")) { acc, run in
-            acc + Text(run.text)
-                .foregroundColor(run.highlight ? .whatsubHighlight : .white)
-                .fontWeight(run.highlight ? .semibold : .regular)
         }
     }
 

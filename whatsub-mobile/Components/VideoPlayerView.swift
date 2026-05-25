@@ -1,16 +1,26 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import UIKit
 
 /// Native AVPlayer-backed video view. Input surface mirrors YouTubeEmbedView
-/// (url, seek, onReady, onTime) so LibraryDetailView can swap between them
+/// (player, seek, onReady, onTime) so LibraryDetailView can swap between them
 /// without changing the view model.
+///
+/// Captions render into `AVPlayerViewController.contentOverlayView` — a UIKit view
+/// that IS part of the player's NATIVE fullscreen presentation. A SwiftUI overlay
+/// (the old approach) vanished when the user tapped the native fullscreen button,
+/// notably on iPad, which never enters the app's custom-landscape layout.
 struct VideoPlayerView: UIViewControllerRepresentable {
     /// The AVPlayer is OWNED by the parent (LibraryDetailView @State), not created
     /// here — so it survives the portrait↔landscape view rebuild. Creating it in
     /// makeUIViewController would make rotation spawn a fresh player (restart at 0).
     let player: AVPlayer
     var seek: SeekRequest?
+    /// Current bilingual cue to show as an on-video caption (nil = none).
+    var currentCue: Cue?
+    /// CC toggle — when false the caption is hidden.
+    var showCaptions: Bool
     var onReady: () -> Void
     var onTime: (Double) -> Void
 
@@ -18,9 +28,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         // Play audio even when the hardware ring/silent switch is on silent.
-        // Default AVAudioSession (.ambient/.soloAmbient) honors the silent
-        // switch → muted video. `.playback` is the standard category for a
-        // media app and makes the sound audible regardless of the switch.
+        // `.playback` is the standard category for a media app and makes the
+        // sound audible regardless of the switch.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
@@ -30,10 +39,18 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         vc.videoGravity = .resizeAspect
         vc.showsPlaybackControls = true
         context.coordinator.attach(player: player)
+        // Force the view tree to load so contentOverlayView is non-nil, then
+        // attach the caption eagerly (updateUIViewController also ensures it).
+        vc.loadViewIfNeeded()
+        context.coordinator.ensureCaptionView(in: vc)
         return vc
     }
 
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        // Caption first (always), then the seek (which can early-return).
+        context.coordinator.ensureCaptionView(in: vc)
+        context.coordinator.updateCaption(cue: currentCue, show: showCaptions)
+
         guard let seek, seek != context.coordinator.lastSeek else { return }
         context.coordinator.lastSeek = seek
         let t = CMTime(seconds: seek.seconds, preferredTimescale: 600)
@@ -53,6 +70,11 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         private var timeObserver: Any?
         private var statusObs: NSKeyValueObservation?
         private var didReady = false
+        // Caption UI lives in the player's contentOverlayView so it shows in
+        // native fullscreen too.
+        private var captionContainer: UIView?
+        private var captionLabel: UILabel?
+        private var lastCaptionKey: String?
 
         init(onReady: @escaping () -> Void, onTime: @escaping (Double) -> Void) {
             self.onReady = onReady; self.onTime = onTime
@@ -72,5 +94,79 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             statusObs?.invalidate(); statusObs = nil
         }
         deinit { detach() }
+
+        /// Build the caption container inside the player's contentOverlayView once
+        /// (idempotent). contentOverlayView is non-nil once the VC's view is loaded,
+        /// which is guaranteed by the time updateUIViewController runs.
+        func ensureCaptionView(in vc: AVPlayerViewController) {
+            guard captionContainer == nil, let overlay = vc.contentOverlayView else { return }
+            let container = UIView()
+            container.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            container.layer.cornerRadius = 8
+            container.clipsToBounds = true
+            container.isUserInteractionEnabled = false   // never block player taps
+            container.isHidden = true
+            container.translatesAutoresizingMaskIntoConstraints = false
+
+            let label = UILabel()
+            label.numberOfLines = 0
+            label.textAlignment = .center
+            label.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(label)
+            overlay.addSubview(container)
+
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+                label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+                label.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+                label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
+                container.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+                container.bottomAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.bottomAnchor, constant: -28),
+                container.leadingAnchor.constraint(greaterThanOrEqualTo: overlay.leadingAnchor, constant: 16),
+                container.trailingAnchor.constraint(lessThanOrEqualTo: overlay.trailingAnchor, constant: -16),
+            ])
+            captionContainer = container
+            captionLabel = label
+        }
+
+        /// Update the caption text + visibility. Deduped on cue index so the
+        /// 0.25s time ticks don't rebuild the attributed string every frame.
+        func updateCaption(cue: Cue?, show: Bool) {
+            guard let container = captionContainer, let label = captionLabel else { return }
+            let key = (show && cue != nil) ? "\(cue!.index)" : "off"
+            guard key != lastCaptionKey else { return }
+            lastCaptionKey = key
+            if show, let cue = cue {
+                label.attributedText = Self.captionAttributed(cue)
+                container.isHidden = false
+            } else {
+                container.isHidden = true
+            }
+        }
+
+        /// English (AI-highlighted words in brand yellow) + Chinese below — mirrors
+        /// the old SwiftUI captionBar styling, as an NSAttributedString for UIKit.
+        private static func captionAttributed(_ cue: Cue) -> NSAttributedString {
+            let para = NSMutableParagraphStyle()
+            para.alignment = .center
+            let highlight = UIColor(red: 0xFC / 255.0, green: 0xD3 / 255.0, blue: 0x4D / 255.0, alpha: 1)
+            let out = NSMutableAttributedString()
+            for run in splitForHighlights(cue.text, highlights: cue.highlightWords) {
+                out.append(NSAttributedString(string: run.text, attributes: [
+                    .font: UIFont.systemFont(ofSize: 17, weight: run.highlight ? .semibold : .medium),
+                    .foregroundColor: run.highlight ? highlight : UIColor.white,
+                    .paragraphStyle: para,
+                ]))
+            }
+            if !cue.translation.isEmpty {
+                out.append(NSAttributedString(string: "\n", attributes: [.paragraphStyle: para]))
+                out.append(NSAttributedString(string: cue.translation, attributes: [
+                    .font: UIFont.systemFont(ofSize: 14),
+                    .foregroundColor: UIColor.white.withAlphaComponent(0.9),
+                    .paragraphStyle: para,
+                ]))
+            }
+            return out
+        }
     }
 }
