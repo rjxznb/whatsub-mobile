@@ -6,7 +6,10 @@ import AVFoundation
 /// (url, seek, onReady, onTime) so LibraryDetailView can swap between them
 /// without changing the view model.
 struct VideoPlayerView: UIViewControllerRepresentable {
-    let url: URL
+    /// The AVPlayer is OWNED by the parent (LibraryDetailView @State), not created
+    /// here — so it survives the portrait↔landscape view rebuild. Creating it in
+    /// makeUIViewController would make rotation spawn a fresh player (restart at 0).
+    let player: AVPlayer
     var seek: SeekRequest?
     var onReady: () -> Void
     var onTime: (Double) -> Void
@@ -21,7 +24,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
-        let player = AVPlayer(url: url)
         player.automaticallyWaitsToMinimizeStalling = true
         let vc = AVPlayerViewController()
         vc.player = player

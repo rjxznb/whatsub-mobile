@@ -6,6 +6,7 @@ struct MeView: View {
     @State private var quota: LibraryQuota?
     @EnvironmentObject var store: StoreManager
     @State private var showManageSubscriptions = false
+    @State private var showLogoutConfirm = false
 
     private var versionString: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -102,12 +103,18 @@ struct MeView: View {
 
                     Section {
                         Button(role: .destructive) {
-                            appState.logout()
+                            showLogoutConfirm = true
                         } label: {
                             Text("退出登录").frame(maxWidth: .infinity)
                         }
                     }
                     .listRowBackground(Color.whatsubBgElev)
+                    .confirmationDialog("退出登录？", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+                        Button("退出登录", role: .destructive) { appState.logout() }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("退出后需重新用邮箱验证码登录。云端 library、语料库和已购权益不会丢失。")
+                    }
                 }
                 .scrollContentBackground(.hidden)
             }

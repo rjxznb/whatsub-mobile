@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct LibraryDetailView: View {
     let entryId: String
@@ -8,6 +9,11 @@ struct LibraryDetailView: View {
     @State private var playerReady = false
     @State private var playerTimedOut = false
     @State private var showCaptions = true
+    /// Owned here (not inside VideoPlayerView) so the AVPlayer survives the
+    /// portrait↔landscape rebuild — playback continues across rotation instead
+    /// of restarting at 0. (Named avPlayer to avoid clashing with the
+    /// `player(_:fullscreen:)` view builder below.)
+    @State private var avPlayer: AVPlayer?
 
     private var isLandscape: Bool { vSize == .compact }
 
@@ -36,6 +42,12 @@ struct LibraryDetailView: View {
         .task {
             guard let token = appState.session?.sessionToken else { return }
             await vm.load(id: entryId, token: token)
+            // Create the AVPlayer once the OSS videoUrl is known; held in @State
+            // so a portrait↔landscape rebuild reuses it (playback continues)
+            // rather than spawning a new player from 0.
+            if avPlayer == nil, let v = vm.entry?.videoUrl, let url = URL(string: v) {
+                avPlayer = AVPlayer(url: url)
+            }
         }
         .overlay { if vm.showPopup { highlightPopup } }
     }
@@ -44,23 +56,25 @@ struct LibraryDetailView: View {
     /// Sizing (16:9 box vs fullscreen fill) is applied by the caller.
     private func player(_ entry: LibraryEntryDetail, fullscreen: Bool) -> some View {
         ZStack {
-            if let v = entry.videoUrl, let url = URL(string: v) {
+            if let p = avPlayer {
                 VideoPlayerView(
-                    url: url,
+                    player: p,
                     seek: vm.seek,
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )
-            } else if VideoSource.isLikelyYouTubeId(entry.youtubeId) {
+            } else if entry.videoUrl == nil, VideoSource.isLikelyYouTubeId(entry.youtubeId) {
                 YouTubeEmbedView(
                     videoId: entry.youtubeId,
                     seek: vm.seek,
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )
-            } else {
+            } else if entry.videoUrl == nil {
                 desktopOnlyPlaceholder
             }
+            // (videoUrl present but player not yet created → nothing here; the
+            // loading overlay below covers that brief window.)
             if !playerReady && !isDesktopOnly(entry) { playerOverlay(isYouTube: entry.videoUrl == nil) }
             if playerReady {
                 VStack {
