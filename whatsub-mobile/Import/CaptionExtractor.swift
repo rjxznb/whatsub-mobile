@@ -1,5 +1,9 @@
 import Foundation
-import WebKit
+// @preconcurrency: WKScriptMessage.name/.body are main-actor-isolated in the SDK,
+// but the WKScriptMessageHandler callback is nonisolated (called on main by WebKit).
+// This downgrades the resulting strict-concurrency warnings without changing the
+// runtime-correct logic (the handler hops to @MainActor before touching state).
+@preconcurrency import WebKit
 
 /// Errors thrown by CaptionExtractor.
 enum CaptionError: Error, LocalizedError {
