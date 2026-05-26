@@ -1,35 +1,44 @@
 import SwiftUI
 import UIKit
 
-/// 收藏卡 — opened by long-pressing a subtitle cue. The English sentence is
-/// selectable (pick any word/phrase, highlighted or not); 加入 saves the selection
-/// (or the whole sentence if nothing is selected) plus the user's note into this
-/// video's notebook. The AI 释义 of any highlight is shown as reference.
+/// 收藏卡 — opened by long-pressing a subtitle cue. The English sentence is shown
+/// as tappable word chips: tap the word(s) you want (they highlight); the saved
+/// phrase is those words (in sentence order), or the whole sentence if none are
+/// tapped. Plus a free-form 笔记 field. The AI 释义 of any highlight is reference.
+/// Chips reflow via FlowLayout, so the card fits any screen size.
 struct CollectSheet: View {
     let cue: Cue
     let entryId: String
     let videoTitle: String
 
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedPhrase = ""
+    private let tokens: [String]
+    @State private var selected: Set<Int> = []
     @State private var note = ""
 
+    init(cue: Cue, entryId: String, videoTitle: String) {
+        self.cue = cue
+        self.entryId = entryId
+        self.videoTitle = videoTitle
+        // Split on whitespace; hyphenated tokens ("back-to-back") stay one chip.
+        self.tokens = cue.text.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
+    }
+
+    private var hasSelection: Bool { !selected.isEmpty }
+
     private var phraseToSave: String {
-        let trimmed = selectedPhrase.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? cue.text : trimmed
+        if selected.isEmpty { return cue.text }
+        return selected.sorted().map { tokens[$0] }.joined(separator: " ")
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    sentenceCard
+                    wordCard
                     if !cue.highlightWords.isEmpty { glossCard }
                     noteField
-                    Text("将保存：\(phraseToSave)")
-                        .font(.footnote)
-                        .foregroundStyle(.whatsubInkSoft)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    previewRow
                 }
                 .padding(16)
             }
@@ -37,28 +46,35 @@ struct CollectSheet: View {
             .navigationTitle("收藏到词汇本")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("加入") { save() }.fontWeight(.semibold)
+                    Button(hasSelection ? "加入" : "加入整句") { save() }.fontWeight(.semibold)
                 }
             }
         }
     }
 
-    private var sentenceCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("划选要收藏的词 / 短语").font(.caption).foregroundStyle(.whatsubInkMuted)
-                Spacer()
-                if !selectedPhrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button("用整句") { selectedPhrase = "" }
-                        .font(.caption).foregroundStyle(.whatsubAccent)
+    private var wordCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(hasSelection ? "点词增减选择，再点「加入」" : "点句中的词来挑选要收藏的部分（或直接「加入整句」）")
+                .font(.caption).foregroundStyle(.whatsubInkMuted)
+            FlowLayout(spacing: 6, lineSpacing: 8) {
+                ForEach(tokens.indices, id: \.self) { i in
+                    let on = selected.contains(i)
+                    Text(tokens[i])
+                        .font(.system(size: 18, weight: on ? .semibold : .regular))
+                        .foregroundStyle(on ? Color.black : Color.whatsubInk)
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(on ? Color.whatsubHighlight : Color.whatsubBgSoft)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                        .onTapGesture {
+                            if on { selected.remove(i) } else { selected.insert(i) }
+                        }
                 }
             }
-            SelectableTextView(text: cue.text) { sel in selectedPhrase = sel }
-                .frame(minHeight: 44)
             if !cue.translation.isEmpty {
                 Text(cue.translation).font(.system(size: 15)).foregroundStyle(.whatsubInkMuted)
             }
@@ -101,6 +117,18 @@ struct CollectSheet: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgSoft))
                 .foregroundStyle(.whatsubInk)
         }
+    }
+
+    private var previewRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("将保存：").font(.footnote).foregroundStyle(.whatsubInkMuted)
+            Text(phraseToSave).font(.footnote.weight(.medium)).foregroundStyle(.whatsubHighlight)
+            Spacer(minLength: 0)
+            if hasSelection {
+                Button("清空") { selected.removeAll() }.font(.caption).foregroundStyle(.whatsubAccent)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func save() {
