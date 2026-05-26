@@ -9,6 +9,7 @@ struct MeView: View {
     @State private var showManageSubscriptions = false
     @State private var showLogoutConfirm = false
     @State private var showStaging = false
+    @State private var showSubscribe = false
     @ObservedObject private var vocab = VocabStore.shared
 
     private var versionString: String {
@@ -68,10 +69,14 @@ struct MeView: View {
                                 Button("管理订阅") { showManageSubscriptions = true }
                                     .foregroundStyle(.whatsubAccent)
                             } else {
-                                Text("订阅解锁 50 个云端视频 + 1000 个语料库额度。")
-                                    .font(.footnote).foregroundStyle(.whatsubInkMuted)
-                                SubscriptionOptionsView(onPurchased: { Task { await reloadQuota() } })
-                                    .padding(.vertical, 4)
+                                // A single entry button (not inline price buttons) —
+                                // tapping opens the payment card. Less money-grabby.
+                                Button {
+                                    showSubscribe = true
+                                } label: {
+                                    Label("订阅 Pro · 解锁 50 视频 + 1000 语料库", systemImage: "star.circle.fill")
+                                        .foregroundStyle(.whatsubAccent)
+                                }
                             }
                         } else {
                             Text("免费 3 个云端视频。开通网站授权后可订阅解锁 50 个；需要手机端公共语料库也请在官网用同一邮箱开通授权后回到这里登录。")
@@ -80,6 +85,10 @@ struct MeView: View {
                     }
                     .listRowBackground(Color.whatsubBgElev)
                     .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
+                    .sheet(isPresented: $showSubscribe) {
+                        SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
+                            .environmentObject(store)
+                    }
 
                     if appState.currentUser?.hasActiveLicense == false {
                         Section {
