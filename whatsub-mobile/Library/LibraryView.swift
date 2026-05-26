@@ -83,19 +83,23 @@ struct LibraryView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .confirmationDialog(
-                "从云端删除「\(pendingDelete?.title ?? "")」？",
+            // .alert (centered modal) instead of .confirmationDialog — the latter
+            // renders as a popover on iPad that anchored to the List, appearing far
+            // from the swiped row.
+            .alert(
+                "从云端删除？",
                 isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-                titleVisibility: .visible
-            ) {
+                presenting: pendingDelete
+            ) { entry in
                 Button("删除", role: .destructive) {
-                    if let e = pendingDelete, let token = appState.session?.sessionToken {
-                        Task { await vm.delete(e.id, token: token); pendingDelete = nil }
+                    if let token = appState.session?.sessionToken {
+                        Task { await vm.delete(entry.id, token: token) }
                     }
+                    pendingDelete = nil
                 }
                 Button("取消", role: .cancel) { pendingDelete = nil }
-            } message: {
-                Text("将从云端移除该视频（含已上传的视频文件）。桌面端的本地副本保留，可重新同步。")
+            } message: { entry in
+                Text("「\(entry.title)」将从云端移除（含已上传的视频文件）。桌面端本地副本保留，可重新同步。")
             }
             .sheet(item: $migrateSource) { src in
                 MigrateVocabSheet(

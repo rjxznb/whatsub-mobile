@@ -4,8 +4,10 @@ struct CueRow: View {
     let cue: Cue
     let isCurrent: Bool
     let onTapCue: () -> Void
-    /// Long-press the cue opens the 收藏卡 (词汇本) for this sentence.
+    /// Long-press → context menu: 收藏到词汇本 (this) + 查看释义 (below).
     let onCollect: () -> Void
+    /// Long-press → 查看释义 (quick read-only gloss of the cue's highlights).
+    let onShowGloss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -30,7 +32,14 @@ struct CueRow: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { onTapCue() }
-        .onLongPressGesture { onCollect() }
+        // Long-press → choose: quick 释义 peek vs collect into the notebook.
+        // (Tap still seeks; the two intents no longer fight over one gesture.)
+        .contextMenu {
+            if !cue.highlightWords.isEmpty {
+                Button { onShowGloss() } label: { Label("查看释义", systemImage: "text.book.closed") }
+            }
+            Button { onCollect() } label: { Label("收藏到词汇本", systemImage: "bookmark") }
+        }
     }
 
     private var englishLine: some View {
