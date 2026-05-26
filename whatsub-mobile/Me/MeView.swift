@@ -4,6 +4,7 @@ import StoreKit
 struct MeView: View {
     @EnvironmentObject var appState: AppState
     @State private var quota: LibraryQuota?
+    @State private var corpusQ: CorpusQuota?
     @EnvironmentObject var store: StoreManager
     @State private var showManageSubscriptions = false
     @State private var showLogoutConfirm = false
@@ -28,6 +29,7 @@ struct MeView: View {
         await appState.refreshMe()
         if let t = appState.session?.sessionToken {
             quota = try? await WhatsubAPI.shared.libraryQuota(token: t)
+            corpusQ = try? await WhatsubAPI.shared.corpusQuota(token: t)
         }
     }
 
@@ -48,6 +50,10 @@ struct MeView: View {
                             LabeledContent("云端视频", value: "\(q.used)/\(q.limit)")
                                 .foregroundStyle(.whatsubInk)
                         }
+                        if let cq = corpusQ {
+                            LabeledContent("个人语料库", value: "\(cq.used)/\(cq.limit)")
+                                .foregroundStyle(.whatsubInk)
+                        }
                         if appState.currentUser?.hasActiveLicense == true {
                             if appState.currentUser?.iosSubActive == true {
                                 Label("已订阅 · \(subPlanName)", systemImage: "checkmark.seal.fill")
@@ -55,7 +61,7 @@ struct MeView: View {
                                 Button("管理订阅") { showManageSubscriptions = true }
                                     .foregroundStyle(.whatsubAccent)
                             } else {
-                                Text("订阅解锁 50 个云端视频额度。")
+                                Text("订阅解锁 50 个云端视频 + 1000 个语料库额度。")
                                     .font(.footnote).foregroundStyle(.whatsubInkMuted)
                                 SubscriptionOptionsView(onPurchased: { Task { await reloadQuota() } })
                                     .padding(.vertical, 4)
