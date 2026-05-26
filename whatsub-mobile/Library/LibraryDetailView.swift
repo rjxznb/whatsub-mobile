@@ -14,6 +14,12 @@ struct LibraryDetailView: View {
     /// of restarting at 0. (Named avPlayer to avoid clashing with the
     /// `player(_:fullscreen:)` view builder below.)
     @State private var avPlayer: AVPlayer?
+    /// Non-fullscreen player zoom. On iPad the player is a height-constrained 16:9
+    /// box that pillarboxes (black bars) on wide screens; pinch-out scales it up
+    /// to full content width. `playerZoom` is the committed value (survives
+    /// rotation); `pinch` tracks the live magnification during a gesture.
+    @State private var playerZoom: CGFloat = 1.0
+    @GestureState private var pinch: CGFloat = 1.0
 
     private var isLandscape: Bool { vSize == .compact }
 
@@ -161,10 +167,33 @@ struct LibraryDetailView: View {
     }
 
     private func portrait(_ entry: LibraryEntryDetail) -> some View {
-        VStack(spacing: 0) {
-            player(entry, fullscreen: false)
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            subtitleList(entry)
+        GeometryReader { geo in
+            // Height at which a 16:9 player exactly fills the content width.
+            let fullWidthH = geo.size.width * 9.0 / 16.0
+            // Default (zoom == 1): height-constrained, so wide screens (iPad) keep
+            // the prior pillarboxed look; never wider than the content.
+            let defaultH = min(fullWidthH, geo.size.height * 0.42)
+            // Pinch-out ceiling: full content width, but at most 90% of the height.
+            let maxH = min(fullWidthH, geo.size.height * 0.9)
+            let maxZoom = defaultH > 0 ? maxH / defaultH : 1.0
+            // Live height tracks the in-progress pinch; clamped to [default, max].
+            let playerH = min(max(defaultH * playerZoom * pinch, defaultH), maxH)
+            VStack(spacing: 0) {
+                player(entry, fullscreen: false)
+                    .frame(width: playerH * 16.0 / 9.0, height: playerH)
+                    .frame(maxWidth: .infinity)   // center; black bars fill the rest
+                    .contentShape(Rectangle())    // make the whole band pinch-able
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .updating($pinch) { value, state, _ in state = value }
+                            .onEnded { value in
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    playerZoom = min(max(playerZoom * value, 1.0), maxZoom)
+                                }
+                            }
+                    )
+                subtitleList(entry)
+            }
         }
     }
 
