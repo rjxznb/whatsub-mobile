@@ -35,8 +35,15 @@ struct MeView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.whatsubBg.ignoresSafeArea()
+            // Custom large-title header (not .navigationTitle) — the system large
+            // title renders unreliably here with our global nav-bar appearance +
+            // tab bar, same as Library. See LibraryView for the rationale.
+            VStack(alignment: .leading, spacing: 0) {
+                Text("我的")
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(.whatsubInk)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
                 List {
                     Section("账号") {
                         LabeledContent("邮箱", value: appState.session?.email ?? "—")
@@ -142,7 +149,9 @@ struct MeView: View {
                 }
                 .scrollContentBackground(.hidden)
             }
-            .navigationTitle("我的")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color.whatsubBg.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
             .task { await reloadQuota() }
         }
     }
