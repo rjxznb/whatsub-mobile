@@ -13,6 +13,7 @@ final class CorpusViewModel: ObservableObject {
     @Published var selectedTags: Set<String> = []
     @Published var browse: [BrowsePhrase] = []
     @Published var mine: [MineItem] = []
+    @Published var mineTotal: Int = 0
     @Published var loading = false
     @Published var errorMessage: String?
     @Published var licenseLocked = false
@@ -49,9 +50,10 @@ final class CorpusViewModel: ObservableObject {
                     browse = items
                     if !usingTags { cache.storeBrowse(items: items, tags: tags, now: Date()) }
                 } else {
-                    let items = try await WhatsubAPI.shared.mineCorpus(tags: Array(selectedTags), token: token)
-                    mine = items
-                    if !usingTags { cache.storeMine(items: items, tags: tags, now: Date()) }
+                    let resp = try await WhatsubAPI.shared.mineCorpus(tags: Array(selectedTags), token: token)
+                    mine = resp.items
+                    mineTotal = resp.total
+                    if !usingTags { cache.storeMine(items: resp.items, tags: tags, now: Date()) }
                 }
             }
         } catch APIError.server(let code, _) where code == 403 {

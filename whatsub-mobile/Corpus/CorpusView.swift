@@ -93,6 +93,12 @@ struct CorpusView: View {
             if vm.mine.isEmpty {
                 centered(icon: "bookmark", title: "还没有收藏的短语", sub: "用 whatSub 插件在网页/视频里保存短语，\n这里就能看到")
             } else {
+                let limit = (appState.currentUser?.iosSubActive == true) ? 1000 : 50
+                Text("个人语料 \(vm.mineTotal)/\(limit)")
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.bottom, 4)
                 List(vm.mine) { m in
                     NavigationLink(value: m.phraseNormalized) {
                         PhraseRow(raw: m.phraseRaw, meaning: m.meaningZh, sub: m.contextSentence, tags: m.tags)
