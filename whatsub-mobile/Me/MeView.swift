@@ -9,6 +9,7 @@ struct MeView: View {
     @State private var showManageSubscriptions = false
     @State private var showLogoutConfirm = false
     @State private var showStaging = false
+    @State private var showSubscribe = false
     @ObservedObject private var vocab = VocabStore.shared
 
     private var versionString: String {
@@ -35,8 +36,15 @@ struct MeView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.whatsubBg.ignoresSafeArea()
+            // Custom large-title header (not .navigationTitle) — the system large
+            // title renders unreliably here with our global nav-bar appearance +
+            // tab bar, same as Library. See LibraryView for the rationale.
+            VStack(alignment: .leading, spacing: 0) {
+                Text("我的")
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(.whatsubInk)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
                 List {
                     Section("账号") {
                         LabeledContent("邮箱", value: appState.session?.email ?? "—")
@@ -54,35 +62,33 @@ struct MeView: View {
                             LabeledContent("个人语料库", value: "\(cq.used)/\(cq.limit)")
                                 .foregroundStyle(.whatsubInk)
                         }
-                        if appState.currentUser?.hasActiveLicense == true {
-                            if appState.currentUser?.iosSubActive == true {
-                                Label("已订阅 · \(subPlanName)", systemImage: "checkmark.seal.fill")
-                                    .foregroundStyle(.whatsubAccent)
-                                Button("管理订阅") { showManageSubscriptions = true }
-                                    .foregroundStyle(.whatsubAccent)
-                            } else {
-                                Text("订阅解锁 50 个云端视频 + 1000 个语料库额度。")
-                                    .font(.footnote).foregroundStyle(.whatsubInkMuted)
-                                SubscriptionOptionsView(onPurchased: { Task { await reloadQuota() } })
-                                    .padding(.vertical, 4)
-                            }
+                        // iOS unlocks via IAP only — no website-purchase steering
+                        // (App Store 3.1.1). Subscription is offered to anyone not
+                        // already iOS-subscribed; the backend grants 50 to any active
+                        // subscription (hasActiveSubscription).
+                        if appState.currentUser?.iosSubActive == true {
+                            Label("已订阅 · \(subPlanName)", systemImage: "checkmark.seal.fill")
+                                .foregroundStyle(.whatsubAccent)
+                            Button("管理订阅") { showManageSubscriptions = true }
+                                .foregroundStyle(.whatsubAccent)
                         } else {
-                            Text("免费 3 个云端视频。开通网站授权后可订阅解锁 50 个；需要手机端公共语料库也请在官网用同一邮箱开通授权后回到这里登录。")
+                            Text("订阅 Pro 解锁 50 个云端视频 + 1000 个语料库额度；不订阅可免费同步 3 个。")
                                 .font(.footnote).foregroundStyle(.whatsubInkMuted)
+                            // A single entry button (not inline price buttons) — tapping
+                            // opens the payment card. Less money-grabby.
+                            Button {
+                                showSubscribe = true
+                            } label: {
+                                Label("订阅 Pro · 解锁 50 视频 + 1000 语料库", systemImage: "star.circle.fill")
+                                    .foregroundStyle(.whatsubAccent)
+                            }
                         }
                     }
                     .listRowBackground(Color.whatsubBgElev)
                     .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
-
-                    if appState.currentUser?.hasActiveLicense == false {
-                        Section {
-                            // Plain text, no tappable purchase link (App Store anti-steering).
-                            Label("购买授权请前往官网", systemImage: "cart")
-                                .foregroundStyle(.whatsubInkMuted)
-                        } footer: {
-                            Text("在官网用同一邮箱开通授权后，回到这里登录即可解锁公共语料库 + 云端 library。")
-                        }
-                        .listRowBackground(Color.whatsubBgElev)
+                    .sheet(isPresented: $showSubscribe) {
+                        SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
+                            .environmentObject(store)
                     }
 
                     Section("关于") {
@@ -142,7 +148,9 @@ struct MeView: View {
                 }
                 .scrollContentBackground(.hidden)
             }
-            .navigationTitle("我的")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color.whatsubBg.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
             .task { await reloadQuota() }
         }
     }

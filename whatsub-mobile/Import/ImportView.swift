@@ -168,8 +168,8 @@ struct ImportView: View {
                                 cue: cue,
                                 isCurrent: false,
                                 onTapCue: {},
-                                onCollect: {},      // import preview: no notebook yet
-                                onShowGloss: {}     // (release build shows gloss inline already)
+                                onTapHighlight: { _, _, _ in },  // import preview: no gloss sheet
+                                onCollect: {}                    // import preview: no notebook yet
                             )
                         }
                     }
