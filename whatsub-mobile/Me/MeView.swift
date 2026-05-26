@@ -123,22 +123,43 @@ struct MeView: View {
         }
     }
 
+    // Reflects the actual unlock SOURCE (not just the website license): website
+    // license / iOS 买断 / iOS 订阅 / 试用 / 未解锁. Priority mirrors
+    // MeResponse.appUnlocked. (Subscription detail also shows in 云端同步.)
     @ViewBuilder
     private var licenseRow: some View {
         HStack {
             Text("授权状态").foregroundStyle(.whatsubInk)
             Spacer()
-            switch appState.currentUser?.hasActiveLicense {
-            case .some(true):
-                Label("有效", systemImage: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
-                    .labelStyle(.titleAndIcon)
-            case .some(false):
-                Label("未购买", systemImage: "xmark.seal")
-                    .foregroundStyle(.whatsubInkMuted)
-            case .none:
+            if let user = appState.currentUser {
+                if user.hasActiveLicense {
+                    statusLabel("网站授权 · 有效", "checkmark.seal.fill", .green)
+                } else if user.iosBuyout == true {
+                    statusLabel("已买断", "checkmark.seal.fill", .whatsubAccent)
+                } else if user.iosSubActive == true {
+                    statusLabel("已订阅 Pro", "checkmark.seal.fill", .whatsubAccent)
+                } else if isTrialActive(user) {
+                    statusLabel("试用中", "clock.fill", .whatsubAccent)
+                } else {
+                    statusLabel("未解锁", "xmark.seal", .whatsubInkMuted)
+                }
+            } else {
                 Text("查询中…").foregroundStyle(.whatsubInkFaint)
             }
         }
+    }
+
+    private func statusLabel(_ text: String, _ icon: String, _ color: Color) -> some View {
+        Label(text, systemImage: icon)
+            .foregroundStyle(color)
+            .labelStyle(.titleAndIcon)
+    }
+
+    /// Within the free trial — or trial timing unknown (nil → fail-open, matching
+    /// MeResponse.appUnlocked), so the row never says 未解锁 for someone who is
+    /// actually in the app.
+    private func isTrialActive(_ user: MeResponse) -> Bool {
+        guard let exp = user.trialExpiresAt else { return true }
+        return Int64(Date().timeIntervalSince1970 * 1000) < exp
     }
 }

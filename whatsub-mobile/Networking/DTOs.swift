@@ -201,6 +201,14 @@ struct LibraryQuota: Decodable {
     let limit: Int
 }
 
+/// Personal-corpus quota. `limit` is server-authoritative (hasActiveSubscription
+/// ? 1000 : 50), so it reflects cross-platform (Alipay/web) subscriptions that an
+/// iOS-only `iosSubActive` check would miss.
+struct CorpusQuota: Decodable {
+    let used: Int
+    let limit: Int
+}
+
 struct LibraryEntryDetail: Decodable {
     let id: String
     let youtubeId: String
