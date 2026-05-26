@@ -4,8 +4,8 @@ import UIKit
 /// 收藏卡 — opened by long-pressing a subtitle cue. The English sentence is shown
 /// as tappable word chips: tap the word(s) you want (they highlight); the saved
 /// phrase is those words (in sentence order), or the whole sentence if none are
-/// tapped. Plus a free-form 笔记 field. The AI 释义 of any highlight is reference.
-/// Chips reflow via FlowLayout, so the card fits any screen size.
+/// tapped. A free-form 笔记 (TextEditor — robust Chinese IME) + an 「AI 查询」 button
+/// that calls the user's configured LLM to translate + explain into the note.
 struct CollectSheet: View {
     let cue: Cue
     let entryId: String
@@ -15,12 +15,13 @@ struct CollectSheet: View {
     private let tokens: [String]
     @State private var selected: Set<Int> = []
     @State private var note = ""
+    @State private var aiLoading = false
+    @State private var aiError: String?
 
     init(cue: Cue, entryId: String, videoTitle: String) {
         self.cue = cue
         self.entryId = entryId
         self.videoTitle = videoTitle
-        // Split on whitespace; hyphenated tokens ("back-to-back") stay one chip.
         self.tokens = cue.text.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
     }
 
@@ -109,13 +110,33 @@ struct CollectSheet: View {
 
     private var noteField: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("笔记").font(.caption).foregroundStyle(.whatsubInkMuted)
-            TextField("写点笔记（可留空）", text: $note, axis: .vertical)
-                .lineLimit(3...8)
-                .textFieldStyle(.plain)
-                .padding(10)
+            HStack {
+                Text("笔记").font(.caption).foregroundStyle(.whatsubInkMuted)
+                Spacer()
+                Button {
+                    Task { await runAI() }
+                } label: {
+                    HStack(spacing: 4) {
+                        if aiLoading { ProgressView().scaleEffect(0.7) }
+                        else { Image(systemName: "sparkles") }
+                        Text(aiLoading ? "AI 查询中…" : "AI 翻译 + 解释")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.whatsubAccent)
+                }
+                .disabled(aiLoading)
+            }
+            // TextEditor (not TextField axis:.vertical) — the latter has flaky CJK/
+            // 中文 IME composition; TextEditor handles multiline + Chinese reliably.
+            TextEditor(text: $note)
+                .frame(minHeight: 96)
+                .scrollContentBackground(.hidden)
+                .padding(8)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgSoft))
                 .foregroundStyle(.whatsubInk)
+            if let e = aiError {
+                Text(e).font(.caption2).foregroundStyle(.red)
+            }
         }
     }
 
@@ -129,6 +150,31 @@ struct CollectSheet: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Calls the user's configured LLM (我的 → LLM 设置) to translate + explain the
+    /// phrase-to-save in its sentence context, and writes the result into the note.
+    @MainActor
+    private func runAI() async {
+        let settings = LlmSettingsStore.load()
+        guard settings.isConfigured else {
+            aiError = "请先在「我的 → LLM 设置」填入 API Key"
+            return
+        }
+        aiLoading = true
+        aiError = nil
+        let client = OpenAICompatibleClient(settings: settings)
+        let sys = ChatMessage(role: "system", content:
+            "你是英语学习助手。针对用户给出的英文短语（结合所在句子语境），用简洁中文输出：" +
+            "① 中文翻译 ② 一句用法/语义解释。只输出中文，控制在 2-4 行，不要寒暄，不要重复英文原文。")
+        let usr = ChatMessage(role: "user", content: "句子语境：\(cue.text)\n要查询的短语：\(phraseToSave)")
+        do {
+            let out = try await client.chat([sys, usr]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !out.isEmpty { note = out }
+        } catch {
+            aiError = (error as? LocalizedError)?.errorDescription ?? "AI 查询失败"
+        }
+        aiLoading = false
     }
 
     private func save() {

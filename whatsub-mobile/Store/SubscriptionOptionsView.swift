@@ -14,8 +14,8 @@ struct SubscriptionOptionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let m = store.subMonth { planButton(m, label: "包月", note: "每月") }
-            if let y = store.subYear { planButton(y, label: "包年", note: "每年 · 更划算") }
+            if let m = store.subMonth { planButton(m, label: "包月") }
+            if let y = store.subYear { planButton(y, label: "包年") }
 
             if let err = store.lastError {
                 Text(err).font(.footnote).foregroundStyle(.red)
@@ -41,21 +41,14 @@ struct SubscriptionOptionsView: View {
         .onAppear { store.start() }
     }
 
-    private func planButton(_ product: Product, label: String, note: String) -> some View {
+    private func planButton(_ product: Product, label: String) -> some View {
         Button {
             Task { if await store.purchaseSubscription(product) { onPurchased?() } }
         } label: {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(label) · \(product.displayPrice)").fontWeight(.semibold)
-                    Text(note).font(.caption).foregroundStyle(.black.opacity(0.7))
-                }
+                Text("\(label) · \(product.displayPrice)").fontWeight(.semibold)
                 Spacer()
-                if store.purchaseInProgress {
-                    ProgressView().tint(.black)
-                } else {
-                    Text("升级到 50").fontWeight(.semibold)
-                }
+                if store.purchaseInProgress { ProgressView().tint(.black) }
             }
             .padding(.vertical, 12).padding(.horizontal, 14)
             .frame(maxWidth: .infinity)
