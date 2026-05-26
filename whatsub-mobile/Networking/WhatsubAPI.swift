@@ -169,14 +169,14 @@ actor WhatsubAPI {
         return try decode(BrowseResponse.self, from: data).phrases
     }
 
-    func mineCorpus(tags: [String], token: String) async throws -> [MineItem] {
+    func mineCorpus(tags: [String], token: String) async throws -> MineResponse {
         var path = "mine?pageSize=100"
         if !tags.isEmpty {
             let joined = tags.joined(separator: ",")
             path += "&tags=\(joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? joined)"
         }
         let data = try await get(Endpoints.corpus(path), bearer: token)
-        return try decode(MineResponse.self, from: data).items
+        return try decode(MineResponse.self, from: data)
     }
 
     /// Returns nil when the backend reports no_data (404).

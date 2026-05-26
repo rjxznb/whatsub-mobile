@@ -30,7 +30,7 @@ final class QuizViewModel: ObservableObject {
             case .publicCorpus:
                 cards = try await WhatsubAPI.shared.browseCorpus(tags: [], token: token).compactMap(QuizCard.from)
             case .mine:
-                cards = try await WhatsubAPI.shared.mineCorpus(tags: [], token: token).compactMap(QuizCard.from)
+                cards = try await WhatsubAPI.shared.mineCorpus(tags: [], token: token).items.compactMap(QuizCard.from)
             }
             loadPool(cards)
         } catch {

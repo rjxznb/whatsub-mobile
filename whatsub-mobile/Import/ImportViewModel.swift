@@ -79,6 +79,11 @@ final class ImportViewModel: ObservableObject {
             return
         }
         rawCues = cues
+        // Replace the videoId placeholder title with the real YouTube title
+        // (best-effort; VPN is on during import so youtube.com oEmbed is reachable).
+        if let real = await Self.fetchYouTubeTitle(videoId: resolvedId), !real.isEmpty {
+            title = real
+        }
 
         // Step 2: Guard LLM configured.
         let settings = LlmSettingsStore.load()
@@ -101,6 +106,21 @@ final class ImportViewModel: ObservableObject {
         } catch {
             state = .error(error.localizedDescription)
         }
+    }
+
+    /// Fetch the real video title via YouTube oEmbed (best-effort; nil on any failure).
+    private static func fetchYouTubeTitle(videoId: String) async -> String? {
+        var comps = URLComponents(string: "https://www.youtube.com/oembed")
+        comps?.queryItems = [
+            URLQueryItem(name: "url", value: "https://www.youtube.com/watch?v=\(videoId)"),
+            URLQueryItem(name: "format", value: "json"),
+        ]
+        guard let url = comps?.url,
+              let (data, resp) = try? await URLSession.shared.data(from: url),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let title = json["title"] as? String else { return nil }
+        return title.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Step 1b: Push caption-less URL to desktop import queue
