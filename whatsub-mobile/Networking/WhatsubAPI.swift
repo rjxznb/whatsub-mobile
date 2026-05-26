@@ -179,6 +179,11 @@ actor WhatsubAPI {
         return try decode(MineResponse.self, from: data)
     }
 
+    func corpusQuota(token: String) async throws -> CorpusQuota {
+        let data = try await get(Endpoints.corpus("quota"), bearer: token)
+        return try decode(CorpusQuota.self, from: data)
+    }
+
     /// Returns nil when the backend reports no_data (404).
     func lookupPhrase(_ phrase: String, token: String) async throws -> LookupResponse? {
         let enc = phrase.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? phrase

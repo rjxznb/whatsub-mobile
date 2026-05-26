@@ -14,6 +14,9 @@ final class CorpusViewModel: ObservableObject {
     @Published var browse: [BrowsePhrase] = []
     @Published var mine: [MineItem] = []
     @Published var mineTotal: Int = 0
+    /// Server-authoritative personal-corpus quota (used/limit). nil until fetched
+    /// or on failure → CorpusView falls back to the local count + iosSubActive guess.
+    @Published var corpusQuota: CorpusQuota?
     @Published var loading = false
     @Published var errorMessage: String?
     @Published var licenseLocked = false
@@ -38,6 +41,11 @@ final class CorpusViewModel: ObservableObject {
             // 2. Refresh versions (small request).
             if let v = try? await WhatsubAPI.shared.corpusVersions(token: token) {
                 cache.updateVersions(mine: v.mine, publicVersion: v.publicVersion)
+            }
+            // Personal-corpus quota (only shown in 我的). Best-effort + server-authoritative
+            // so it reflects cross-platform (Alipay) subscriptions, not just iosSubActive.
+            if scope == .mine {
+                corpusQuota = try? await WhatsubAPI.shared.corpusQuota(token: token)
             }
             // 3. Refetch only if stale.
             let stale = usingTags
