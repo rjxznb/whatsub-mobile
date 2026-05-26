@@ -20,6 +20,10 @@ struct LibraryDetailView: View {
     /// rotation); `pinch` tracks the live magnification during a gesture.
     @State private var playerZoom: CGFloat = 1.0
     @GestureState private var pinch: CGFloat = 1.0
+    /// Long-pressed cue → presents the 收藏卡; the per-video 词汇本 sheet toggle.
+    @State private var collectCue: Cue?
+    @State private var showNotebook = false
+    @ObservedObject private var vocab = VocabStore.shared
 
     private var isLandscape: Bool { vSize == .compact }
 
@@ -55,7 +59,34 @@ struct LibraryDetailView: View {
                 avPlayer = AVPlayer(url: url)
             }
         }
-        .overlay { if vm.showPopup { highlightPopup } }
+        // 词汇本 entry (portrait only — landscape hides the nav bar). Long-press a
+        // cue collects; this button opens the per-video notebook.
+        .toolbar {
+            if !isLandscape {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showNotebook = true } label: {
+                        let n = vocab.count(for: entryId)
+                        HStack(spacing: 3) {
+                            Image(systemName: n > 0 ? "book.closed.fill" : "book.closed")
+                            if n > 0 { Text("\(n)").font(.caption2.weight(.bold)) }
+                        }
+                        .foregroundStyle(.whatsubAccent)
+                    }
+                }
+            }
+        }
+        .sheet(item: $collectCue) { cue in
+            CollectSheet(cue: cue, entryId: entryId, videoTitle: vm.entry?.title ?? "")
+        }
+        .sheet(isPresented: $showNotebook) {
+            VocabNotebookView(entryId: entryId, title: vm.entry?.title ?? "词汇本") { idx in
+                if let entry = vm.entry,
+                   let c = entry.analysisJson.subtitles.first(where: { $0.index == idx }) {
+                    vm.seekTo(c)
+                }
+                showNotebook = false
+            }
+        }
     }
 
     /// The video surface + loading state + the caption / CC-toggle overlays.
@@ -214,7 +245,7 @@ struct LibraryDetailView: View {
                             cue: cue,
                             isCurrent: cue.index == vm.currentIndex,
                             onTapCue: { vm.seekTo(cue) },
-                            onTapHighlight: { w, n, t in vm.showHighlight(word: w, note: n, translation: t) }
+                            onCollect: { collectCue = cue }
                         )
                         .id(cue.index)
                     }
@@ -231,24 +262,4 @@ struct LibraryDetailView: View {
         }
     }
 
-    private var highlightPopup: some View {
-        ZStack {
-            Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { vm.showPopup = false }
-            VStack(alignment: .leading, spacing: 10) {
-                Text(vm.popupWord ?? "").font(.title3.weight(.semibold)).foregroundStyle(.whatsubHighlight)
-                if let t = vm.popupTranslation, !t.isEmpty {
-                    Text(t).font(.body).foregroundStyle(.whatsubInk)
-                }
-                if let n = vm.popupNote, !n.isEmpty {
-                    Text(n).font(.callout).foregroundStyle(.whatsubInkSoft)
-                }
-                Button("关闭") { vm.showPopup = false }
-                    .font(.footnote).foregroundStyle(.whatsubAccent).padding(.top, 4)
-            }
-            .padding(20)
-            .frame(maxWidth: 320, alignment: .leading)
-            .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 16))
-            .padding(40)
-        }
-    }
 }

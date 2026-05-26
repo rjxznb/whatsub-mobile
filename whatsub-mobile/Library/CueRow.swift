@@ -4,7 +4,8 @@ struct CueRow: View {
     let cue: Cue
     let isCurrent: Bool
     let onTapCue: () -> Void
-    let onTapHighlight: (_ word: String, _ note: String?, _ translation: String?) -> Void
+    /// Long-press the cue opens the 收藏卡 (词汇本) for this sentence.
+    let onCollect: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -29,6 +30,7 @@ struct CueRow: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { onTapCue() }
+        .onLongPressGesture { onCollect() }
     }
 
     private var englishLine: some View {
@@ -48,10 +50,5 @@ struct CueRow: View {
             }
         }
         .font(.system(size: 22))
-        .onLongPressGesture {
-            if let first = cue.highlightWords.first {
-                onTapHighlight(first, cue.keyNotes[first], cue.highlightTranslations[first])
-            }
-        }
     }
 }

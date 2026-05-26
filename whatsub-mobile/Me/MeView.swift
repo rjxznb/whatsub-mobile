@@ -7,6 +7,8 @@ struct MeView: View {
     @EnvironmentObject var store: StoreManager
     @State private var showManageSubscriptions = false
     @State private var showLogoutConfirm = false
+    @State private var showStaging = false
+    @ObservedObject private var vocab = VocabStore.shared
 
     private var versionString: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -98,8 +100,24 @@ struct MeView: View {
                             Label("导入队列", systemImage: "tray.and.arrow.down")
                                 .foregroundStyle(.whatsubInk)
                         }
+                        Button {
+                            showStaging = true
+                        } label: {
+                            HStack {
+                                Label("词汇暂存区", systemImage: "tray.full")
+                                    .foregroundStyle(.whatsubInk)
+                                Spacer()
+                                let n = vocab.count(for: VocabStore.stagingKey)
+                                if n > 0 { Text("\(n)").foregroundStyle(.whatsubInkMuted) }
+                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.whatsubInkFaint)
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
                     .listRowBackground(Color.whatsubBgElev)
+                    .sheet(isPresented: $showStaging) {
+                        VocabNotebookView(entryId: VocabStore.stagingKey, title: "暂存区", onJump: nil)
+                    }
 
                     Section {
                         Button(role: .destructive) {
