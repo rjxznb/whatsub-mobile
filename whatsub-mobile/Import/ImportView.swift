@@ -168,7 +168,7 @@ struct ImportView: View {
                                 cue: cue,
                                 isCurrent: false,
                                 onTapCue: {},
-                                onTapHighlight: { _, _, _ in }
+                                onCollect: {}   // import preview: no notebook yet
                             )
                         }
                     }

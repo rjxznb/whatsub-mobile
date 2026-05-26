@@ -38,6 +38,12 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         vc.player = player
         vc.videoGravity = .resizeAspect
         vc.showsPlaybackControls = true
+        // Picture-in-Picture: shows the PiP button in the controls (when the
+        // device supports it + the app declares the `audio` background mode in
+        // Info.plist), and auto-pops into a floating window when the app goes to
+        // the background mid-playback. Audio session is already `.playback` above.
+        vc.allowsPictureInPicturePlayback = true
+        vc.canStartPictureInPictureAutomaticallyFromInline = true
         context.coordinator.attach(player: player)
         // Force the view tree to load so contentOverlayView is non-nil, then
         // attach the caption eagerly (updateUIViewController also ensures it).

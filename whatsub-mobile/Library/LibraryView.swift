@@ -4,6 +4,9 @@ struct LibraryView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryViewModel()
     @State private var pendingDelete: LibraryListItem?
+    /// Set when deleting a video that has saved vocab → the migrate-or-delete sheet.
+    @State private var migrateSource: LibraryListItem?
+    @ObservedObject private var vocab = VocabStore.shared
 
     var body: some View {
         NavigationStack {
@@ -70,7 +73,11 @@ struct LibraryView: View {
                 }
                 .listRowBackground(Color.whatsubBgElev)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) { pendingDelete = entry } label: {
+                    Button(role: .destructive) {
+                        // Video with saved vocab → offer to migrate first (not silently lose it).
+                        if vocab.count(for: entry.id) > 0 { migrateSource = entry }
+                        else { pendingDelete = entry }
+                    } label: {
                         Label("删除", systemImage: "trash")
                     }
                 }
@@ -90,7 +97,25 @@ struct LibraryView: View {
             } message: {
                 Text("将从云端移除该视频（含已上传的视频文件）。桌面端的本地副本保留，可重新同步。")
             }
+            .sheet(item: $migrateSource) { src in
+                MigrateVocabSheet(
+                    videoTitle: src.title,
+                    count: vocab.count(for: src.id),
+                    candidates: vm.entries.filter { $0.id != src.id },
+                    onChoose: { target in finishDelete(src, migrateTo: target) }
+                )
+            }
         }
+    }
+
+    /// Migrate the video's vocab (to `target`, or drop it when nil) then delete the
+    /// video from the cloud. Vocab is moved first so it's preserved even if the
+    /// network delete fails.
+    private func finishDelete(_ entry: LibraryListItem, migrateTo target: String?) {
+        if let target { vocab.migrate(from: entry.id, to: target) }
+        else { vocab.deleteBook(entry.id) }
+        guard let token = appState.session?.sessionToken else { return }
+        Task { await vm.delete(entry.id, token: token) }
     }
 }
 

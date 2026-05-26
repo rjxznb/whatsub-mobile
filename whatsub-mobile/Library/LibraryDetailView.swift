@@ -14,6 +14,16 @@ struct LibraryDetailView: View {
     /// of restarting at 0. (Named avPlayer to avoid clashing with the
     /// `player(_:fullscreen:)` view builder below.)
     @State private var avPlayer: AVPlayer?
+    /// Non-fullscreen player zoom. On iPad the player is a height-constrained 16:9
+    /// box that pillarboxes (black bars) on wide screens; pinch-out scales it up
+    /// to full content width. `playerZoom` is the committed value (survives
+    /// rotation); `pinch` tracks the live magnification during a gesture.
+    @State private var playerZoom: CGFloat = 1.0
+    @GestureState private var pinch: CGFloat = 1.0
+    /// Long-pressed cue → presents the 收藏卡; the per-video 词汇本 sheet toggle.
+    @State private var collectCue: Cue?
+    @State private var showNotebook = false
+    @ObservedObject private var vocab = VocabStore.shared
 
     private var isLandscape: Bool { vSize == .compact }
 
@@ -49,7 +59,34 @@ struct LibraryDetailView: View {
                 avPlayer = AVPlayer(url: url)
             }
         }
-        .overlay { if vm.showPopup { highlightPopup } }
+        // 词汇本 entry (portrait only — landscape hides the nav bar). Long-press a
+        // cue collects; this button opens the per-video notebook.
+        .toolbar {
+            if !isLandscape {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showNotebook = true } label: {
+                        let n = vocab.count(for: entryId)
+                        HStack(spacing: 3) {
+                            Image(systemName: n > 0 ? "book.closed.fill" : "book.closed")
+                            if n > 0 { Text("\(n)").font(.caption2.weight(.bold)) }
+                        }
+                        .foregroundStyle(.whatsubAccent)
+                    }
+                }
+            }
+        }
+        .sheet(item: $collectCue) { cue in
+            CollectSheet(cue: cue, entryId: entryId, videoTitle: vm.entry?.title ?? "")
+        }
+        .sheet(isPresented: $showNotebook) {
+            VocabNotebookView(entryId: entryId, title: vm.entry?.title ?? "词汇本") { idx in
+                if let entry = vm.entry,
+                   let c = entry.analysisJson.subtitles.first(where: { $0.index == idx }) {
+                    vm.seekTo(c)
+                }
+                showNotebook = false
+            }
+        }
     }
 
     /// The video surface + loading state + the caption / CC-toggle overlays.
@@ -161,10 +198,33 @@ struct LibraryDetailView: View {
     }
 
     private func portrait(_ entry: LibraryEntryDetail) -> some View {
-        VStack(spacing: 0) {
-            player(entry, fullscreen: false)
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            subtitleList(entry)
+        GeometryReader { geo in
+            // Height at which a 16:9 player exactly fills the content width.
+            let fullWidthH = geo.size.width * 9.0 / 16.0
+            // Default (zoom == 1): height-constrained, so wide screens (iPad) keep
+            // the prior pillarboxed look; never wider than the content.
+            let defaultH = min(fullWidthH, geo.size.height * 0.42)
+            // Pinch-out ceiling: full content width, but at most 90% of the height.
+            let maxH = min(fullWidthH, geo.size.height * 0.9)
+            let maxZoom = defaultH > 0 ? maxH / defaultH : 1.0
+            // Live height tracks the in-progress pinch; clamped to [default, max].
+            let playerH = min(max(defaultH * playerZoom * pinch, defaultH), maxH)
+            VStack(spacing: 0) {
+                player(entry, fullscreen: false)
+                    .frame(width: playerH * 16.0 / 9.0, height: playerH)
+                    .frame(maxWidth: .infinity)   // center; black bars fill the rest
+                    .contentShape(Rectangle())    // make the whole band pinch-able
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .updating($pinch) { value, state, _ in state = value }
+                            .onEnded { value in
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    playerZoom = min(max(playerZoom * value, 1.0), maxZoom)
+                                }
+                            }
+                    )
+                subtitleList(entry)
+            }
         }
     }
 
@@ -185,7 +245,7 @@ struct LibraryDetailView: View {
                             cue: cue,
                             isCurrent: cue.index == vm.currentIndex,
                             onTapCue: { vm.seekTo(cue) },
-                            onTapHighlight: { w, n, t in vm.showHighlight(word: w, note: n, translation: t) }
+                            onCollect: { collectCue = cue }
                         )
                         .id(cue.index)
                     }
@@ -202,24 +262,4 @@ struct LibraryDetailView: View {
         }
     }
 
-    private var highlightPopup: some View {
-        ZStack {
-            Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { vm.showPopup = false }
-            VStack(alignment: .leading, spacing: 10) {
-                Text(vm.popupWord ?? "").font(.title3.weight(.semibold)).foregroundStyle(.whatsubHighlight)
-                if let t = vm.popupTranslation, !t.isEmpty {
-                    Text(t).font(.body).foregroundStyle(.whatsubInk)
-                }
-                if let n = vm.popupNote, !n.isEmpty {
-                    Text(n).font(.callout).foregroundStyle(.whatsubInkSoft)
-                }
-                Button("关闭") { vm.showPopup = false }
-                    .font(.footnote).foregroundStyle(.whatsubAccent).padding(.top, 4)
-            }
-            .padding(20)
-            .frame(maxWidth: 320, alignment: .leading)
-            .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 16))
-            .padding(40)
-        }
-    }
 }
