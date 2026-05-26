@@ -22,6 +22,8 @@ struct LibraryDetailView: View {
     @GestureState private var pinch: CGFloat = 1.0
     /// Long-pressed cue → presents the 收藏卡; the per-video 词汇本 sheet toggle.
     @State private var collectCue: Cue?
+    /// Long-press → 查看释义: quick gloss peek for the cue's highlights.
+    @State private var glossCue: Cue?
     @State private var showNotebook = false
     @ObservedObject private var vocab = VocabStore.shared
 
@@ -77,6 +79,9 @@ struct LibraryDetailView: View {
         }
         .sheet(item: $collectCue) { cue in
             CollectSheet(cue: cue, entryId: entryId, videoTitle: vm.entry?.title ?? "")
+        }
+        .sheet(item: $glossCue) { cue in
+            GlossSheet(cue: cue)
         }
         .sheet(isPresented: $showNotebook) {
             VocabNotebookView(entryId: entryId, title: vm.entry?.title ?? "词汇本") { idx in
@@ -245,7 +250,8 @@ struct LibraryDetailView: View {
                             cue: cue,
                             isCurrent: cue.index == vm.currentIndex,
                             onTapCue: { vm.seekTo(cue) },
-                            onCollect: { collectCue = cue }
+                            onCollect: { collectCue = cue },
+                            onShowGloss: { glossCue = cue }
                         )
                         .id(cue.index)
                     }
