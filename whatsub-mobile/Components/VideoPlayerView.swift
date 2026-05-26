@@ -21,8 +21,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     var currentCue: Cue?
     /// CC toggle — when false the caption is hidden.
     var showCaptions: Bool
-    /// Toggle captions from the native transport bar (works in fullscreen).
-    var onToggleCaptions: () -> Void
     var onReady: () -> Void
     var onTime: (Double) -> Void
 
@@ -52,8 +50,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         // Caption first (always), then the seek (which can early-return).
         context.coordinator.ensureCaptionView(in: vc)
         context.coordinator.updateCaption(cue: currentCue, show: showCaptions)
-        context.coordinator.updateTransportBar(on: vc, show: showCaptions, toggle: onToggleCaptions)
-
         guard let seek, seek != context.coordinator.lastSeek else { return }
         context.coordinator.lastSeek = seek
         let t = CMTime(seconds: seek.seconds, preferredTimescale: 600)
@@ -78,7 +74,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         private var captionContainer: UIView?
         private var captionLabel: UILabel?
         private var lastCaptionKey: String?
-        private var lastShowForMenu: Bool?
 
         init(onReady: @escaping () -> Void, onTime: @escaping (Double) -> Void) {
             self.onReady = onReady; self.onTime = onTime
@@ -146,16 +141,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             } else {
                 container.isHidden = true
             }
-        }
-
-        /// Put a CC toggle in the native transport bar (shows inline + in native
-        /// fullscreen). Rebuilt only when showCaptions flips (avoids per-cue churn).
-        func updateTransportBar(on vc: AVPlayerViewController, show: Bool, toggle: @escaping () -> Void) {
-            guard lastShowForMenu != show else { return }
-            lastShowForMenu = show
-            let img = UIImage(systemName: show ? "captions.bubble.fill" : "captions.bubble")
-            let action = UIAction(title: "字幕", image: img) { _ in toggle() }
-            vc.transportBarCustomMenuItems = [action]
         }
 
         /// English (AI-highlighted words in brand yellow) + Chinese below — mirrors

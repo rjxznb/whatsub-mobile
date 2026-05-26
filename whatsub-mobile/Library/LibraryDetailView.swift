@@ -62,7 +62,6 @@ struct LibraryDetailView: View {
                     seek: vm.seek,
                     currentCue: vm.currentCue,
                     showCaptions: showCaptions,
-                    onToggleCaptions: { showCaptions.toggle() },
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )
@@ -79,11 +78,30 @@ struct LibraryDetailView: View {
             // (videoUrl present but player not yet created → nothing here; the
             // loading overlay below covers that brief window.)
             if !playerReady && !isDesktopOnly(entry) { playerOverlay(isYouTube: entry.videoUrl == nil) }
+            // Inline CC toggle (top-right). In native fullscreen this SwiftUI
+            // overlay isn't shown, so captions there follow the current on/off.
+            if playerReady {
+                VStack {
+                    HStack { Spacer(); captionToggle }
+                    Spacer()
+                }
+                .padding(fullscreen ? 16 : 8)
+            }
         }
         .background(Color.black)
         .task {
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             if !playerReady { playerTimedOut = true }
+        }
+    }
+
+    private var captionToggle: some View {
+        Button { showCaptions.toggle() } label: {
+            Image(systemName: showCaptions ? "captions.bubble.fill" : "captions.bubble")
+                .font(.title3)
+                .foregroundColor(.white)
+                .padding(8)
+                .background(.black.opacity(0.45), in: Circle())
         }
     }
 
