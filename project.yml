@@ -72,6 +72,11 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
+        # Picture-in-Picture (native AVPlayer) needs the audio background mode. MUST
+        # live here in properties — XcodeGen regenerates Info.plist from this block,
+        # so a key added only to the Info.plist file is dropped on `xcodegen generate`.
+        UIBackgroundModes:
+          - audio
         UIAppFonts:
           - Caveat-Bold.ttf
         CFBundleURLTypes:
