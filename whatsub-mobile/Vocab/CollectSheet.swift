@@ -32,17 +32,31 @@ struct CollectSheet: View {
         return selected.sorted().map { tokens[$0] }.joined(separator: " ")
     }
 
+    /// Selected words that have an offline ECDict definition (in sentence order).
+    private var dictEntries: [(id: Int, word: String, def: String)] {
+        selected.sorted().compactMap { i in
+            guard tokens.indices.contains(i), let d = ECDict.shared.define(tokens[i]) else { return nil }
+            return (i, tokens[i], d)
+        }
+    }
+
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     wordCard
+                    if !dictEntries.isEmpty { dictCard }
                     if !cue.highlightWords.isEmpty { glossCard }
                     noteField
                     previewRow
                 }
                 .padding(16)
             }
+            .scrollDismissesKeyboard(.immediately)   // scrolling hides the keyboard
             .background(Color.whatsubBg.ignoresSafeArea())
             .navigationTitle("收藏到词汇本")
             .navigationBarTitleDisplayMode(.inline)
@@ -50,6 +64,10 @@ struct CollectSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(hasSelection ? "加入" : "加入整句") { save() }.fontWeight(.semibold)
+                }
+                ToolbarItemGroup(placement: .keyboard) {   // explicit dismiss above the keyboard
+                    Spacer()
+                    Button("完成") { hideKeyboard() }
                 }
             }
         }
@@ -72,12 +90,29 @@ struct CollectSheet: View {
                         )
                         .contentShape(RoundedRectangle(cornerRadius: 8))
                         .onTapGesture {
+                            hideKeyboard()   // tapping a word also dismisses the note keyboard
                             if on { selected.remove(i) } else { selected.insert(i) }
                         }
                 }
             }
             if !cue.translation.isEmpty {
                 Text(cue.translation).font(.system(size: 15)).foregroundStyle(.whatsubInkMuted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.whatsubBgElev))
+    }
+
+    private var dictCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("离线词典").font(.caption).foregroundStyle(.whatsubInkMuted)
+            ForEach(dictEntries, id: \.id) { e in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(e.word).font(.subheadline.weight(.semibold)).foregroundStyle(.whatsubInk)
+                    Text(e.def).font(.caption).foregroundStyle(.whatsubInkSoft)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

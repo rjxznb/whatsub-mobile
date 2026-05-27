@@ -50,6 +50,7 @@ targets:
       - whatsub-mobile/Assets.xcassets
       - whatsub-mobile/PrivacyInfo.xcprivacy
       - whatsub-mobile/Resources/ipa-en-us.json
+      - whatsub-mobile/Resources/ecdict-cn.json
       - whatsub-mobile/Resources/correct.wav
       - whatsub-mobile/Resources/Caveat-Bold.ttf
     info:
