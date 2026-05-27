@@ -32,11 +32,15 @@ struct CollectSheet: View {
         return selected.sorted().map { tokens[$0] }.joined(separator: " ")
     }
 
-    /// Selected words that have an offline ECDict definition (in sentence order).
-    private var dictEntries: [(id: Int, word: String, def: String)] {
+    /// Selected words with an offline IPA and/or CN definition (in sentence order).
+    private var dictEntries: [(id: Int, word: String, ipa: String?, def: String?)] {
         selected.sorted().compactMap { i in
-            guard tokens.indices.contains(i), let d = ECDict.shared.define(tokens[i]) else { return nil }
-            return (i, tokens[i], d)
+            guard tokens.indices.contains(i) else { return nil }
+            let w = tokens[i]
+            let ipa = IPADict.shared.lookup(w)
+            let def = ECDict.shared.define(w)
+            guard ipa != nil || def != nil else { return nil }
+            return (i, w, ipa, def)
         }
     }
 
@@ -109,8 +113,15 @@ struct CollectSheet: View {
             Text("离线词典").font(.caption).foregroundStyle(.whatsubInkMuted)
             ForEach(dictEntries, id: \.id) { e in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(e.word).font(.subheadline.weight(.semibold)).foregroundStyle(.whatsubInk)
-                    Text(e.def).font(.caption).foregroundStyle(.whatsubInkSoft)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(e.word).font(.subheadline.weight(.semibold)).foregroundStyle(.whatsubInk)
+                        if let ipa = e.ipa {
+                            Text("/\(ipa)/").font(.caption).foregroundStyle(.whatsubAccent)
+                        }
+                    }
+                    if let def = e.def {
+                        Text(def).font(.caption).foregroundStyle(.whatsubInkSoft)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

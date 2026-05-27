@@ -85,11 +85,6 @@ struct MeView: View {
                         }
                     }
                     .listRowBackground(Color.whatsubBgElev)
-                    .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
-                    .sheet(isPresented: $showSubscribe) {
-                        SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
-                            .environmentObject(store)
-                    }
 
                     Section("关于") {
                         LabeledContent("版本", value: versionString)
@@ -152,6 +147,15 @@ struct MeView: View {
             .background(Color.whatsubBg.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .task { await reloadQuota() }
+            // Attached to the stable root, NOT the 云端同步 Section: that Section
+            // re-renders when quota/store @Published update on first appear, which
+            // tore down a Section-attached sheet → it opened then immediately
+            // dismissed on the first 订阅 tap (worked after products were cached).
+            .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
+            .sheet(isPresented: $showSubscribe) {
+                SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
+                    .environmentObject(store)
+            }
         }
     }
 
