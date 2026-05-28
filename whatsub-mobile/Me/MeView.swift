@@ -122,9 +122,11 @@ struct MeView: View {
                         .buttonStyle(.plain)
                     }
                     .listRowBackground(Color.whatsubBgElev)
-                    .sheet(isPresented: $showStaging) {
-                        VocabNotebookView(entryId: VocabStore.stagingKey, title: "暂存区", onJump: nil)
-                    }
+                    // showStaging sheet moved to the root — see the showSubscribe
+                    // comment below. Same first-tap-dismiss bug: this Section's
+                    // 词汇暂存区 row reads `vocab.count(for:)`, so on first appear
+                    // the VocabStore @Published update tore down the sheet right
+                    // after it opened.
 
                     Section {
                         Button(role: .destructive) {
@@ -155,6 +157,9 @@ struct MeView: View {
             .sheet(isPresented: $showSubscribe) {
                 SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
                     .environmentObject(store)
+            }
+            .sheet(isPresented: $showStaging) {
+                VocabNotebookView(entryId: VocabStore.stagingKey, title: "暂存区", onJump: nil)
             }
         }
     }
