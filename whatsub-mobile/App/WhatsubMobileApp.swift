@@ -52,22 +52,19 @@ struct ContentView: View {
     @State private var pendingImport: IdentifiedImportURL?
     @State private var gateReady = false
 
-    /// Whether to show the paywall. Fails OPEN when we don't have a definitive
-    /// answer (currentUser nil — offline / pre-deploy) or when StoreKit shows a
-    /// local buyout, so we never wrongly lock out a paying or offline user.
-    private var locked: Bool {
-        guard let user = appState.currentUser else { return false }
-        if store.hasLocalBuyout { return false }
-        return !user.appUnlocked
-    }
+    // 2026-05-28 policy shift: dropped the hard paywall after the 1-day trial.
+    // The app is fully usable post-install — free tier covers basic Library
+    // sync (3 videos / 100MB / 20min) + personal corpus (50 entries). Pro-only
+    // capabilities (公共语料库, expanded quotas) are now gated CONTEXTUALLY by
+    // the surfaces that need them (CorpusView's 公共 tab, ImportView quotaWall),
+    // which present SubscribeSheet on tap. No more 2-tier ¥18 buyout + ¥12/月 —
+    // single Pro subscription path.
 
     var body: some View {
         Group {
             if appState.isAuthenticated {
                 if !gateReady {
                     splash
-                } else if locked {
-                    PaywallView()
                 } else {
                     mainTabs
                 }

@@ -2,10 +2,12 @@ import SwiftUI
 
 struct CorpusView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var store: StoreManager
     @StateObject private var vm = CorpusViewModel()
 
     private var token: String? { appState.session?.sessionToken }
     @State private var showQuiz = false
+    @State private var showSubscribe = false
 
     var body: some View {
         NavigationStack {
@@ -49,6 +51,18 @@ struct CorpusView: View {
             .sheet(isPresented: $showQuiz) {
                 QuizView().environmentObject(appState)
             }
+            // Pro subscription upsell — presented when user taps "订阅 Pro" on the
+            // 公共语料库 lock. Attached at the root so a Picker / List re-render
+            // mid-animation can't tear it down (same gotcha noted in MeView).
+            .sheet(isPresented: $showSubscribe) {
+                SubscribeSheet(onPurchased: {
+                    Task {
+                        await appState.refreshMe()
+                        if let t = token { await vm.reload(token: t) }
+                    }
+                })
+                .environmentObject(store)
+            }
         }
     }
 
@@ -75,8 +89,32 @@ struct CorpusView: View {
         if vm.loading && vm.browse.isEmpty && vm.mine.isEmpty {
             Spacer(); ProgressView().tint(.whatsubAccent); Spacer()
         } else if vm.licenseLocked {
-            centered(icon: "lock", title: "公共语料库需会员",
-                     sub: "购买 whatSub 会员后即可浏览公共语料库；\n「我的」语料库始终可用")
+            // Public corpus is a Pro-tier capability (2026-05-28 policy shift).
+            // Centered lock card + actionable 订阅 Pro button → SubscribeSheet.
+            // 我的 tab is still free, so the copy reassures users they can keep
+            // building their personal corpus while they decide.
+            VStack(spacing: 14) {
+                Spacer()
+                Image(systemName: "lock.fill").font(.system(size: 44)).foregroundStyle(.whatsubAccent)
+                Text("公共语料库需 Pro 会员")
+                    .font(.headline).foregroundStyle(.whatsubInk)
+                Text("订阅 Pro 解锁全部公共语料库；\n「我的」语料库始终免费可用。")
+                    .font(.footnote).foregroundStyle(.whatsubInkMuted)
+                    .multilineTextAlignment(.center)
+                Button {
+                    showSubscribe = true
+                } label: {
+                    Label("订阅 Pro · 解锁公共语料库", systemImage: "star.circle.fill")
+                        .font(.subheadline).fontWeight(.semibold)
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 18).padding(.vertical, 10)
+                        .background(Color.whatsubAccent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+                Spacer()
+            }
+            .padding(32)
         } else if let err = vm.errorMessage {
             centered(icon: "exclamationmark.triangle", title: err, sub: "下拉重试")
         } else if vm.scope == .publicCorpus {

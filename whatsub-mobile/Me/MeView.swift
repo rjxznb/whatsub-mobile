@@ -164,9 +164,10 @@ struct MeView: View {
         }
     }
 
-    // Reflects the actual unlock SOURCE (not just the website license): website
-    // license / iOS 买断 / iOS 订阅 / 试用 / 未解锁. Priority mirrors
-    // MeResponse.appUnlocked. (Subscription detail also shows in 云端同步.)
+    // Reflects the user's Pro entitlement source: website license / iOS 买断
+    // (grandfathered, pre-2026-05-28) / iOS 订阅 / 免费版. Post the 2026-05-28
+    // policy shift, "试用中" + "未解锁" collapsed into 免费版 — the app is fully
+    // usable on the free tier, the row just tells users where they sit.
     @ViewBuilder
     private var licenseRow: some View {
         HStack {
@@ -179,10 +180,8 @@ struct MeView: View {
                     statusLabel("已买断", "checkmark.seal.fill", .whatsubAccent)
                 } else if user.iosSubActive == true {
                     statusLabel("已订阅 Pro", "checkmark.seal.fill", .whatsubAccent)
-                } else if isTrialActive(user) {
-                    statusLabel("试用中", "clock.fill", .whatsubAccent)
                 } else {
-                    statusLabel("未解锁", "xmark.seal", .whatsubInkMuted)
+                    statusLabel("免费版", "person.crop.circle", .whatsubInkMuted)
                 }
             } else {
                 Text("查询中…").foregroundStyle(.whatsubInkFaint)
@@ -194,13 +193,5 @@ struct MeView: View {
         Label(text, systemImage: icon)
             .foregroundStyle(color)
             .labelStyle(.titleAndIcon)
-    }
-
-    /// Within the free trial — or trial timing unknown (nil → fail-open, matching
-    /// MeResponse.appUnlocked), so the row never says 未解锁 for someone who is
-    /// actually in the app.
-    private func isTrialActive(_ user: MeResponse) -> Bool {
-        guard let exp = user.trialExpiresAt else { return true }
-        return Int64(Date().timeIntervalSince1970 * 1000) < exp
     }
 }

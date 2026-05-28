@@ -342,24 +342,20 @@ struct ImportView: View {
                 .font(.subheadline)
                 .foregroundStyle(.whatsubInkMuted)
 
-            if appState.currentUser?.hasActiveLicense == true {
-                Text("订阅解锁 50 个云端额度，单个视频提升到 500MB / 60 分钟；订阅成功会自动继续这次推送。")
-                    .font(.subheadline)
-                    .foregroundStyle(.whatsubInk)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                SubscriptionOptionsView(onPurchased: {
-                    guard let token = appState.session?.sessionToken else { return }
-                    Task { await vm.pushToDesktop(token: token) }
-                })
+            // 2026-05-28 policy shift: all users (license or not) can subscribe
+            // directly via Apple IAP. The old non-license branch ("在官网用同一
+            // 邮箱购买授权后再订阅") was stale gating from the buyout era — Pro is
+            // now a single subscription path everywhere, no license prerequisite.
+            Text("订阅 Pro 解锁 50 个云端额度，单个视频提升到 500MB / 60 分钟；订阅成功会自动继续这次推送。")
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInk)
+                .multilineTextAlignment(.center)
                 .padding(.horizontal)
-            } else {
-                Text("先在 Library 删一个，或在官网用同一邮箱购买授权后再订阅。")
-                    .font(.subheadline)
-                    .foregroundStyle(.whatsubInkMuted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-            }
+            SubscriptionOptionsView(onPurchased: {
+                guard let token = appState.session?.sessionToken else { return }
+                Task { await vm.pushToDesktop(token: token) }
+            })
+            .padding(.horizontal)
 
             Button("完成") { dismiss() }
                 .buttonStyle(.bordered)
