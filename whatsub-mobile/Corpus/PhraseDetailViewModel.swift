@@ -7,10 +7,21 @@ final class PhraseDetailViewModel: ObservableObject {
     @Published var loading = true
     @Published var errorMessage: String?
 
-    /// Instances to show = personal first, then public (deduped by id).
+    /// Instances to show = personal first, then public, deduped by content.
+    ///
+    /// Admin "添加到公共" dual-writes (one personal row + one curator row at
+    /// the same `Date.now()`) would otherwise render as two identical cards.
+    /// Row `id` differs, so we fingerprint by `(contextSentence, source.url,
+    /// contributedAt)` — same save event ⇒ exact-equal across all three.
+    /// Personal is kept on tie so a user's own edits beat the curated copy.
     var instances: [CorpusContribution] {
         guard let r = result else { return [] }
-        return r.personalContributions + r.publicContributions
+        let combined = r.personalContributions + r.publicContributions
+        var seen = Set<String>()
+        return combined.filter { c in
+            let key = "\(c.contextSentence)|\(c.source.url)|\(c.contributedAt)"
+            return seen.insert(key).inserted
+        }
     }
 
     func load(phrase: String, token: String) async {
