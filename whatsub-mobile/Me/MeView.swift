@@ -164,10 +164,10 @@ struct MeView: View {
         }
     }
 
-    // Reflects the user's Pro entitlement source: website license / iOS 买断
-    // (grandfathered, pre-2026-05-28) / iOS 订阅 / 免费版. Post the 2026-05-28
-    // policy shift, "试用中" + "未解锁" collapsed into 免费版 — the app is fully
-    // usable on the free tier, the row just tells users where they sit.
+    // Reflects the user's Pro entitlement source: website license / iOS 订阅 /
+    // 免费版. Post the 2026-05-28 policy shift, the app has only two modes:
+    // 免费版 (everything free-tier accessible) or 已订阅 Pro (cloud-quota
+    // expansion + public corpus). 试用 and 买断 are gone from the product.
     @ViewBuilder
     private var licenseRow: some View {
         HStack {
@@ -176,8 +176,6 @@ struct MeView: View {
             if let user = appState.currentUser {
                 if user.hasActiveLicense {
                     statusLabel("网站授权 · 有效", "checkmark.seal.fill", .green)
-                } else if user.iosBuyout == true {
-                    statusLabel("已买断", "checkmark.seal.fill", .whatsubAccent)
                 } else if user.iosSubActive == true {
                     statusLabel("已订阅 Pro", "checkmark.seal.fill", .whatsubAccent)
                 } else {

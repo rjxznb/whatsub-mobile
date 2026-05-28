@@ -18,25 +18,13 @@ struct MeResponse: Decodable {
     let email: String
     let hasActiveLicense: Bool
     let isAdmin: Bool?
-    // iOS IAP entitlements (backend Phase 1+2). OPTIONAL: an older/undeployed
-    // backend omits them, so decoding must not fail — and the gate fails OPEN
-    // when the trial expiry is absent (never wrongly wall a user).
-    let iosBuyout: Bool?
+    // Subscription entitlement (whatSub Pro). OPTIONAL: an older backend omits it,
+    // so decoding must not fail. Legacy `iosBuyout` + `trialExpiresAt` fields the
+    // backend may still emit are silently ignored — the 2026-05-28 policy shift
+    // removed the ¥18 buyout SKU and the 1-day trial concept; iOS has only two
+    // modes now (免费版 / 已订阅 Pro).
     let iosSubActive: Bool?
     let subProductId: String?
-    let trialExpiresAt: Int64?
-
-    /// True when the user may use the full app: license OR buyout OR active sub OR
-    /// within the free trial. Fails OPEN when `trialExpiresAt` is nil (backend hasn't
-    /// reported it yet) so a missing field never locks anyone out.
-    var appUnlocked: Bool {
-        if hasActiveLicense { return true }
-        if iosBuyout == true { return true }
-        if iosSubActive == true { return true }
-        guard let exp = trialExpiresAt else { return true }
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        return nowMs < exp
-    }
 }
 
 /// POST body for /api/license/iap/verify.
