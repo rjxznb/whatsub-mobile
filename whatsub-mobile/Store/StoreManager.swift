@@ -1,21 +1,22 @@
 import Foundation
 import StoreKit
 
-/// StoreKit 2 wrapper for the one-time "fullunlock" buyout. Loads the product,
-/// runs purchases, listens for transaction updates, exposes an offline-capable
-/// local entitlement check, and reports verified signed transactions to the
-/// backend via `reportVerifiedJWS` (set by the app — does /iap/verify + refreshMe).
+/// StoreKit 2 wrapper for whatSub Pro subscriptions (¥12/月, ¥88/年). Loads the
+/// products, runs purchases, listens for transaction updates, exposes an
+/// offline-capable local entitlement check, and reports verified signed
+/// transactions to the backend via `reportVerifiedJWS` (set by the app — does
+/// /iap/verify + refreshMe).
+///
+/// 2026-05-28 cleanup: the legacy ¥18 buyout SKU (`cc.eversay.whatsub.mobile.
+/// fullunlock`) was fully deleted in App Store Connect — never reached real
+/// purchases, no grandfathering needed. All buyout-related code paths removed.
 @MainActor
 final class StoreManager: ObservableObject {
-    static let buyoutProductID = "cc.eversay.whatsub.mobile.fullunlock"
     static let subMonthID = "whatsub_pro_month"
     static let subYearID  = "whatsub_pro_year"
 
-    @Published var buyoutProduct: Product?
     @Published var purchaseInProgress = false
     @Published var lastError: String?
-    /// Offline-capable: StoreKit shows a current entitlement for the buyout on this device.
-    @Published var hasLocalBuyout = false
     @Published var subMonth: Product?
     @Published var subYear: Product?
     /// Offline-capable: StoreKit shows a current (non-expired) subscription on this device.
@@ -40,12 +41,11 @@ final class StoreManager: ObservableObject {
 
     func loadProducts() async {
         do {
-            let products = try await Product.products(for: [Self.buyoutProductID, Self.subMonthID, Self.subYearID])
+            let products = try await Product.products(for: [Self.subMonthID, Self.subYearID])
             for p in products {
                 switch p.id {
-                case Self.buyoutProductID: buyoutProduct = p
-                case Self.subMonthID:      subMonth = p
-                case Self.subYearID:       subYear = p
+                case Self.subMonthID: subMonth = p
+                case Self.subYearID:  subYear = p
                 default: break
                 }
             }
@@ -54,10 +54,7 @@ final class StoreManager: ObservableObject {
         }
     }
 
-    /// Buy the buyout. Returns true if the purchase verified successfully.
-    func purchaseBuyout() async -> Bool { await purchase(buyoutProduct) }
-
-    /// Buy a subscription (month or year). Same verify→report→refresh path as buyout.
+    /// Buy a subscription (month or year). Verify → report JWS → refresh entitlements.
     func purchaseSubscription(_ product: Product) async -> Bool { await purchase(product) }
 
     private func purchase(_ product: Product?) async -> Bool {
@@ -120,15 +117,12 @@ final class StoreManager: ObservableObject {
     }
 
     private func refreshLocalEntitlements() async {
-        var buyout = false
         var sub = false
         for await result in Transaction.currentEntitlements {
             if case .verified(let t) = result {
-                if t.productID == Self.buyoutProductID { buyout = true }
                 if t.productID == Self.subMonthID || t.productID == Self.subYearID { sub = true }
             }
         }
-        hasLocalBuyout = buyout
         hasLocalSub = sub
     }
 }
