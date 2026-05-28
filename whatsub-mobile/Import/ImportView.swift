@@ -343,7 +343,7 @@ struct ImportView: View {
                 .foregroundStyle(.whatsubInkMuted)
 
             if appState.currentUser?.hasActiveLicense == true {
-                Text("订阅解锁 50 个云端额度，订阅成功会自动继续这次推送。")
+                Text("订阅解锁 50 个云端额度，单个视频提升到 500MB / 60 分钟；订阅成功会自动继续这次推送。")
                     .font(.subheadline)
                     .foregroundStyle(.whatsubInk)
                     .multilineTextAlignment(.center)

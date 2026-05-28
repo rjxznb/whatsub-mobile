@@ -13,8 +13,12 @@ struct SubscribeSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("订阅 whatSub Pro")
                         .font(.title2.weight(.bold)).foregroundStyle(.whatsubInk)
-                    Text("解锁 50 个云端视频额度 + 1000 个个人语料库额度。")
-                        .font(.subheadline).foregroundStyle(.whatsubInkMuted)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("• 50 个云端视频额度（免费 3 个）")
+                        Text("• 单个视频 500MB / 60 分钟（免费 100MB / 20 分钟）")
+                        Text("• 1000 个个人语料库额度（免费 50 个）")
+                    }
+                    .font(.subheadline).foregroundStyle(.whatsubInkMuted)
                     SubscriptionOptionsView(onPurchased: { onPurchased(); dismiss() })
                 }
                 .padding(20)

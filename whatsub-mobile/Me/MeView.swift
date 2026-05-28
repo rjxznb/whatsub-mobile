@@ -72,7 +72,7 @@ struct MeView: View {
                             Button("管理订阅") { showManageSubscriptions = true }
                                 .foregroundStyle(.whatsubAccent)
                         } else {
-                            Text("订阅 Pro 解锁 50 个云端视频 + 1000 个语料库额度；不订阅可免费同步 3 个。")
+                            Text("订阅 Pro：50 个云端视频 · 单个 500MB/60 分钟 · 1000 个语料库；免费 3 个 · 单个 100MB/20 分钟。")
                                 .font(.footnote).foregroundStyle(.whatsubInkMuted)
                             // A single entry button (not inline price buttons) — tapping
                             // opens the payment card. Less money-grabby.
