@@ -97,20 +97,23 @@ struct LibraryDetailView: View {
             GlossSheet(gloss: g)
         }
         .sheet(item: $shadowCue) { cue in
-            // Sheet owns its own AVPlayer (CueAudioPlayer), so opening it
-            // doesn't clobber the primary `avPlayer` scrub position. videoUrl
-            // is the signed CDN URL; if absent (YouTube-fallback entries with
-            // no OSS audio), ShadowSheet still lets the user record + score
-            // — they just don't hear the original cue snippet.
-            ShadowSheet(cue: cue, videoURL: ossVideoURL)
+            // Pass the existing avPlayer so the sheet reuses the already-
+            // buffered OSS video instead of opening a second HTTP connection
+            // + re-parsing the moov. Big videos used to take ~1 min to start
+            // emitting audio on first sheet open — now it's instant when the
+            // main player has already loaded. Sheet pauses + restores the
+            // shared player on dismiss so main video position is preserved.
+            ShadowSheet(cue: cue, sharedPlayer: avPlayer, videoURL: ossVideoURL)
         }
         .sheet(item: $clozeCue) { cue in
-            // Pass ALL cues (not the filtered pool) so the sheet can advance
-            // to "下一句" without dismissing. ClozeSheet itself filters out
-            // currentCue when picking distractors.
+            // Same shared-player optimization (see ShadowSheet above). Pass
+            // ALL cues (not a filtered pool) so the sheet can advance via
+            // 下一句 without dismissing; ClozeSheet filters currentCue out
+            // when picking distractors.
             ClozeSheet(
                 cue: cue,
                 allCues: vm.entry?.analysisJson.subtitles ?? [],
+                sharedPlayer: avPlayer,
                 videoURL: ossVideoURL
             )
         }

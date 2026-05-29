@@ -32,15 +32,15 @@ struct ClozeSheet: View {
     @State private var solved = false
     @State private var shake = 0   // increments on wrong tap to trigger shake animation
 
-    init(cue: Cue, allCues: [Cue], videoURL: URL?) {
+    init(cue: Cue, allCues: [Cue], sharedPlayer: AVPlayer?, videoURL: URL?) {
         self.allCues = allCues
         self.videoURL = videoURL
         _currentCue = State(initialValue: cue)
-        if let v = videoURL {
-            _audio = StateObject(wrappedValue: CueAudioPlayer(videoURL: v))
-        } else {
-            _audio = StateObject(wrappedValue: CueAudioPlayer(videoURL: URL(string: "file:///dev/null")!))
-        }
+        // Prefer the shared LibraryDetailView avPlayer — reuses its buffer so
+        // jumping to a cue is near-instant instead of a fresh OSS download per
+        // sheet open. Falls back to building one from the URL when no shared
+        // player is available.
+        _audio = StateObject(wrappedValue: CueAudioPlayer(sharedPlayer: sharedPlayer, videoURL: videoURL))
     }
 
     /// Position of the current cue in allCues (for hasNext + advance logic).
@@ -60,20 +60,26 @@ struct ClozeSheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     // Replay button + hint
                     HStack {
-                        // Play/pause toggle. Auto-plays on appear; user can pause
-                        // any time by tapping while playing. Re-tap restarts from
-                        // currentCue.time (short snippets — "resume" UX would be
-                        // surprising).
+                        // Three-state play button: 听原文 / 加载中 / 暂停 — see
+                        // CueAudioPlayer's isPlaying + isLoading. Tap during
+                        // 加载中 cancels (useful when the user wants to skip
+                        // the cue without waiting for OSS to buffer).
                         Button {
-                            if audio.isPlaying {
+                            if audio.isPlaying || audio.isLoading {
                                 audio.stop()
                             } else {
                                 audio.play(from: currentCue.time, to: currentCue.endTime)
                             }
                         } label: {
-                            Label(audio.isPlaying ? "暂停" : "听原文",
-                                  systemImage: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.subheadline.weight(.semibold))
+                            HStack(spacing: 6) {
+                                if audio.isLoading {
+                                    ProgressView().controlSize(.small).tint(.whatsubAccent)
+                                } else {
+                                    Image(systemName: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                }
+                                Text(audio.isLoading ? "加载中…" : (audio.isPlaying ? "暂停" : "听原文"))
+                                    .font(.subheadline.weight(.semibold))
+                            }
                         }
                         .buttonStyle(.bordered)
                         .tint(.whatsubAccent)
@@ -105,12 +111,10 @@ struct ClozeSheet: View {
         }
         .presentationDetents([.large])
         .task {
+            // No auto-play (user feedback 2026-05-29): users read the blanked
+            // cue first, then tap 听原文 when ready. Auto-playing on entry
+            // confused users on big videos that buffered silently for ~1min.
             buildPuzzle()
-            // Auto-play once on appear — primes the listen-then-pick loop.
-            if videoURL != nil {
-                try? await Task.sleep(nanoseconds: 300_000_000) // let the sheet finish presenting
-                audio.play(from: currentCue.time, to: currentCue.endTime)
-            }
         }
         .onDisappear { audio.stop() }
     }

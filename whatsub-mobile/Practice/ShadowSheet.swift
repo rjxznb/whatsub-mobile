@@ -42,18 +42,13 @@ struct ShadowSheet: View {
         case error(String)
     }
 
-    init(cue: Cue, videoURL: URL?) {
+    init(cue: Cue, sharedPlayer: AVPlayer?, videoURL: URL?) {
         self.cue = cue
         self.videoURL = videoURL
-        // Build the cue player with whatever URL we have; if nil, the user
-        // can still record + transcribe — they just won't hear the original.
-        if let v = videoURL {
-            _audio = StateObject(wrappedValue: CueAudioPlayer(videoURL: v))
-        } else {
-            // Dummy placeholder so the StateObject contract holds; play() will
-            // be disabled in the UI when videoURL is nil.
-            _audio = StateObject(wrappedValue: CueAudioPlayer(videoURL: URL(string: "file:///dev/null")!))
-        }
+        // Prefer the shared LibraryDetailView avPlayer if provided — no fresh
+        // HTTP fetch, reuses the already-buffered video. Falls back to building
+        // its own from the URL when no shared player is available.
+        _audio = StateObject(wrappedValue: CueAudioPlayer(sharedPlayer: sharedPlayer, videoURL: videoURL))
     }
 
     var body: some View {
@@ -80,10 +75,11 @@ struct ShadowSheet: View {
         .task {
             // Request permissions early so the first 录音 tap doesn't hit the
             // OS prompt mid-countdown.
+            // No auto-play (user feedback 2026-05-29): users open the sheet to
+            // see the cue first, then explicitly tap 听原文 when ready. Auto-
+            // playing on entry was disorienting on big videos that buffered
+            // silently for a long time.
             await requestPermissions()
-            // Auto-play the original once when the sheet opens — frames the
-            // practice loop ("here's what to say").
-            if videoURL != nil { await playOriginal() }
         }
         .onDisappear { stopAll() }
     }
@@ -112,23 +108,11 @@ struct ShadowSheet: View {
             permissionDeniedView
         } else {
             HStack(spacing: 12) {
-                // Play/pause toggle. Tap while playing → pause (stops the
-                // cue audio + clears the auto-stop observer). Next tap
-                // restarts from cue.time — short snippets don't benefit
-                // from a "resume from paused position" mental model.
-                Button {
-                    if audio.isPlaying {
-                        audio.stop()
-                    } else {
-                        Task { await playOriginal() }
-                    }
-                } label: {
-                    Label(audio.isPlaying ? "暂停" : "听原文",
-                          systemImage: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                }
+                // Three-state play button: 听原文 (idle) → 加载中 (buffering)
+                // → 暂停 (actually emitting audio). Tap during 加载中 cancels
+                // the request — important when a big OSS video has a long
+                // first buffer and the user changes their mind.
+                Button { togglePlayCue() } label: { playCueLabel }
                 .buttonStyle(.bordered)
                 .tint(.whatsubAccent)
                 .disabled(videoURL == nil || phase == .countingDown || phase == .recording || phase == .transcribing)
@@ -136,6 +120,34 @@ struct ShadowSheet: View {
                 recordButton
             }
             statusLine
+        }
+    }
+
+    /// Shared label for the cue-audio play/pause button used in both the action
+    /// area and the A/B compare row. Three states: idle / loading (spinner) /
+    /// playing — matches CueAudioPlayer's isPlaying + isLoading.
+    @ViewBuilder
+    private var playCueLabel: some View {
+        HStack(spacing: 6) {
+            if audio.isLoading {
+                ProgressView().controlSize(.small).tint(.whatsubAccent)
+            } else {
+                Image(systemName: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+            }
+            Text(audio.isLoading ? "加载中…" : (audio.isPlaying ? "暂停" : "听原文"))
+                .font(.subheadline.weight(.semibold))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+    }
+
+    private func togglePlayCue() {
+        // Tap during loading cancels the request (.stop pauses + clears the
+        // periodic time observer + KVO will flip isLoading back to false).
+        if audio.isPlaying || audio.isLoading {
+            audio.stop()
+        } else {
+            Task { await playOriginal() }
         }
     }
 
@@ -236,18 +248,8 @@ struct ShadowSheet: View {
             HStack(spacing: 10) {
                 Button {
                     stopRecordingPlayback()
-                    if audio.isPlaying {
-                        audio.stop()
-                    } else {
-                        Task { await playOriginal() }
-                    }
-                } label: {
-                    Label(audio.isPlaying ? "暂停" : "听原文",
-                          systemImage: audio.isPlaying ? "pause.circle.fill" : "play.circle")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
+                    togglePlayCue()
+                } label: { playCueLabel.padding(.vertical, -4) }
                 .buttonStyle(.bordered).tint(.whatsubAccent)
                 .disabled(videoURL == nil)
 
