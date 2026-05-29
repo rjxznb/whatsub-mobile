@@ -9,8 +9,14 @@ struct CueRow: View {
     /// Tapping a highlighted phrase shows its 释义 (and does NOT seek). Carries the
     /// phrase + its translation/note looked up from the cue.
     let onTapHighlight: (_ phrase: String, _ translation: String?, _ note: String?) -> Void
-    /// Long-press anywhere on the cue → collect card.
+    /// Long-press → 收藏 entry from the contextMenu.
     let onCollect: () -> Void
+    /// Long-press → 跟读 (shadowing) entry from the contextMenu. Defaults to no-op
+    /// so call sites that don't expose practice (e.g., the import preview before
+    /// the entry is saved) can omit it.
+    var onShadow: () -> Void = {}
+    /// Long-press → 听抄 (cloze) entry from the contextMenu. Defaults to no-op.
+    var onCloze: () -> Void = {}
 
     private struct WordToken: Identifiable {
         let id: Int
@@ -70,9 +76,16 @@ struct CueRow: View {
                               lineWidth: isCurrent ? 1.5 : 1)
         )
         .contentShape(Rectangle())
-        // Tap on empty area = seek (highlighted words / Chinese line capture their
-        // own taps above). Long-press anywhere = collect.
+        // Tap on empty area = seek (highlighted words / Chinese line capture
+        // their own taps above). Long-press = native contextMenu with three
+        // practice/save actions. (Pre-2026-05-29 long-press jumped straight to
+        // the 收藏 sheet — now 收藏 is one of three siblings alongside the
+        // new 跟读 + 听抄 modes.)
         .onTapGesture { onTapCue() }
-        .onLongPressGesture { onCollect() }
+        .contextMenu {
+            Button { onCollect() } label: { Label("收藏到词汇本", systemImage: "bookmark") }
+            Button { onShadow() } label: { Label("跟读练习", systemImage: "mic.circle") }
+            Button { onCloze() } label: { Label("听抄练习", systemImage: "ear") }
+        }
     }
 }

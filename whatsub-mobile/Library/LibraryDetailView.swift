@@ -20,14 +20,27 @@ struct LibraryDetailView: View {
     /// rotation); `pinch` tracks the live magnification during a gesture.
     @State private var playerZoom: CGFloat = 1.0
     @GestureState private var pinch: CGFloat = 1.0
-    /// Long-pressed cue → presents the 收藏卡; the per-video 词汇本 sheet toggle.
+    /// Long-pressed cue → contextMenu → 收藏卡; the per-video 词汇本 sheet toggle.
     @State private var collectCue: Cue?
+    /// Long-pressed cue → contextMenu → 跟读 (shadow) sheet.
+    @State private var shadowCue: Cue?
+    /// Long-pressed cue → contextMenu → 听抄 (cloze) sheet.
+    @State private var clozeCue: Cue?
     /// Single-tapped highlight phrase → its 释义 box (intercepts the seek).
     @State private var glossWord: WordGloss?
     @State private var showNotebook = false
     @ObservedObject private var vocab = VocabStore.shared
 
     private var isLandscape: Bool { vSize == .compact }
+
+    /// Signed CDN URL for the OSS-hosted video, or nil for YouTube-fallback
+    /// entries. Practice sheets (跟读 / 听抄) use this for their own
+    /// CueAudioPlayer (independent of the primary `avPlayer` so scrub state
+    /// stays clean).
+    private var ossVideoURL: URL? {
+        guard let s = vm.entry?.videoUrl else { return nil }
+        return URL(string: s)
+    }
 
     var body: some View {
         ZStack {
@@ -82,6 +95,21 @@ struct LibraryDetailView: View {
         }
         .sheet(item: $glossWord) { g in
             GlossSheet(gloss: g)
+        }
+        .sheet(item: $shadowCue) { cue in
+            // Sheet owns its own AVPlayer (CueAudioPlayer), so opening it
+            // doesn't clobber the primary `avPlayer` scrub position. videoUrl
+            // is the signed CDN URL; if absent (YouTube-fallback entries with
+            // no OSS audio), ShadowSheet still lets the user record + score
+            // — they just don't hear the original cue snippet.
+            ShadowSheet(cue: cue, videoURL: ossVideoURL)
+        }
+        .sheet(item: $clozeCue) { cue in
+            ClozeSheet(
+                cue: cue,
+                pool: vm.entry?.analysisJson.subtitles.filter { $0.index != cue.index } ?? [],
+                videoURL: ossVideoURL
+            )
         }
         .sheet(isPresented: $showNotebook) {
             VocabNotebookView(entryId: entryId, title: vm.entry?.title ?? "词汇本") { idx in
@@ -251,7 +279,9 @@ struct LibraryDetailView: View {
                             isCurrent: cue.index == vm.currentIndex,
                             onTapCue: { vm.seekTo(cue) },
                             onTapHighlight: { w, t, n in glossWord = WordGloss(word: w, translation: t, note: n) },
-                            onCollect: { collectCue = cue }
+                            onCollect: { collectCue = cue },
+                            onShadow: { shadowCue = cue },
+                            onCloze: { clozeCue = cue }
                         )
                         .id(cue.index)
                     }

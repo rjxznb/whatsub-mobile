@@ -77,6 +77,11 @@ targets:
         # so a key added only to the Info.plist file is dropped on `xcodegen generate`.
         UIBackgroundModes:
           - audio
+        # 跟读 (shadowing) practice — records short user speech then runs
+        # SFSpeechRecognizer to score against the cue text. Both keys required
+        # on first invocation; iOS shows the system permission alerts.
+        NSMicrophoneUsageDescription: "用于跟读练习时录下你的发音并与字幕原文做对比评分。"
+        NSSpeechRecognitionUsageDescription: "将跟读练习的录音转为文字以与字幕原文做逐词比对。所有识别在本机完成。"
         UIAppFonts:
           - Caveat-Bold.ttf
         CFBundleURLTypes:
