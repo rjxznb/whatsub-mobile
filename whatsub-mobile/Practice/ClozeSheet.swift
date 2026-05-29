@@ -60,10 +60,19 @@ struct ClozeSheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     // Replay button + hint
                     HStack {
+                        // Play/pause toggle. Auto-plays on appear; user can pause
+                        // any time by tapping while playing. Re-tap restarts from
+                        // currentCue.time (short snippets — "resume" UX would be
+                        // surprising).
                         Button {
-                            audio.play(from: currentCue.time, to: currentCue.endTime)
+                            if audio.isPlaying {
+                                audio.stop()
+                            } else {
+                                audio.play(from: currentCue.time, to: currentCue.endTime)
+                            }
                         } label: {
-                            Label(audio.isPlaying ? "播放中…" : "听原文", systemImage: "play.circle.fill")
+                            Label(audio.isPlaying ? "暂停" : "听原文",
+                                  systemImage: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                                 .font(.subheadline.weight(.semibold))
                         }
                         .buttonStyle(.bordered)
@@ -71,7 +80,7 @@ struct ClozeSheet: View {
                         .disabled(videoURL == nil)
                         Spacer()
                         // Position counter so the user knows progress through the
-                        // entry (e.g., "12 / 38") — natural with 下一个 navigation.
+                        // entry (e.g., "12 / 38") — natural with 下一句 navigation.
                         if let pos = currentPos {
                             Text("\(pos + 1) / \(allCues.count)")
                                 .font(.caption.weight(.medium).monospacedDigit())

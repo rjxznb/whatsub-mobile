@@ -112,10 +112,19 @@ struct ShadowSheet: View {
             permissionDeniedView
         } else {
             HStack(spacing: 12) {
+                // Play/pause toggle. Tap while playing → pause (stops the
+                // cue audio + clears the auto-stop observer). Next tap
+                // restarts from cue.time — short snippets don't benefit
+                // from a "resume from paused position" mental model.
                 Button {
-                    Task { await playOriginal() }
+                    if audio.isPlaying {
+                        audio.stop()
+                    } else {
+                        Task { await playOriginal() }
+                    }
                 } label: {
-                    Label(audio.isPlaying ? "播放中…" : "听原文", systemImage: "play.circle.fill")
+                    Label(audio.isPlaying ? "暂停" : "听原文",
+                          systemImage: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
@@ -227,9 +236,14 @@ struct ShadowSheet: View {
             HStack(spacing: 10) {
                 Button {
                     stopRecordingPlayback()
-                    Task { await playOriginal() }
+                    if audio.isPlaying {
+                        audio.stop()
+                    } else {
+                        Task { await playOriginal() }
+                    }
                 } label: {
-                    Label("听原文", systemImage: "play.circle")
+                    Label(audio.isPlaying ? "暂停" : "听原文",
+                          systemImage: audio.isPlaying ? "pause.circle.fill" : "play.circle")
                         .font(.subheadline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
@@ -240,8 +254,8 @@ struct ShadowSheet: View {
                 Button {
                     toggleRecordingPlayback()
                 } label: {
-                    Label(isPlayingRecording ? "停止" : "听我的录音",
-                          systemImage: isPlayingRecording ? "stop.circle.fill" : "play.circle.fill")
+                    Label(isPlayingRecording ? "暂停" : "听我的录音",
+                          systemImage: isPlayingRecording ? "pause.circle.fill" : "play.circle.fill")
                         .font(.subheadline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
