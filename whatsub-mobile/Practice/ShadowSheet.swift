@@ -26,6 +26,11 @@ struct ShadowSheet: View {
     @State private var recorder: AVAudioRecorder?
     @State private var recordingURL: URL?
     @State private var recordingStartedAt: Date?
+    /// Local playback of the user's own recording for A/B comparison with the
+    /// original cue. Lives only while the sheet is open; reset on retry +
+    /// stopped on dismiss.
+    @State private var playbackPlayer: AVAudioPlayer?
+    @State private var isPlayingRecording = false
 
     enum Phase: Equatable {
         case idle
@@ -216,6 +221,34 @@ struct ShadowSheet: View {
                     .font(.caption).foregroundStyle(.whatsubInkMuted)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // A/B compare row — tap one then the other to hear your pronunciation
+            // against the original. 听原文 in the action area above stays usable
+            // too; this duplicate places them side-by-side at the moment of review.
+            HStack(spacing: 10) {
+                Button {
+                    stopRecordingPlayback()
+                    Task { await playOriginal() }
+                } label: {
+                    Label("听原文", systemImage: "play.circle")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered).tint(.whatsubAccent)
+                .disabled(videoURL == nil)
+
+                Button {
+                    toggleRecordingPlayback()
+                } label: {
+                    Label(isPlayingRecording ? "停止" : "听我的录音",
+                          systemImage: isPlayingRecording ? "stop.circle.fill" : "play.circle.fill")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered).tint(.whatsubAccent)
+                .disabled(recordingURL == nil)
+            }
             HStack {
                 Button("再试一次") { resetForRetry() }
                     .buttonStyle(.bordered).tint(.whatsubAccent)
@@ -362,16 +395,62 @@ struct ShadowSheet: View {
         }
     }
 
+    // --------------------------------------------------------- playback (A/B compare)
+
+    private func toggleRecordingPlayback() {
+        if isPlayingRecording {
+            stopRecordingPlayback()
+            return
+        }
+        guard let url = recordingURL else { return }
+        // Stop the cue audio first so the two never overlap.
+        audio.stop()
+        // .playAndRecord session is still active from the recording step and
+        // supports playback — no category switch needed. AVAudioPlayer reads
+        // the local m4a from temp; no network, no recognition, no cost.
+        do {
+            let p = try AVAudioPlayer(contentsOf: url)
+            p.prepareToPlay()
+            let dur = p.duration
+            p.play()
+            playbackPlayer = p
+            isPlayingRecording = true
+            // Cheap auto-stop without an AVAudioPlayerDelegate subclass — the
+            // recording is at most 12s; flip the flag back when the duration
+            // elapses (+200ms tail) so the button label restores.
+            Task { [dur] in
+                try? await Task.sleep(nanoseconds: UInt64(dur * 1_000_000_000) + 200_000_000)
+                await MainActor.run {
+                    // Only flip if the same playback is still active (user might
+                    // have hit retry / closed the sheet in the meantime).
+                    if isPlayingRecording { isPlayingRecording = false }
+                }
+            }
+        } catch {
+            // Non-critical — show nothing; user can hit "再试一次" if confused.
+        }
+    }
+
+    private func stopRecordingPlayback() {
+        playbackPlayer?.stop()
+        playbackPlayer = nil
+        isPlayingRecording = false
+    }
+
     // -------------------------------------------------------------- reset/teardown
 
     private func resetForRetry() {
+        stopRecordingPlayback()
         diff = nil
         transcribedText = ""
         phase = .idle
+        // Don't delete the recording file yet — user may still want to play it
+        // back briefly. stopAll() (on dismiss) handles full cleanup.
     }
 
     private func stopAll() {
         audio.stop()
+        stopRecordingPlayback()
         recorder?.stop()
         recorder = nil
         if let url = recordingURL { try? FileManager.default.removeItem(at: url) }

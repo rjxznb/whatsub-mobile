@@ -105,9 +105,12 @@ struct LibraryDetailView: View {
             ShadowSheet(cue: cue, videoURL: ossVideoURL)
         }
         .sheet(item: $clozeCue) { cue in
+            // Pass ALL cues (not the filtered pool) so the sheet can advance
+            // to "下一句" without dismissing. ClozeSheet itself filters out
+            // currentCue when picking distractors.
             ClozeSheet(
                 cue: cue,
-                pool: vm.entry?.analysisJson.subtitles.filter { $0.index != cue.index } ?? [],
+                allCues: vm.entry?.analysisJson.subtitles ?? [],
                 videoURL: ossVideoURL
             )
         }

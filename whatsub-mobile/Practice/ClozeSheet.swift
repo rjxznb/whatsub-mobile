@@ -15,27 +15,43 @@ import AVFoundation
 /// to the longest non-stopword in the cue. Distractors come from other cues
 /// in the same entry: similar-length phrases/words to keep difficulty fair.
 struct ClozeSheet: View {
-    let cue: Cue
-    let pool: [Cue]    // other cues from the same entry (for distractor sourcing)
+    /// All cues in this entry (ordered by time). The sheet picks distractors
+    /// from neighbors AND uses the list to advance to "下一个 →" without
+    /// requiring the user to close + long-press another cue.
+    let allCues: [Cue]
     let videoURL: URL?
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var audio: CueAudioPlayer
+    /// The cue currently being practiced. Mutable so 下一个 can advance us
+    /// without dismissing the sheet.
+    @State private var currentCue: Cue
     @State private var target: String = ""
     @State private var options: [String] = []
     @State private var rejected: Set<String> = []
     @State private var solved = false
     @State private var shake = 0   // increments on wrong tap to trigger shake animation
 
-    init(cue: Cue, pool: [Cue], videoURL: URL?) {
-        self.cue = cue
-        self.pool = pool
+    init(cue: Cue, allCues: [Cue], videoURL: URL?) {
+        self.allCues = allCues
         self.videoURL = videoURL
+        _currentCue = State(initialValue: cue)
         if let v = videoURL {
             _audio = StateObject(wrappedValue: CueAudioPlayer(videoURL: v))
         } else {
             _audio = StateObject(wrappedValue: CueAudioPlayer(videoURL: URL(string: "file:///dev/null")!))
         }
+    }
+
+    /// Position of the current cue in allCues (for hasNext + advance logic).
+    /// Cue ids are synthesized at decode-time from array position so they're
+    /// stable per-load; safe to compare by index.
+    private var currentPos: Int? {
+        allCues.firstIndex(where: { $0.index == currentCue.index })
+    }
+    private var hasNext: Bool {
+        guard let pos = currentPos else { return false }
+        return pos + 1 < allCues.count
     }
 
     var body: some View {
@@ -45,7 +61,7 @@ struct ClozeSheet: View {
                     // Replay button + hint
                     HStack {
                         Button {
-                            audio.play(from: cue.time, to: cue.endTime)
+                            audio.play(from: currentCue.time, to: currentCue.endTime)
                         } label: {
                             Label(audio.isPlaying ? "播放中…" : "听原文", systemImage: "play.circle.fill")
                                 .font(.subheadline.weight(.semibold))
@@ -54,6 +70,13 @@ struct ClozeSheet: View {
                         .tint(.whatsubAccent)
                         .disabled(videoURL == nil)
                         Spacer()
+                        // Position counter so the user knows progress through the
+                        // entry (e.g., "12 / 38") — natural with 下一个 navigation.
+                        if let pos = currentPos {
+                            Text("\(pos + 1) / \(allCues.count)")
+                                .font(.caption.weight(.medium).monospacedDigit())
+                                .foregroundStyle(.whatsubInkFaint)
+                        }
                     }
 
                     blankedCueCard
@@ -77,7 +100,7 @@ struct ClozeSheet: View {
             // Auto-play once on appear — primes the listen-then-pick loop.
             if videoURL != nil {
                 try? await Task.sleep(nanoseconds: 300_000_000) // let the sheet finish presenting
-                audio.play(from: cue.time, to: cue.endTime)
+                audio.play(from: currentCue.time, to: currentCue.endTime)
             }
         }
         .onDisappear { audio.stop() }
@@ -91,7 +114,7 @@ struct ClozeSheet: View {
             Text(renderedCue)
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(.whatsubInk)
-            Text(cue.translation)
+            Text(currentCue.translation)
                 .font(.system(size: 15))
                 .foregroundStyle(.whatsubInkMuted)
         }
@@ -104,7 +127,7 @@ struct ClozeSheet: View {
     /// before solve; original text after solve with target highlighted via
     /// AttributedString (italic + accent).
     private var renderedCue: AttributedString {
-        var attr = AttributedString(cue.text)
+        var attr = AttributedString(currentCue.text)
         guard !target.isEmpty,
               let r = attr.range(of: target, options: [.caseInsensitive])
         else { return attr }
@@ -156,12 +179,25 @@ struct ClozeSheet: View {
     }
 
     private var resultActions: some View {
-        HStack {
+        HStack(spacing: 10) {
             Button("再来一次") { resetForRetry() }
                 .buttonStyle(.bordered).tint(.whatsubAccent)
             Spacer()
-            Button("完成") { audio.stop(); dismiss() }
+            if hasNext {
+                // Primary action after solving — continue practice without
+                // closing the sheet. 完成 is still available on the left.
+                Button { advanceToNextCue() } label: {
+                    Label("下一句", systemImage: "arrow.right.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                }
                 .buttonStyle(.borderedProminent).tint(.whatsubAccent)
+            } else {
+                // Last cue in the entry — surface that the user finished, no
+                // ambiguous "下一句" that would silently no-op.
+                Text("已是最后一句").font(.caption).foregroundStyle(.whatsubInkFaint)
+                Button("完成") { audio.stop(); dismiss() }
+                    .buttonStyle(.borderedProminent).tint(.whatsubAccent)
+            }
         }
     }
 
@@ -182,7 +218,20 @@ struct ClozeSheet: View {
         rejected = []
         buildPuzzle()
         // Auto-replay the original on retry so the user re-hears it.
-        if videoURL != nil { audio.play(from: cue.time, to: cue.endTime) }
+        if videoURL != nil { audio.play(from: currentCue.time, to: currentCue.endTime) }
+    }
+
+    /// Move to the next cue in the entry. Resets puzzle state + auto-plays the
+    /// new cue's audio. No-op (guarded by hasNext on the call site button) if
+    /// we're already at the last cue.
+    private func advanceToNextCue() {
+        guard let pos = currentPos, pos + 1 < allCues.count else { return }
+        audio.stop()
+        currentCue = allCues[pos + 1]
+        solved = false
+        rejected = []
+        buildPuzzle()
+        if videoURL != nil { audio.play(from: currentCue.time, to: currentCue.endTime) }
     }
 
     /// Picks the target word/phrase + 3 distractors, shuffled into `options`.
@@ -207,24 +256,27 @@ struct ClozeSheet: View {
         // Prefer the AI-tagged highlight phrases — that's what we want the user
         // to learn. Filter to phrases that actually appear in the cue text (case
         // sometimes drifts) and pick the longest.
-        let highlights = cue.highlightWords
-            .filter { cue.text.range(of: $0, options: .caseInsensitive) != nil }
+        let highlights = currentCue.highlightWords
+            .filter { currentCue.text.range(of: $0, options: .caseInsensitive) != nil }
             .sorted { $0.count > $1.count }
         if let h = highlights.first { return h }
         // Fallback: longest non-stopword in the cue.
-        let words = cue.text.split(separator: " ", omittingEmptySubsequences: true).map {
+        let words = currentCue.text.split(separator: " ", omittingEmptySubsequences: true).map {
             $0.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         }.filter { $0.count >= 4 && !ClozeSheet.stopwords.contains($0.lowercased()) }
-        return words.max(by: { $0.count < $1.count }) ?? (cue.text.split(separator: " ").first.map(String.init) ?? "")
+        return words.max(by: { $0.count < $1.count }) ?? (currentCue.text.split(separator: " ").first.map(String.init) ?? "")
     }
 
     private func pickDistractors(target: String) -> [String] {
-        // Pull candidates from other cues' highlightWords + long words. Filter
+        // Pull candidates from sibling cues' highlightWords + long words. Filter
         // to similar length (±3 chars) for visual fairness. Deduplicate.
         let tLen = target.count
         var seen = Set<String>([target.lowercased()])
         var out: [String] = []
-        let candidates = pool
+        // Excludes the current cue so the "obvious answer staring at you" can't
+        // sneak in as a distractor.
+        let candidates = allCues
+            .filter { $0.index != currentCue.index }
             .flatMap { c -> [String] in
                 let hl = c.highlightWords
                 let words = c.text.split(separator: " ", omittingEmptySubsequences: true).map {
