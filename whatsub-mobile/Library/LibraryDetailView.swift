@@ -71,7 +71,16 @@ struct LibraryDetailView: View {
             // so a portrait↔landscape rebuild reuses it (playback continues)
             // rather than spawning a new player from 0.
             if avPlayer == nil, let v = vm.entry?.videoUrl, let url = URL(string: v) {
-                avPlayer = AVPlayer(url: url)
+                let player = AVPlayer(url: url)
+                // Long OSS videos used to silently swallow the first play() tap
+                // — AVPlayer defaults to .automaticallyWaitsToMinimizeStalling
+                // = true and stays paused-but-loading until "enough" buffer is
+                // built. Users reported tapping play with no response, then
+                // pause-then-play to actually start. Flipping to false makes
+                // play() always respond immediately (may briefly stall if buffer
+                // is truly empty, but the user sees something happen).
+                player.automaticallyWaitsToMinimizeStalling = false
+                avPlayer = player
             }
         }
         // 词汇本 entry (portrait only — landscape hides the nav bar). Long-press a

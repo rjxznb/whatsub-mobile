@@ -38,6 +38,7 @@ final class CueAudioPlayer: ObservableObject {
         let time: CMTime
         let rate: Float
         let forwardEndTime: CMTime
+        let autoWaitsToMinimizeStalling: Bool
     }
 
     /// Two construction modes:
@@ -56,7 +57,8 @@ final class CueAudioPlayer: ObservableObject {
             self.savedState = SavedSharedState(
                 time: shared.currentTime(),
                 rate: shared.rate,
-                forwardEndTime: shared.currentItem?.forwardPlaybackEndTime ?? .invalid
+                forwardEndTime: shared.currentItem?.forwardPlaybackEndTime ?? .invalid,
+                autoWaitsToMinimizeStalling: shared.automaticallyWaitsToMinimizeStalling
             )
             // Pause main playback while the practice sheet is up — the cue
             // snippet would otherwise overlap with whatever's still playing.
@@ -71,10 +73,12 @@ final class CueAudioPlayer: ObservableObject {
             self.player = AVPlayer()
             self.savedState = nil
         }
-        // Wait for stalling = false caused the audio-out delay to be silent
-        // (no buffering indication at all). Flip to true so AVPlayer reports
-        // .waitingToPlayAtSpecifiedRate while it buffers — UI picks that up
-        // via the KVO observer below.
+        // Practice mode: prefer to surface the buffer wait via the loading
+        // spinner instead of silently playing dead air. With autoWaits = true
+        // AVPlayer reports .waitingToPlayAtSpecifiedRate during the wait,
+        // which our KVO observer below maps to isLoading = true so the button
+        // shows 加载中. Restored to the parent's original value on deinit so
+        // the main video player's responsive behavior isn't lost.
         self.player.automaticallyWaitsToMinimizeStalling = true
         // Make the cue snippet routing audible from the device speaker even when
         // the silent switch is on (it's a learning drill, not background audio).
@@ -118,6 +122,22 @@ final class CueAudioPlayer: ObservableObject {
             }
             await MainActor.run { self?.ready = true } // give up; let user try anyway
         }
+    }
+
+    /// Silently seek to `start` so AVPlayer begins loading byte ranges around
+    /// that position WITHOUT starting playback. The sheets call this on
+    /// appear, then the user reads the cue text while buffer fills — so when
+    /// they tap 听原文, the buffer at cue.time is warm and audio comes out
+    /// near-instantly.
+    ///
+    /// Cheap to call repeatedly: AVPlayer collapses pending seeks. Safe even
+    /// if the user never taps play (just a wasted seek).
+    func preload(at start: Double) {
+        let cm = CMTime(seconds: max(0, start), preferredTimescale: 600)
+        // No isLoading flip — we're not waiting to play, just warming buffer.
+        // If we set isLoading=true here the button would show 加载中 from
+        // sheet open, which would confuse users who haven't tapped play yet.
+        player.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     /// Play [cue.time, cue.endTime] then pause. Replayable by calling again.
@@ -173,7 +193,11 @@ final class CueAudioPlayer: ObservableObject {
             // main video isn't stuck at the practice cue's time when the
             // sheet closes. forwardPlaybackEndTime back to .positiveInfinity
             // (the default) so main playback can resume past the cue's end.
+            // Also restore autoWaits so the main player keeps the responsive
+            // behavior LibraryDetailView configured for it (false → first
+            // tap on play in the AVPlayerViewController responds immediately).
             player.pause()
+            player.automaticallyWaitsToMinimizeStalling = saved.autoWaitsToMinimizeStalling
             player.currentItem?.forwardPlaybackEndTime =
                 saved.forwardEndTime.isValid ? saved.forwardEndTime : .positiveInfinity
             player.seek(to: saved.time, toleranceBefore: .zero, toleranceAfter: .zero)

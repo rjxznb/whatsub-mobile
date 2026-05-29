@@ -75,11 +75,14 @@ struct ShadowSheet: View {
         .task {
             // Request permissions early so the first 录音 tap doesn't hit the
             // OS prompt mid-countdown.
-            // No auto-play (user feedback 2026-05-29): users open the sheet to
-            // see the cue first, then explicitly tap 听原文 when ready. Auto-
-            // playing on entry was disorienting on big videos that buffered
-            // silently for a long time.
             await requestPermissions()
+            // Pre-buffer at this cue's time so the first 听原文 tap is fast.
+            // Doesn't start playback (no audio yet) — just kicks off the OSS
+            // byte-range fetch while user reads. Combined with the shared
+            // player from LibraryDetailView, this is what makes practice
+            // responsive on big videos (the cold-buffer case where the user
+            // jumps straight to practice without playing the main video).
+            if videoURL != nil { audio.preload(at: cue.time) }
         }
         .onDisappear { stopAll() }
     }

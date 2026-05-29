@@ -111,10 +111,10 @@ struct ClozeSheet: View {
         }
         .presentationDetents([.large])
         .task {
-            // No auto-play (user feedback 2026-05-29): users read the blanked
-            // cue first, then tap 听原文 when ready. Auto-playing on entry
-            // confused users on big videos that buffered silently for ~1min.
             buildPuzzle()
+            // Pre-buffer at this cue's time so the first 听原文 tap is fast
+            // even on cold-buffer entries. See ShadowSheet for the rationale.
+            if videoURL != nil { audio.preload(at: currentCue.time) }
         }
         .onDisappear { audio.stop() }
     }
