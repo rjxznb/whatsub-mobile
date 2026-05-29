@@ -32,15 +32,18 @@ struct ClozeSheet: View {
     @State private var solved = false
     @State private var shake = 0   // increments on wrong tap to trigger shake animation
 
-    init(cue: Cue, allCues: [Cue], sharedPlayer: AVPlayer?, videoURL: URL?) {
+    init(cue: Cue, allCues: [Cue], sharedPlayer: AVPlayer?, audioURL: URL?, videoURL: URL?) {
         self.allCues = allCues
         self.videoURL = videoURL
         _currentCue = State(initialValue: cue)
-        // Prefer the shared LibraryDetailView avPlayer — reuses its buffer so
-        // jumping to a cue is near-instant instead of a fresh OSS download per
-        // sheet open. Falls back to building one from the URL when no shared
-        // player is available.
-        _audio = StateObject(wrappedValue: CueAudioPlayer(sharedPlayer: sharedPlayer, videoURL: videoURL))
+        // Priority: audioURL (small .m4a sidecar) → sharedPlayer (reuse the
+        // main video's buffer) → standalone built from videoURL. See
+        // CueAudioPlayer.init for the full rationale.
+        _audio = StateObject(wrappedValue: CueAudioPlayer(
+            audioURL: audioURL,
+            mainPlayer: sharedPlayer,
+            fallbackVideoURL: videoURL
+        ))
     }
 
     /// Position of the current cue in allCues (for hasNext + advance logic).

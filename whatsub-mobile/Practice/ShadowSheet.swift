@@ -42,13 +42,18 @@ struct ShadowSheet: View {
         case error(String)
     }
 
-    init(cue: Cue, sharedPlayer: AVPlayer?, videoURL: URL?) {
+    init(cue: Cue, sharedPlayer: AVPlayer?, audioURL: URL?, videoURL: URL?) {
         self.cue = cue
         self.videoURL = videoURL
-        // Prefer the shared LibraryDetailView avPlayer if provided — no fresh
-        // HTTP fetch, reuses the already-buffered video. Falls back to building
-        // its own from the URL when no shared player is available.
-        _audio = StateObject(wrappedValue: CueAudioPlayer(sharedPlayer: sharedPlayer, videoURL: videoURL))
+        // Priority: audioURL (small .m4a sidecar, ~30× less bandwidth per cue)
+        // → sharedPlayer (reuse LibraryDetailView's buffered video) → standalone
+        // built from videoURL. Old entries (synced before 2026-05-29) have
+        // audioURL = nil so they take the shared-player path.
+        _audio = StateObject(wrappedValue: CueAudioPlayer(
+            audioURL: audioURL,
+            mainPlayer: sharedPlayer,
+            fallbackVideoURL: videoURL
+        ))
     }
 
     var body: some View {

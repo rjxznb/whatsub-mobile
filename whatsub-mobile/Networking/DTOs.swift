@@ -49,6 +49,11 @@ struct LibraryListItem: Decodable, Identifiable {
     /// Present (signed CDN URL) when the video is self-hosted on OSS → plays
     /// in-app via AVPlayer with NO VPN. nil = YouTube-embed-only → needs VPN.
     let videoUrl: String?
+    /// Signed CDN URL for the audio-only .m4a sidecar (since 2026-05-29
+    /// desktop sync). Practice modes prefer this over videoUrl — ~30× less
+    /// bandwidth per cue. nil for entries synced before the sidecar feature
+    /// (iOS practice falls back to videoUrl via the shared player).
+    let audioUrl: String?
 }
 
 struct LibraryListResponse: Decodable {
@@ -205,6 +210,9 @@ struct LibraryEntryDetail: Decodable {
     let transcriptSrt: String?
     let analysisJson: AnalysisJson
     let videoUrl: String?
+    /// Signed CDN URL for the audio-only .m4a sidecar. Practice modes
+    /// (跟读/听抄) prefer this over videoUrl. nil = older entry, falls back.
+    let audioUrl: String?
 }
 
 // ----- Corpus -----

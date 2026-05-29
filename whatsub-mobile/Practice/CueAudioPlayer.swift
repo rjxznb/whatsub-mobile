@@ -25,11 +25,18 @@ final class CueAudioPlayer: ObservableObject {
     @Published private(set) var ready = false
 
     private let player: AVPlayer
-    /// When non-nil, this player is owned by a parent view (the LibraryDetail
-    /// avPlayer) — we MUST restore its state on deinit instead of leaving it
-    /// scrubbed to the cue's position with a tiny forwardPlaybackEndTime.
-    /// When nil, the player is ours; we just stop it on teardown.
-    private let savedState: SavedSharedState?
+    /// True when the practice sheet owns the player it drives (audio-sidecar
+    /// path or standalone URL fallback). False when we're driving the parent's
+    /// main video player — in that case we must NOT stop the player on deinit
+    /// (just restore its state).
+    private let ownsPlayer: Bool
+    /// The parent's main video player, if any, separately from `player`. We
+    /// always pause + later restore the main player while practice is open,
+    /// regardless of whether we use it for cue audio. With the audio sidecar
+    /// (preferred path 2026-05-29), `player` is a dedicated AVPlayer for the
+    /// small .m4a and `mainPlayer` is the parent's video player we just paused.
+    private let mainPlayer: AVPlayer?
+    private let savedMainState: SavedSharedState?
     private var timeObserver: Any?
     private var statusObserver: NSKeyValueObservation?
     private var endTime: Double = 0
@@ -41,37 +48,52 @@ final class CueAudioPlayer: ObservableObject {
         let autoWaitsToMinimizeStalling: Bool
     }
 
-    /// Two construction modes:
-    /// - **Shared** (`sharedPlayer:` non-nil): wraps the parent view's AVPlayer.
-    ///   No new HTTP fetch, no re-parsing of OSS moov, no re-buffering — re-uses
-    ///   whatever data the main video player has already loaded. The parent's
-    ///   playback state is snapshotted + restored on deinit so closing the
-    ///   practice sheet leaves the main video where the user had it.
-    ///   This is the primary path from LibraryDetailView and fixes the
-    ///   "进去之后一直 loading 一分钟" issue on big videos (2026-05-29).
-    /// - **Standalone** (`videoURL:` only): builds its own AVPlayer. Used as
-    ///   fallback when no shared player is available (offline / unusual entry).
-    init(sharedPlayer: AVPlayer? = nil, videoURL: URL? = nil) {
-        if let shared = sharedPlayer {
-            self.player = shared
-            self.savedState = SavedSharedState(
-                time: shared.currentTime(),
-                rate: shared.rate,
-                forwardEndTime: shared.currentItem?.forwardPlaybackEndTime ?? .invalid,
-                autoWaitsToMinimizeStalling: shared.automaticallyWaitsToMinimizeStalling
+    /// Three construction modes, in priority order:
+    /// 1. **Audio sidecar** (`audioURL:` non-nil): builds a dedicated AVPlayer
+    ///    for the small .m4a (no buffer sharing needed — file is tiny). This
+    ///    is the preferred path since 2026-05-29 — practice fetches ~3-5% of
+    ///    the video bytes per cue. If `mainPlayer` is also provided, we still
+    ///    pause + restore it so the main video doesn't bleed audio.
+    /// 2. **Shared video player** (`mainPlayer:` non-nil, no audioURL): wraps
+    ///    the parent view's AVPlayer. No new HTTP fetch, reuses the main
+    ///    video's buffer. Falls back when the entry was synced before the
+    ///    audio sidecar feature (audioUrl is nil server-side).
+    /// 3. **Standalone** (`fallbackVideoURL:` only): builds its own AVPlayer.
+    ///    Used when no shared player AND no audio sidecar (unusual entry).
+    init(audioURL: URL? = nil, mainPlayer: AVPlayer? = nil, fallbackVideoURL: URL? = nil) {
+        // Always snapshot + pause the main video player if provided — practice
+        // shouldn't have audio overlap with whatever was playing in the detail
+        // view, regardless of which player we use for cue playback.
+        if let main = mainPlayer {
+            self.mainPlayer = main
+            self.savedMainState = SavedSharedState(
+                time: main.currentTime(),
+                rate: main.rate,
+                forwardEndTime: main.currentItem?.forwardPlaybackEndTime ?? .invalid,
+                autoWaitsToMinimizeStalling: main.automaticallyWaitsToMinimizeStalling
             )
-            // Pause main playback while the practice sheet is up — the cue
-            // snippet would otherwise overlap with whatever's still playing.
-            shared.pause()
-        } else if let url = videoURL {
+            main.pause()
+        } else {
+            self.mainPlayer = nil
+            self.savedMainState = nil
+        }
+        // Pick the player we'll actually drive for cue playback.
+        if let url = audioURL {
             let item = AVPlayerItem(url: url)
             self.player = AVPlayer(playerItem: item)
-            self.savedState = nil
+            self.ownsPlayer = true
+        } else if let main = mainPlayer {
+            self.player = main
+            self.ownsPlayer = false
+        } else if let url = fallbackVideoURL {
+            let item = AVPlayerItem(url: url)
+            self.player = AVPlayer(playerItem: item)
+            self.ownsPlayer = true
         } else {
             // Last-resort no-op player. Sheets handle the no-audio case in UI
             // (disabled play button), so this just keeps the type contract.
             self.player = AVPlayer()
-            self.savedState = nil
+            self.ownsPlayer = true
         }
         // Practice mode: prefer to surface the buffer wait via the loading
         // spinner instead of silently playing dead air. With autoWaits = true
@@ -188,24 +210,24 @@ final class CueAudioPlayer: ObservableObject {
 
     deinit {
         if let obs = timeObserver { player.removeTimeObserver(obs) }
-        if let saved = savedState {
-            // Shared player — pause + restore the parent's position so the
-            // main video isn't stuck at the practice cue's time when the
-            // sheet closes. forwardPlaybackEndTime back to .positiveInfinity
-            // (the default) so main playback can resume past the cue's end.
-            // Also restore autoWaits so the main player keeps the responsive
-            // behavior LibraryDetailView configured for it (false → first
-            // tap on play in the AVPlayerViewController responds immediately).
-            player.pause()
-            player.automaticallyWaitsToMinimizeStalling = saved.autoWaitsToMinimizeStalling
-            player.currentItem?.forwardPlaybackEndTime =
+        // Always restore the main video player's state if we touched it
+        // (regardless of whether `player` is the same instance or a separate
+        // audio-sidecar player). forwardPlaybackEndTime back to
+        // .positiveInfinity so main playback can resume past the cue's end.
+        // autoWaits restored so LibraryDetailView's responsive-play behavior
+        // (false → AVPlayerViewController's play button responds immediately)
+        // survives the round-trip.
+        if let main = mainPlayer, let saved = savedMainState {
+            main.pause()
+            main.automaticallyWaitsToMinimizeStalling = saved.autoWaitsToMinimizeStalling
+            main.currentItem?.forwardPlaybackEndTime =
                 saved.forwardEndTime.isValid ? saved.forwardEndTime : .positiveInfinity
-            player.seek(to: saved.time, toleranceBefore: .zero, toleranceAfter: .zero)
+            main.seek(to: saved.time, toleranceBefore: .zero, toleranceAfter: .zero)
             // Don't auto-resume — let the user re-tap play on the main view if
-            // they want to keep watching. Auto-resuming would surprise them
-            // mid-conversation about the cue they just practiced.
-        } else {
-            player.pause()
+            // they want to keep watching.
         }
+        // If our cue player is OUR OWN (audio sidecar or standalone fallback),
+        // pause it. (Shared case: main player == player, already paused above.)
+        if ownsPlayer { player.pause() }
     }
 }

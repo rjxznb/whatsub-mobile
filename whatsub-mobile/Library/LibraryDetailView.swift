@@ -34,11 +34,19 @@ struct LibraryDetailView: View {
     private var isLandscape: Bool { vSize == .compact }
 
     /// Signed CDN URL for the OSS-hosted video, or nil for YouTube-fallback
-    /// entries. Practice sheets (跟读 / 听抄) use this for their own
-    /// CueAudioPlayer (independent of the primary `avPlayer` so scrub state
-    /// stays clean).
+    /// entries. Practice sheets fall back to this when no audio sidecar is
+    /// available (entries synced before 2026-05-29).
     private var ossVideoURL: URL? {
         guard let s = vm.entry?.videoUrl else { return nil }
+        return URL(string: s)
+    }
+
+    /// Signed CDN URL for the audio-only .m4a sidecar (since 2026-05-29
+    /// desktop sync). Practice sheets prefer this — ~30× less bandwidth per
+    /// cue than fetching MP4 byte ranges. Nil for pre-sidecar entries; sheets
+    /// fall back to ossVideoURL via the shared main AVPlayer.
+    private var ossAudioURL: URL? {
+        guard let s = vm.entry?.audioUrl else { return nil }
         return URL(string: s)
     }
 
@@ -106,16 +114,21 @@ struct LibraryDetailView: View {
             GlossSheet(gloss: g)
         }
         .sheet(item: $shadowCue) { cue in
-            // Pass the existing avPlayer so the sheet reuses the already-
-            // buffered OSS video instead of opening a second HTTP connection
-            // + re-parsing the moov. Big videos used to take ~1 min to start
-            // emitting audio on first sheet open — now it's instant when the
-            // main player has already loaded. Sheet pauses + restores the
-            // shared player on dismiss so main video position is preserved.
-            ShadowSheet(cue: cue, sharedPlayer: avPlayer, videoURL: ossVideoURL)
+            // Pass the small audio sidecar URL when available (preferred since
+            // 2026-05-29 — ~30× less bandwidth per cue than pulling MP4 byte
+            // ranges). Fallback chain: ossAudioURL → ossVideoURL via shared
+            // avPlayer → standalone player built from ossVideoURL. The shared
+            // avPlayer is also passed so the main video pauses + restores
+            // even when we're driving a separate audio player.
+            ShadowSheet(
+                cue: cue,
+                sharedPlayer: avPlayer,
+                audioURL: ossAudioURL,
+                videoURL: ossVideoURL
+            )
         }
         .sheet(item: $clozeCue) { cue in
-            // Same shared-player optimization (see ShadowSheet above). Pass
+            // Same audio-sidecar preference (see ShadowSheet above). Pass
             // ALL cues (not a filtered pool) so the sheet can advance via
             // 下一句 without dismissing; ClozeSheet filters currentCue out
             // when picking distractors.
@@ -123,6 +136,7 @@ struct LibraryDetailView: View {
                 cue: cue,
                 allCues: vm.entry?.analysisJson.subtitles ?? [],
                 sharedPlayer: avPlayer,
+                audioURL: ossAudioURL,
                 videoURL: ossVideoURL
             )
         }
