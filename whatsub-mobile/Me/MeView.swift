@@ -8,6 +8,9 @@ struct MeView: View {
     @EnvironmentObject var store: StoreManager
     @State private var showManageSubscriptions = false
     @State private var showLogoutConfirm = false
+    @State private var showDeleteAccountConfirm = false
+    @State private var deletingAccount = false
+    @State private var deleteAccountError: String?
     @State private var showStaging = false
     @State private var showSubscribe = false
     @ObservedObject private var vocab = VocabStore.shared
@@ -134,6 +137,26 @@ struct MeView: View {
                         } label: {
                             Text("退出登录").frame(maxWidth: .infinity)
                         }
+                        // Apple Guideline 5.1.1(v): any app supporting account
+                        // creation must offer in-app account deletion. Distinct
+                        // from 退出登录 — this is a hard cascade-delete that
+                        // can't be undone.
+                        Button(role: .destructive) {
+                            showDeleteAccountConfirm = true
+                        } label: {
+                            if deletingAccount {
+                                HStack {
+                                    ProgressView().tint(.red)
+                                    Text("正在删除…")
+                                }.frame(maxWidth: .infinity)
+                            } else {
+                                Text("删除账号").frame(maxWidth: .infinity)
+                            }
+                        }
+                        .disabled(deletingAccount)
+                        if let err = deleteAccountError {
+                            Text(err).font(.caption).foregroundStyle(.red)
+                        }
                     }
                     .listRowBackground(Color.whatsubBgElev)
                     .confirmationDialog("退出登录？", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
@@ -141,6 +164,12 @@ struct MeView: View {
                         Button("取消", role: .cancel) {}
                     } message: {
                         Text("退出后需重新用邮箱验证码登录。云端 library、语料库和已购权益不会丢失。")
+                    }
+                    .confirmationDialog("删除账号？", isPresented: $showDeleteAccountConfirm, titleVisibility: .visible) {
+                        Button("永久删除我的账号", role: .destructive) { Task { await performDeleteAccount() } }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("此操作将永久删除你的全部云端数据：library 视频和字幕、个人语料库、订阅状态、登录会话。OSS 上的视频也会被清除。**不可恢复**。\n\n网站授权 / iOS 订阅交易记录会保留（用于退款审计），下次用同一邮箱注册不会恢复你的旧云端数据。")
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -191,5 +220,28 @@ struct MeView: View {
         Label(text, systemImage: icon)
             .foregroundStyle(color)
             .labelStyle(.titleAndIcon)
+    }
+
+    /// DELETE /api/license/auth/account → on success, log the user out so
+    /// they land back on AuthGateView with their session invalidated. The
+    /// backend cascade is exhaustive (library, corpus, sessions,
+    /// entitlements); failures here are unusual but we surface the message.
+    /// For the demo account (DEMO_REVIEW_EMAIL) the backend returns
+    /// {ok:true,demo:true} without touching the DB — Apple's reviewer flow
+    /// looks identical from the iOS side.
+    private func performDeleteAccount() async {
+        guard let token = appState.session?.sessionToken else { return }
+        deletingAccount = true
+        deleteAccountError = nil
+        do {
+            try await WhatsubAPI.shared.deleteAccount(token: token)
+            // Local cleanup mirrors what backend already did server-side.
+            appState.logout()
+        } catch let e as APIError {
+            deleteAccountError = e.chinese
+        } catch {
+            deleteAccountError = "删除失败：\(error.localizedDescription)"
+        }
+        deletingAccount = false
     }
 }

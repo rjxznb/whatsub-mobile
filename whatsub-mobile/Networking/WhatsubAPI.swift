@@ -36,6 +36,15 @@ actor WhatsubAPI {
         _ = try? await postExpectingOk(Endpoints.auth("logout"), body: Data("{}".utf8), bearer: token)
     }
 
+    /// DELETE /api/license/auth/account — Apple Guideline 5.1.1(v) compliance.
+    /// Server cascade-deletes the user's library + corpus + entitlements +
+    /// sessions and best-effort wipes OSS objects. Throws on network or 5xx
+    /// so the caller can show an error; on success the caller should clear
+    /// the local session (server already invalidated it).
+    func deleteAccount(token: String) async throws {
+        _ = try await delete(Endpoints.auth("account"), bearer: token)
+    }
+
 
     // ----- IAP -----
 
