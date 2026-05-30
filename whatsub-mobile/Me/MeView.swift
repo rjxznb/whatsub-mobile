@@ -137,6 +137,11 @@ struct MeView: View {
                         } label: {
                             Text("退出登录").frame(maxWidth: .infinity)
                         }
+                        // List rows default to a 16pt leading separator inset
+                        // (sized for hypothetical leading icons). Both rows
+                        // here are centered text — push the separator's left
+                        // edge all the way to 0 so it spans the full row.
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                         // Apple Guideline 5.1.1(v): any app supporting account
                         // creation must offer in-app account deletion. Distinct
                         // from 退出登录 — this is a hard cascade-delete that
@@ -154,6 +159,7 @@ struct MeView: View {
                             }
                         }
                         .disabled(deletingAccount)
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                         if let err = deleteAccountError {
                             Text(err).font(.caption).foregroundStyle(.red)
                         }
