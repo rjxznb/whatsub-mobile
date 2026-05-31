@@ -548,29 +548,47 @@ enum PhraseSelector {
 
         guard classified.count >= 3 else { return nil }
 
-        // 2. In the highest-priority tier that has any candidates, try for a
-        //    same-tag bucket of size ≥3. CRITICAL: do NOT fall through to a
-        //    lower tier's tag-bucket — spec §6.1 hard rule is that Tier1 wins
-        //    even when Tier3 has tighter tag cohesion. If the highest non-
-        //    empty tier doesn't yield a qualifying bucket, fall through to
-        //    step 3 (flat tier-ordered fill).
-        for targetTier in [Tier.t1, .t2, .t3] {
-            let inTier = classified.filter { $0.tier == targetTier }
-            guard !inTier.isEmpty else { continue }   // empty tier — keep looking for the next one
-            if let (tag, bucket) = largestTagBucket(in: inTier), bucket.count >= 3 {
-                return Pick(
-                    phrases: Array(bucket.prefix(3)).map { sessionPhrase(from: $0.item) },
-                    suggestedTag: tag
-                )
-            }
-            break   // first non-empty tier owns the decision; don't probe lower tiers
+        // 2. Tier 1 has a 3-same-tag bucket → use it directly.
+        // 3. Tier 1 has 2+ items but no 3-bucket → {2 Tier 1 + 1 Tier 2/3} mix
+        //    (spec §6.1 step 2: spaced-repetition rescue from Tier 2 gets a slot).
+        // 4. Tier 1 has 0 or 1 items → cross-tag tier-order fill.
+        //
+        // (Caught by `testProducedButDueGoesIntoTier2` in CI — earlier "strict
+        // tier order" variant never picked Tier 2's mastered+due rescue items.)
+        let t1 = classified.filter { $0.tier == .t1 }
+        let t2 = classified.filter { $0.tier == .t2 }
+        let t3 = classified.filter { $0.tier == .t3 }
+        // Rule 2
+        if t1.count >= 3, let (tag, bucket) = largestTagBucket(in: t1), bucket.count >= 3 {
+            return Pick(
+                phrases: Array(bucket.prefix(3)).map { sessionPhrase(from: $0.item) },
+                suggestedTag: tag
+            )
         }
-
-        // 3. Cross-tag fallback (still tier-ordered): take Tier1 first, then Tier2, then Tier3.
+        // Rule 3
+        if t1.count >= 2 {
+            let pair = bestSameTagPair(in: t1) ?? Array(t1.prefix(2))
+            let preferTags = Set(pair.flatMap { $0.item.tags })
+            let third: Cand
+            if let t2pick = pickPreferringTags(from: t2, prefer: preferTags) {
+                third = t2pick
+            } else if let t3pick = pickPreferringTags(from: t3, prefer: preferTags) {
+                third = t3pick
+            } else if t1.count >= 3 {
+                let pickedKeys = Set(pair.map { $0.item.phraseNormalized })
+                guard let extra = t1.first(where: { !pickedKeys.contains($0.item.phraseNormalized) }) else { return nil }
+                third = extra
+            } else {
+                return nil
+            }
+            let picked = pair + [third]
+            return Pick(phrases: picked.map { sessionPhrase(from: $0.item) },
+                        suggestedTag: dominantTag(of: picked.map { $0.item.tags }))
+        }
+        // Rule 4: t1.count is 0 or 1; cross-tag tier-order fill.
         var picked: [Cand] = []
-        for targetTier in [Tier.t1, .t2, .t3] {
-            let inTier = classified.filter { $0.tier == targetTier }
-            for c in inTier {
+        for tier in [t1, t2, t3] {
+            for c in tier {
                 if picked.count == 3 { break }
                 if !picked.contains(where: { $0.item.phraseNormalized == c.item.phraseNormalized }) {
                     picked.append(c)
@@ -579,13 +597,34 @@ enum PhraseSelector {
             if picked.count == 3 { break }
         }
         guard picked.count == 3 else { return nil }
-        // 4. Try to give the LLM a suggested tag if 2+ of the picks share one.
-        let suggested = dominantTag(of: picked.map { $0.item.tags })
         return Pick(phrases: picked.map { sessionPhrase(from: $0.item) },
-                    suggestedTag: suggested)
+                    suggestedTag: dominantTag(of: picked.map { $0.item.tags }))
     }
 
     // ---- helpers ----
+
+    /// Returns 2 Tier-1 items sharing a tag, if any pair exists; otherwise nil.
+    private static func bestSameTagPair(in cands: [Cand]) -> [Cand]? {
+        for c1 in cands {
+            for c2 in cands where c2.item.phraseNormalized != c1.item.phraseNormalized {
+                if !Set(c1.item.tags).isDisjoint(with: c2.item.tags) {
+                    return [c1, c2]
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Picks one item from `pool`, preferring items whose tags intersect `prefer`.
+    /// Returns nil if pool is empty.
+    private static func pickPreferringTags(from pool: [Cand], prefer: Set<String>) -> Cand? {
+        if pool.isEmpty { return nil }
+        if !prefer.isEmpty,
+           let match = pool.first(where: { !Set($0.item.tags).isDisjoint(with: prefer) }) {
+            return match
+        }
+        return pool.first
+    }
 
     /// (tag, candidates-with-that-tag) for the largest single-tag cluster.
     private static func largestTagBucket(in cands: [Cand]) -> (String, [Cand])? {
