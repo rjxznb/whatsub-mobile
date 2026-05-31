@@ -138,10 +138,22 @@ final class QuickChatViewModel: ObservableObject {
                 switch event {
                 case .dialogDelta(let s):
                     turns[turnIdx].assistantText += s
+                    // Re-sanitize the full running buffer on each delta so that a
+                    // leading `<assistant>` tag arriving split across chunks is still
+                    // stripped once the full tag has accumulated. O(n) per delta but
+                    // n is small (a few hundred chars per turn).
+                    turns[turnIdx].assistantText = AssistantTextSanitizer.sanitize(turns[turnIdx].assistantText)
                     if phase == .thinking { phase = .speaking }
                 case .sentence(let s):
-                    Speaker.enqueue(s, locale: "en-US",
-                                    rate: AVSpeechUtteranceDefaultSpeechRate)
+                    let clean = AssistantTextSanitizer.sanitize(s)
+                    // Skip TTS for sentences with no ASCII letters — Speaker uses
+                    // en-US voice which goes silent on pure Chinese content. The
+                    // dialogue should be all-English now (system prompt rule 3),
+                    // but defensive against LLM lapses.
+                    if clean.unicodeScalars.contains(where: { $0.isASCII && CharacterSet.letters.contains($0) }) {
+                        Speaker.enqueue(clean, locale: "en-US",
+                                        rate: AVSpeechUtteranceDefaultSpeechRate)
+                    }
                 case .verdict(let v):
                     turns[turnIdx].verdict = v
                     applyVerdict(v)
