@@ -34,4 +34,14 @@ final class SentenceChunkerTests: XCTestCase {
         XCTAssertEqual(c.flush(), ["Hello"])  // trimmed
         XCTAssertEqual(c.flush(), [])         // already flushed
     }
+
+    func testChineseFullWidthPeriodIsTerminator() {
+        var c = SentenceChunker()
+        XCTAssertEqual(c.feed("情景：你好。"), ["情景：你好。"])
+    }
+
+    func testChineseFullWidthQuestionAndExclamationAreTerminators() {
+        var c = SentenceChunker()
+        XCTAssertEqual(c.feed("你好？当然！"), ["你好？", "当然！"])
+    }
 }
