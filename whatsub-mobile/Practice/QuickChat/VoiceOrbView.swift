@@ -1,32 +1,36 @@
 import SwiftUI
 
-/// Siri-style frosted-glass orb. Three layers stacked:
+/// "Heart of the Ocean" sapphire-style orb. Reverse of the prior frosted-glass
+/// approach: deep dark core radiating out to a bright rim, sharp specular
+/// highlight (not soft), rim light on the opposite side, subtle sparkle glints
+/// that fade in and out independently.
 ///
-/// 1. Outer halo — soft colored glow, blurred, scales with pulse.
-/// 2. Color blob layer — 3 blurred colored circles drifting/rotating
-///    behind the glass; gives the iridescent swirl (this is what Siri does).
-/// 3. Frosted glass surface — `.ultraThinMaterial` clipped to circle,
-///    with thin rim highlight, top-left specular sheen, bottom-right
-///    shadow for depth.
-///
-/// Pure visual. Driven by an `OrbState` the parent passes in. The blob
-/// drift animates continuously; pulse + halo speed varies by state.
+/// Layers:
+///   1. Outer halo — colored glow, blurred
+///   2. Inner facet plane — slowly rotating angular highlights INSIDE the orb,
+///      simulating internal reflections from cut facets
+///   3. Gemstone body — radial gradient deep core → mid → bright rim
+///   4. Specular highlight — small sharp white spot upper-left
+///   5. Edge rim light — bright crescent on bottom-right
+///   6. Outer ring stroke — gem-edge bright outline
+///   7. Sparkle dots — 3 tiny white dots fading in/out (the "diamond setting")
 struct VoiceOrbView: View {
     enum OrbState: Equatable {
         case idle
-        case thinking         // slow rotation, gentle pulse
-        case speaking         // medium blue-cyan pulse
-        case recording        // fast red-orange pulse
-        case transcribing     // fast yellow shimmer
+        case thinking
+        case speaking
+        case recording
+        case transcribing
     }
 
     let state: OrbState
 
-    // Animated state
     @State private var pulse: CGFloat = 1.0
     @State private var rotation: Double = 0
-    @State private var blobDrift: Double = 0
-    @State private var glowOpacity: Double = 0.45
+    @State private var glowOpacity: Double = 0.5
+    @State private var sparkle1: Double = 0
+    @State private var sparkle2: Double = 0
+    @State private var sparkle3: Double = 0
 
     private let orbSize: CGFloat = 200
     private let haloSize: CGFloat = 280
@@ -34,187 +38,211 @@ struct VoiceOrbView: View {
     var body: some View {
         ZStack {
             outerHalo
-            glassOrb
+            ZStack {
+                facetPlane
+                gemstoneBody
+                specularHighlight
+                rimLight
+                edgeRing
+            }
+            .frame(width: orbSize, height: orbSize)
+            .scaleEffect(pulse)
+            .shadow(color: coreColor.opacity(0.7), radius: 30, x: 0, y: 4)
+            sparkles
         }
         .frame(width: haloSize, height: haloSize)
         .onAppear { startAnimations(for: state) }
-        .onChange(of: state) { newState in startAnimations(for: newState) }
+        .onChange(of: state) { applyAnimations(for: $0) }
     }
 
-    // ---- layer 1: outer halo (soft colored glow) ----
+    // ---- layer 1: outer halo ----
     private var outerHalo: some View {
         Circle()
-            .fill(palette.primary.opacity(glowOpacity))
+            .fill(coreColor.opacity(glowOpacity))
             .frame(width: haloSize, height: haloSize)
             .blur(radius: 50)
             .scaleEffect(pulse)
     }
 
-    // ---- layers 2 + 3: the glass orb itself ----
-    private var glassOrb: some View {
+    // ---- layer 2: internal facet plane (rotating angular highlights) ----
+    private var facetPlane: some View {
         ZStack {
-            // Layer 2 — colorful drifting blobs (the iridescence)
-            blobLayer
-            // Layer 3 — frosted glass surface + specular detail
-            glassSurface
+            facetStreak(opacity: 0.30, width: 50, height: 110, rotation: 35,
+                        offsetX: -22, offsetY: -28)
+            facetStreak(opacity: 0.22, width: 45, height: 90, rotation: -40,
+                        offsetX: 28, offsetY: 18)
+            facetStreak(opacity: 0.18, width: 30, height: 70, rotation: 75,
+                        offsetX: -5, offsetY: 35)
         }
-        .frame(width: orbSize, height: orbSize)
-        .scaleEffect(pulse)
-        .shadow(color: palette.primary.opacity(0.5), radius: 28, x: 0, y: 4)
-    }
-
-    // ---- blob layer (3 blurred circles, drifting + rotating) ----
-    private var blobLayer: some View {
-        ZStack {
-            blob(color: palette.primary,
-                 size: 170,
-                 offsetX: 24 * cos(blobDrift * 1.0),
-                 offsetY: 22 * sin(blobDrift * 1.0),
-                 blurRadius: 32)
-            blob(color: palette.secondary,
-                 size: 140,
-                 offsetX: 28 * cos(blobDrift * 1.4 + 2.1),
-                 offsetY: 26 * sin(blobDrift * 1.4 + 2.1),
-                 blurRadius: 28)
-            blob(color: palette.accent,
-                 size: 120,
-                 offsetX: 22 * cos(blobDrift * 1.8 + 4.2),
-                 offsetY: 24 * sin(blobDrift * 1.8 + 4.2),
-                 blurRadius: 24)
-        }
-        .frame(width: orbSize, height: orbSize)
-        .clipShape(Circle())
         .rotationEffect(.degrees(rotation))
+        .clipShape(Circle())
+        .frame(width: orbSize, height: orbSize)
     }
 
-    private func blob(color: Color, size: CGFloat,
-                      offsetX: CGFloat, offsetY: CGFloat, blurRadius: CGFloat) -> some View {
+    private func facetStreak(opacity: Double, width: CGFloat, height: CGFloat,
+                             rotation: Double, offsetX: CGFloat, offsetY: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(
+                LinearGradient(
+                    colors: [.white.opacity(opacity), rimColor.opacity(opacity * 0.6), .clear],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
+            .frame(width: width, height: height)
+            .rotationEffect(.degrees(rotation))
+            .offset(x: offsetX, y: offsetY)
+            .blur(radius: 5)
+            .blendMode(.plusLighter)
+    }
+
+    // ---- layer 3: gemstone body (deep core → bright rim) ----
+    private var gemstoneBody: some View {
         Circle()
             .fill(
                 RadialGradient(
-                    colors: [color.opacity(0.95), color.opacity(0.55), color.opacity(0.0)],
-                    center: .center, startRadius: 1, endRadius: size / 2
+                    colors: [
+                        deepCoreColor,   // very dark navy/red/amber at very center
+                        coreColor,       // saturated mid layer
+                        rimColor         // bright outer edge
+                    ],
+                    center: .center,
+                    startRadius: 5,
+                    endRadius: orbSize / 2
                 )
-            )
-            .frame(width: size, height: size)
-            .offset(x: offsetX, y: offsetY)
-            .blur(radius: blurRadius)
-    }
-
-    // ---- glass surface (frosted material + rim + highlight + shadow) ----
-    private var glassSurface: some View {
-        Circle()
-            .fill(.ultraThinMaterial)
-            .overlay(
-                // Rim — thin bright stroke around the edge for the glass-edge specular.
-                Circle()
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [.white.opacity(0.6), .white.opacity(0.05), .white.opacity(0.0), .white.opacity(0.25)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1.2
-                    )
-            )
-            .overlay(
-                // Top-left sheen — concentrated bright highlight, glass-like.
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [.white.opacity(0.5), .white.opacity(0.08), .clear],
-                            center: UnitPoint(x: 0.3, y: 0.25),
-                            startRadius: 1, endRadius: 80
-                        )
-                    )
-                    .blendMode(.plusLighter)
-            )
-            .overlay(
-                // Bottom-right shadow — gives depth, suggests light coming from upper-left.
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [.clear, .black.opacity(0.22)],
-                            center: UnitPoint(x: 0.78, y: 0.82),
-                            startRadius: 30, endRadius: 110
-                        )
-                    )
             )
             .frame(width: orbSize, height: orbSize)
     }
 
-    // ---- per-state color palette ----
-    private struct Palette {
-        let primary: Color
-        let secondary: Color
-        let accent: Color
+    // ---- layer 4: sharp specular (small hard highlight) ----
+    private var specularHighlight: some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [.white.opacity(0.85), .white.opacity(0.2), .clear],
+                    center: UnitPoint(x: 0.32, y: 0.27),
+                    startRadius: 1, endRadius: 28
+                )
+            )
+            .frame(width: orbSize, height: orbSize)
+            .blendMode(.plusLighter)
     }
 
-    private var palette: Palette {
+    // ---- layer 5: rim light (bright crescent bottom-right) ----
+    private var rimLight: some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [.clear, .clear, rimColor.opacity(0.7), .white.opacity(0.5)],
+                    center: UnitPoint(x: 0.78, y: 0.82),
+                    startRadius: 60, endRadius: 105
+                )
+            )
+            .frame(width: orbSize, height: orbSize)
+            .blendMode(.plusLighter)
+    }
+
+    // ---- layer 6: edge ring (gem-edge outline) ----
+    private var edgeRing: some View {
+        Circle()
+            .strokeBorder(
+                LinearGradient(
+                    colors: [
+                        .white.opacity(0.55),
+                        rimColor.opacity(0.85),
+                        .white.opacity(0.25),
+                        rimColor.opacity(0.55)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 1.5
+            )
+            .frame(width: orbSize, height: orbSize)
+    }
+
+    // ---- layer 7: sparkle dots ----
+    private var sparkles: some View {
+        ZStack {
+            sparkleDot(offsetX: -55, offsetY: -68, opacity: sparkle1)
+            sparkleDot(offsetX: 62, offsetY: -42, opacity: sparkle2)
+            sparkleDot(offsetX: -32, offsetY: 72, opacity: sparkle3)
+        }
+        .frame(width: haloSize, height: haloSize)
+    }
+
+    private func sparkleDot(offsetX: CGFloat, offsetY: CGFloat, opacity: Double) -> some View {
+        ZStack {
+            // Outer glow.
+            Circle().fill(.white.opacity(0.4)).frame(width: 10, height: 10).blur(radius: 4)
+            // Hard dot.
+            Circle().fill(.white).frame(width: 3, height: 3)
+        }
+        .opacity(opacity)
+        .offset(x: offsetX, y: offsetY)
+    }
+
+    // ---- color palette per state ----
+    private var deepCoreColor: Color {
         switch state {
-        case .recording:
-            // Hot palette — red + orange + pink. Reads as "alert/listening".
-            return Palette(
-                primary: Color(red: 1.0, green: 0.30, blue: 0.35),
-                secondary: Color(red: 1.0, green: 0.55, blue: 0.30),
-                accent: Color(red: 0.95, green: 0.40, blue: 0.65)
-            )
-        case .transcribing:
-            // Warm yellow shimmer with brand-yellow accent.
-            return Palette(
-                primary: Color(red: 1.00, green: 0.83, blue: 0.27), // brand yellow #FCD34D
-                secondary: Color(red: 1.00, green: 0.62, blue: 0.20),
-                accent: Color(red: 0.96, green: 0.95, blue: 0.66)
-            )
-        case .speaking, .thinking, .idle:
-            // Cool palette — blue + cyan + violet. Brand-aligned (whatsubAccent dominant).
-            return Palette(
-                primary: Color(red: 0.23, green: 0.61, blue: 1.00), // whatsubAccent ~#3B9BFF
-                secondary: Color(red: 0.30, green: 0.85, blue: 0.95),
-                accent: Color(red: 0.55, green: 0.45, blue: 0.95)
-            )
+        case .recording:    return Color(red: 0.22, green: 0.02, blue: 0.06)   // dark ruby
+        case .transcribing: return Color(red: 0.30, green: 0.16, blue: 0.02)   // dark topaz
+        default:            return Color(red: 0.02, green: 0.05, blue: 0.18)   // dark navy (sapphire)
+        }
+    }
+    private var coreColor: Color {
+        switch state {
+        case .recording:    return Color(red: 0.85, green: 0.12, blue: 0.20)
+        case .transcribing: return Color(red: 1.00, green: 0.62, blue: 0.10)
+        default:            return Color(red: 0.10, green: 0.28, blue: 0.85)   // sapphire blue
+        }
+    }
+    private var rimColor: Color {
+        switch state {
+        case .recording:    return Color(red: 1.00, green: 0.40, blue: 0.55)
+        case .transcribing: return Color(red: 1.00, green: 0.90, blue: 0.50)
+        default:            return Color(red: 0.40, green: 0.70, blue: 1.00)   // electric cerulean
         }
     }
 
     // ---- animation driver ----
     private func startAnimations(for s: OrbState) {
-        // 1. Pulse — scale 1.0 ↔ peak with a sin-like ease, repeating.
+        applyAnimations(for: s)
+    }
+
+    private func applyAnimations(for s: OrbState) {
+        // Pulse (scale + halo)
         let (peak, period): (CGFloat, Double)
         switch s {
-        case .idle:         (peak, period) = (1.05, 3.2)
-        case .thinking:     (peak, period) = (1.06, 2.4)
-        case .speaking:     (peak, period) = (1.15, 1.3)
-        case .recording:    (peak, period) = (1.18, 0.8)
-        case .transcribing: (peak, period) = (1.10, 0.55)
+        case .idle:         (peak, period) = (1.04, 3.2)
+        case .thinking:     (peak, period) = (1.05, 2.4)
+        case .speaking:     (peak, period) = (1.12, 1.4)
+        case .recording:    (peak, period) = (1.14, 0.9)
+        case .transcribing: (peak, period) = (1.08, 0.6)
         }
         pulse = 1.0
-        glowOpacity = 0.40
+        glowOpacity = 0.45
         withAnimation(.easeInOut(duration: period).repeatForever(autoreverses: true)) {
             pulse = peak
-            glowOpacity = (s == .recording) ? 0.7 : 0.6
+            glowOpacity = s == .recording ? 0.7 : 0.55
         }
 
-        // 2. Rotation — only meaningful on .thinking (slow spin makes blobs swirl).
-        //    Other states: very slow drift rotation so glass never looks frozen.
+        // Internal facet rotation — slow always, faster on .thinking.
         rotation = 0
-        let rotationPeriod: Double = (s == .thinking) ? 4.0 : 20.0
-        withAnimation(.linear(duration: rotationPeriod).repeatForever(autoreverses: false)) {
+        let rotPeriod: Double = s == .thinking ? 5.5 : 22.0
+        withAnimation(.linear(duration: rotPeriod).repeatForever(autoreverses: false)) {
             rotation = 360
         }
 
-        // 3. Blob drift — independent parametric motion so the blobs never line
-        //    up the same way twice. Faster for active states.
-        blobDrift = 0
-        let driftPeriod: Double = {
-            switch s {
-            case .idle: return 8.0
-            case .thinking: return 5.0
-            case .speaking: return 3.5
-            case .recording: return 2.0
-            case .transcribing: return 1.6
-            }
-        }()
-        withAnimation(.linear(duration: driftPeriod).repeatForever(autoreverses: false)) {
-            blobDrift = .pi * 2
+        // Sparkles — each blinks at different period + delay so they twinkle out of phase.
+        sparkle1 = 0; sparkle2 = 0; sparkle3 = 0
+        withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true).delay(0.0)) {
+            sparkle1 = 0.85
+        }
+        withAnimation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true).delay(0.6)) {
+            sparkle2 = 0.7
+        }
+        withAnimation(.easeInOut(duration: 2.1).repeatForever(autoreverses: true).delay(0.3)) {
+            sparkle3 = 0.6
         }
     }
 }
