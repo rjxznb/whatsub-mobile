@@ -8,6 +8,9 @@ struct CorpusView: View {
     private var token: String? { appState.session?.sessionToken }
     @State private var showQuiz = false
     @State private var showSubscribe = false
+    @State private var showQuickChat: Bool = false
+    @State private var quickChatPick: PhraseSelector.Pick?
+    @State private var quickChatColdStart: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -17,6 +20,11 @@ struct CorpusView: View {
                         .font(.system(size: 34, weight: .bold))
                         .foregroundStyle(.whatsubInk)
                     Spacer()
+                    Button { tapQuickChat() } label: {
+                        Label("对话陪练", systemImage: "bubble.left.and.bubble.right")
+                            .font(.subheadline).fontWeight(.semibold)
+                            .foregroundStyle(.whatsubAccent)
+                    }
                     Button { showQuiz = true } label: {
                         Label("单词卡", systemImage: "rectangle.stack.badge.play")
                             .font(.subheadline).fontWeight(.semibold)
@@ -62,6 +70,17 @@ struct CorpusView: View {
                     }
                 })
                 .environmentObject(store)
+            }
+            .sheet(isPresented: $showQuickChat) {
+                if let pick = quickChatPick {
+                    QuickChatView(phrases: pick.phrases, suggestedTag: pick.suggestedTag)
+                        .environmentObject(appState)
+                }
+            }
+            .alert("语料不够", isPresented: $quickChatColdStart) {
+                Button("好") { quickChatColdStart = false }
+            } message: {
+                Text("先用插件划词收藏 3 个以上短语就可以开练。")
             }
         }
     }
@@ -146,6 +165,25 @@ struct CorpusView: View {
                     }.listRowBackground(Color.whatsubBgElev)
                 }.scrollContentBackground(.hidden)
             }
+        }
+    }
+
+    private func tapQuickChat() {
+        // Pull mine items + the two progress stores; run the pure selector.
+        let prodStore = ProductionProgressStore()
+        let quizStore = QuizProgressStore()
+        let pick = PhraseSelector.pick(
+            from: vm.mine,
+            isRecognized: { quizStore.progress(for: $0).isMastered },
+            productionMastered: { prodStore.progress(for: $0)?.masteredAt != nil },
+            isDueForRepetition: { prodStore.isDueForRepetition(phrase: $0, now: Date().timeIntervalSince1970) },
+            now: Date().timeIntervalSince1970
+        )
+        if let p = pick {
+            quickChatPick = p
+            showQuickChat = true
+        } else {
+            quickChatColdStart = true
         }
     }
 
