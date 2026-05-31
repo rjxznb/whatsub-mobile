@@ -34,7 +34,9 @@ final class ProductionProgressStoreTests: XCTestCase {
     }
 
     func testRecordWrongIncrementsAttemptAndStoresNote() {
-        let store = ProductionProgressStore(fileURL: tempURL())
+        let url = tempURL()
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        let store = ProductionProgressStore(fileURL: url)
         store.recordWrong(phrase: "sort-it-out", note: "时态错误", at: 100)
         let p = store.progress(for: "sort-it-out")!
         XCTAssertEqual(p.usedCorrectCount, 0)
@@ -57,7 +59,9 @@ final class ProductionProgressStoreTests: XCTestCase {
     }
 
     func testIsDueForRepetition() {
-        let store = ProductionProgressStore(fileURL: tempURL())
+        let url = tempURL()
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        let store = ProductionProgressStore(fileURL: url)
         let now: Double = 100 + ProductionProgress.spacedRepetitionWindow
         // Mastered long ago → due.
         store.recordCorrect(phrase: "a", at: 100)
