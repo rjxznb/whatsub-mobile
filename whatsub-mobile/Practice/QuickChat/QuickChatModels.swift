@@ -13,7 +13,7 @@ struct ProductionProgress: Codable, Equatable {
     var masteredAt: Double? = nil   // set when usedCorrectCount first crosses threshold
 
     /// Spec §5: mastery threshold = 2 distinct correct uses (across sessions).
-    static let masteryThreshold = 2
+    static let masteryThreshold: Int = 2
     /// Spec §5: spaced-repetition window. Mastered phrases reenter the pool
     /// after this many seconds idle.
     static let spacedRepetitionWindow: TimeInterval = 7 * 24 * 3600
@@ -49,11 +49,20 @@ struct TurnVerdict: Codable, Equatable {
 
 /// One round of dialogue (one user turn + one assistant reply).
 struct ChatTurn: Identifiable, Equatable {
-    let id = UUID()
+    let id: UUID
     let userText: String           // empty for the opening assistant-only turn
     var assistantText: String      // accumulates as chunks stream in
     var verdict: TurnVerdict?      // parsed from the sentinel block
-    let timestamp: Date = Date()
+    let timestamp: Date
+
+    init(id: UUID = UUID(), userText: String, assistantText: String = "",
+         verdict: TurnVerdict? = nil, timestamp: Date = Date()) {
+        self.id = id
+        self.userText = userText
+        self.assistantText = assistantText
+        self.verdict = verdict
+        self.timestamp = timestamp
+    }
 }
 
 /// End-of-session summary written to ProductionProgressStore.
