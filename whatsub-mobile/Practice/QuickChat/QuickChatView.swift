@@ -37,6 +37,11 @@ struct QuickChatView: View {
     init(phrases: [SessionPhrase], suggestedTag: String?,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
          settings: LlmSettings = LlmSettingsStore.load()) {
+        // Defensive log — if a caller passes 0 phrases we want to surface that
+        // immediately rather than render a blank sheet.
+        if phrases.isEmpty {
+            print("[QuickChatView] WARNING: initialized with 0 phrases — UI will look empty")
+        }
         self.phrases = phrases
         self.suggestedTag = suggestedTag
         let client = ChatCompletionsClient(settings: settings)
@@ -67,6 +72,11 @@ struct QuickChatView: View {
                         .frame(minHeight: 24)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
+                    if case .error(let msg) = vm.phase {
+                        errorBanner(msg)
+                            .padding(.top, 8)
+                            .padding(.horizontal, 16)
+                    }
                     Spacer(minLength: 0)
                     inputBar
                 }
@@ -396,6 +406,30 @@ struct QuickChatView: View {
         } catch {
             micPhase = .idle
         }
+    }
+
+    // ---- error banner ----
+    @ViewBuilder
+    private func errorBanner(_ msg: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title3)
+                .foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("对话失败").font(.subheadline.weight(.semibold)).foregroundStyle(.whatsubInk)
+                Text(msg).font(.footnote).foregroundStyle(.whatsubInkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if msg.contains("LLM 设置") || msg.contains("API Key") || msg.contains("notConfigured") {
+                    Text("提示：到「我的 → LLM 设置」填入 DeepSeek 等服务的 API Key。")
+                        .font(.caption2).foregroundStyle(.whatsubAccent)
+                        .padding(.top, 2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.red.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.red.opacity(0.35), lineWidth: 1))
     }
 
     // ---- youtube replay ----

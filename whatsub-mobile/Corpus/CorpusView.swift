@@ -8,7 +8,6 @@ struct CorpusView: View {
     private var token: String? { appState.session?.sessionToken }
     @State private var showQuiz = false
     @State private var showSubscribe = false
-    @State private var showQuickChat: Bool = false
     @State private var quickChatPick: PhraseSelector.Pick?
     @State private var quickChatColdStart: Bool = false
 
@@ -71,11 +70,9 @@ struct CorpusView: View {
                 })
                 .environmentObject(store)
             }
-            .sheet(isPresented: $showQuickChat) {
-                if let pick = quickChatPick {
-                    QuickChatView(phrases: pick.phrases, suggestedTag: pick.suggestedTag)
-                        .environmentObject(appState)
-                }
+            .sheet(item: $quickChatPick) { pick in
+                QuickChatView(phrases: pick.phrases, suggestedTag: pick.suggestedTag)
+                    .environmentObject(appState)
             }
             .alert("语料不够", isPresented: $quickChatColdStart) {
                 Button("好") { quickChatColdStart = false }
@@ -181,7 +178,6 @@ struct CorpusView: View {
         )
         if let p = pick {
             quickChatPick = p
-            showQuickChat = true
         } else {
             quickChatColdStart = true
         }

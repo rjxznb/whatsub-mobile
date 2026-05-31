@@ -12,7 +12,12 @@ import Foundation
 /// Cold start: returns nil when fewer than 3 candidates remain.
 enum PhraseSelector {
 
-    struct Pick {
+    struct Pick: Identifiable {
+        // Concatenated phrase keys make a stable id without an extra field.
+        // Two different picks (different phrase sets) will get different ids
+        // and SwiftUI's .sheet(item:) treats them as distinct, which is what
+        // we want (a new session = a new sheet identity).
+        var id: String { phrases.map { $0.phraseNormalized }.joined(separator: "|") }
         let phrases: [SessionPhrase]      // length == 3
         let suggestedTag: String?         // dominant shared tag if any; nil = LLM picks scene
     }
