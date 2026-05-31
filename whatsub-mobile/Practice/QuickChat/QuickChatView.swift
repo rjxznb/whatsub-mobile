@@ -3,6 +3,12 @@ import AVFoundation
 import Speech
 import UIKit
 
+/// Identifiable wrapper for sheet(item:) with String payload.
+private struct TranslationTarget: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
 /// QuickChat root sheet. Siri-style auto-listen voice loop:
 ///
 /// 1. Sheet opens → compliance gate → vm.start() (LLM opens scene + TTS plays)
@@ -21,8 +27,13 @@ struct QuickChatView: View {
     @State private var showCompliance: Bool
     @State private var stuckPhrase: SessionPhrase?
     @State private var showTranscript: Bool = false
+    @State private var showCloseConfirm: Bool = false
+    @State private var translatePresented: TranslationTarget?
     @State private var typingMode: Bool = false
     @State private var micPermissionDenied = false
+
+    @AppStorage("quickchat.premium-voice-hint.shown") private var premiumHintShown: Bool = false
+    @State private var showPremiumHint: Bool = false
 
     // VAD state
     @StateObject private var vadCoordinator = VADCoordinator()
@@ -87,8 +98,14 @@ struct QuickChatView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭") {
-                        vadCoordinator.cancel()
-                        Task { await vm.endSession(); dismiss() }
+                        // If conversation hasn't started yet, dismiss immediately.
+                        if vm.turns.isEmpty {
+                            vadCoordinator.cancel()
+                            Speaker.stop()
+                            dismiss()
+                        } else {
+                            showCloseConfirm = true
+                        }
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -115,10 +132,43 @@ struct QuickChatView: View {
             .sheet(isPresented: $showTranscript) {
                 transcriptDrawer.presentationDetents([.medium, .large])
             }
+            .sheet(item: $translatePresented) { target in
+                BubbleTranslationView(original: target.text)
+                    .presentationDetents([.medium, .large])
+            }
+            .confirmationDialog("结束这局练习？",
+                                isPresented: $showCloseConfirm,
+                                titleVisibility: .visible) {
+                Button("结束", role: .destructive) {
+                    vadCoordinator.cancel()
+                    Speaker.stop()                       // stop TTS immediately
+                    Task {
+                        await vm.endSession()            // writes production_progress.json
+                        Speaker.stop()                   // belt-and-suspenders after async work
+                        dismiss()
+                    }
+                }
+                Button("继续练习", role: .cancel) { }
+            } message: {
+                Text("已经用对的短语会保存到掌握度记录。")
+            }
+            .alert("英语朗读更自然", isPresented: $showPremiumHint) {
+                Button("我知道了") {
+                    premiumHintShown = true
+                }
+            } message: {
+                Text("iOS 系统自带的「Premium / Enhanced」神经语音听起来更自然。可以到\n设置 → 辅助功能 → 朗读内容 → 语音 → 英语\n下载一个标有 Premium 的语音（例如 Ava 或 Evan），下次进入对话陪练就会自动使用。")
+            }
         }
         .task {
             await requestPermissions()
             if !showCompliance { await vm.start() }
+            // One-time hint about premium voices.
+            if !premiumHintShown && !Speaker.hasPremiumEnglishVoice {
+                // Delay slightly so it doesn't compete with compliance gate.
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                showPremiumHint = true
+            }
         }
         .onChange(of: showCompliance) { showing in
             if !showing, vm.turns.isEmpty { Task { await vm.start() } }
@@ -285,6 +335,9 @@ struct QuickChatView: View {
                 .onTapGesture { showTranscript = true }  // tap bubble to see history
                 .contextMenu {
                     Button {
+                        translatePresented = TranslationTarget(text: latest.assistantText)
+                    } label: { Label("显示中文", systemImage: "character.bubble") }
+                    Button {
                         ReportMessageSheet.openMailReport(message: latest.assistantText)
                     } label: { Label("上报这条回复", systemImage: "exclamationmark.bubble") }
                 }
@@ -364,10 +417,20 @@ struct QuickChatView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(vm.turns) { turn in
                         VStack(alignment: .leading, spacing: 4) {
-                            if !turn.userText.isEmpty { bubble(turn.userText, isUser: true) }
+                            if !turn.userText.isEmpty {
+                                bubble(turn.userText, isUser: true)
+                                    .contextMenu {
+                                        Button {
+                                            translatePresented = TranslationTarget(text: turn.userText)
+                                        } label: { Label("显示中文", systemImage: "character.bubble") }
+                                    }
+                            }
                             if !turn.assistantText.isEmpty {
                                 bubble(turn.assistantText, isUser: false)
                                     .contextMenu {
+                                        Button {
+                                            translatePresented = TranslationTarget(text: turn.assistantText)
+                                        } label: { Label("显示中文", systemImage: "character.bubble") }
                                         Button {
                                             ReportMessageSheet.openMailReport(message: turn.assistantText)
                                         } label: { Label("上报这条回复", systemImage: "exclamationmark.bubble") }

@@ -44,9 +44,16 @@ enum Speaker {
     static var isSpeaking: Bool { synth.isSpeaking }
 
     /// Stop everything (called when QuickChat ends, user pauses, or the
-    /// AVAudioSession is interrupted).
+    /// AVAudioSession is interrupted). Calls stopSpeaking unconditionally
+    /// (AVSpeechSynthesizer has reported flakiness where isSpeaking returns
+    /// false while queued utterances still play); also deactivates the audio
+    /// session so any tail audio is killed by the system.
     static func stop() {
-        if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
+        synth.stopSpeaking(at: .immediate)
+        // Best-effort session deactivation. AVSpeechSynthesizer doesn't always
+        // honor its own .immediate stop on iOS 16+; deactivating the session
+        // forces any tail audio to silence.
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     // ---- internals ----
@@ -64,16 +71,54 @@ enum Speaker {
         return u
     }
 
+    /// Pick the best available voice for `locale`, preferring quality tier
+    /// (premium > enhanced > default). For English we additionally prefer the
+    /// known-female-name list (Samantha, Ava, ...) within each quality tier so
+    /// the timbre stays consistent with what users have heard since v1.
+    ///
+    /// Premium voices were added in iOS 16+ and use neural TTS — substantially
+    /// more natural than the default Samantha. They are NOT pre-installed; the
+    /// user must download them once via Settings → Accessibility → Spoken
+    /// Content → Voices → English → tap a voice marked "Premium" → Download.
+    /// `hasPremiumEnglishVoice` lets the QuickChatView surface a one-time hint
+    /// if no premium voice is found locally.
     private static func pickVoice(locale: String) -> AVSpeechSynthesisVoice? {
+        let allVoices = AVSpeechSynthesisVoice.speechVoices()
+        let matching = allVoices.filter { $0.language.hasPrefix(locale.prefix(2)) }
+        guard !matching.isEmpty else { return AVSpeechSynthesisVoice(language: locale) }
+
+        // Quality tiers, best first.
+        let tiers: [AVSpeechSynthesisVoiceQuality] = [.premium, .enhanced, .default]
+
         if locale.hasPrefix("en") {
-            let english = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
-            for name in femaleNames {
-                if let v = english.first(where: { $0.name == name && $0.language == "en-US" }) { return v }
+            // English: within each quality tier, prefer the known female names.
+            for tier in tiers {
+                let inTier = matching.filter { $0.quality == tier }
+                // First scan for our preferred names in en-US specifically.
+                for name in femaleNames {
+                    if let v = inTier.first(where: { $0.name == name && $0.language == "en-US" }) { return v }
+                }
+                // Then any en-US in this tier.
+                if let v = inTier.first(where: { $0.language == "en-US" }) { return v }
+                // Then any English variant.
+                if let v = inTier.first { return v }
             }
-            for name in femaleNames {
-                if let v = english.first(where: { $0.name == name }) { return v }
+        } else {
+            // Non-English: just pick best-quality voice for the locale.
+            for tier in tiers {
+                if let v = matching.first(where: { $0.quality == tier && $0.language == locale }) { return v }
+                if let v = matching.first(where: { $0.quality == tier }) { return v }
             }
         }
-        return AVSpeechSynthesisVoice(language: locale)
+        return matching.first ?? AVSpeechSynthesisVoice(language: locale)
+    }
+
+    /// True iff at least one English voice with `.premium` or `.enhanced`
+    /// quality is installed. Used by QuickChatView to decide whether to
+    /// surface a one-time tip about downloading premium voices.
+    static var hasPremiumEnglishVoice: Bool {
+        AVSpeechSynthesisVoice.speechVoices().contains {
+            $0.language.hasPrefix("en") && ($0.quality == .premium || $0.quality == .enhanced)
+        }
     }
 }
