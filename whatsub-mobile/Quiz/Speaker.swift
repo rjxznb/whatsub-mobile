@@ -43,16 +43,21 @@ enum Speaker {
     /// True while any utterance is being spoken or is queued.
     static var isSpeaking: Bool { synth.isSpeaking }
 
-    /// Stop everything (called when QuickChat ends, user pauses, or the
-    /// AVAudioSession is interrupted). Calls stopSpeaking unconditionally
-    /// (AVSpeechSynthesizer has reported flakiness where isSpeaking returns
-    /// false while queued utterances still play); also deactivates the audio
-    /// session so any tail audio is killed by the system.
+    /// Stop current speech without releasing the audio session. Safe to call
+    /// repeatedly during a session (e.g. from vm.pause() on scenePhase changes).
+    /// Calls stopSpeaking unconditionally — AVSpeechSynthesizer.isSpeaking has
+    /// reported flakiness where it returns false while queued utterances still play.
     static func stop() {
         synth.stopSpeaking(at: .immediate)
-        // Best-effort session deactivation. AVSpeechSynthesizer doesn't always
-        // honor its own .immediate stop on iOS 16+; deactivating the session
-        // forces any tail audio to silence.
+    }
+
+    /// Stop speech AND release the audio session. Call this only when the
+    /// QuickChat session is ending permanently (confirmed close) — releasing
+    /// the session early in a session breaks subsequent TTS playback because
+    /// iOS won't immediately accept a reactivation after a deactivation with
+    /// .notifyOthersOnDeactivation.
+    static func releaseSession() {
+        synth.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 

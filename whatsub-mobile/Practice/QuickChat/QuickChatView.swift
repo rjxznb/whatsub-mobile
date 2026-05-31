@@ -58,14 +58,23 @@ struct QuickChatView: View {
         _showCompliance = State(initialValue: !QuickChatComplianceGate.hasAcknowledged)
     }
 
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+    }
+
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
-                Color.whatsubBg.ignoresSafeArea()
+                Color.whatsubBg
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismissKeyboard() }
                 VStack(spacing: 0) {
                     headerChips.padding(.top, 6)
                     Spacer(minLength: 0)
                     VoiceOrbView(state: orbState)
+                        .onTapGesture { dismissKeyboard() }
                     Spacer().frame(height: 18)
                     latestAIBubble
                     Spacer().frame(height: 12)
@@ -102,7 +111,7 @@ struct QuickChatView: View {
                         // If conversation hasn't started yet, dismiss immediately.
                         if vm.turns.isEmpty {
                             vadCoordinator.cancel()
-                            Speaker.stop()
+                            Speaker.releaseSession()
                             dismiss()
                         } else {
                             showCloseConfirm = true
@@ -137,19 +146,17 @@ struct QuickChatView: View {
                 BubbleTranslationView(original: target.text)
                     .presentationDetents([.medium, .large])
             }
-            .confirmationDialog("结束这局练习？",
-                                isPresented: $showCloseConfirm,
-                                titleVisibility: .visible) {
+            .alert("结束这局练习？", isPresented: $showCloseConfirm) {
+                Button("继续练习", role: .cancel) { }
                 Button("结束", role: .destructive) {
                     vadCoordinator.cancel()
-                    Speaker.stop()                       // stop TTS immediately
+                    Speaker.stop()
                     Task {
-                        await vm.endSession()            // writes production_progress.json
-                        Speaker.stop()                   // belt-and-suspenders after async work
+                        await vm.endSession()
+                        Speaker.releaseSession()
                         dismiss()
                     }
                 }
-                Button("继续练习", role: .cancel) { }
             } message: {
                 Text("已经用对的短语会保存到掌握度记录。")
             }
