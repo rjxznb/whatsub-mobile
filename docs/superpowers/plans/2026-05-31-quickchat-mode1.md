@@ -948,14 +948,29 @@ struct VerdictParser {
                     completedVerdict: tail.completedVerdict
                 )
             }
-            // No full sentinel yet — hold back any trailing chars that *might*
-            // be the start of one; flush the rest.
-            let safeCount = max(0, dialogBuffer.count - (Self.startSentinel.count - 1))
+            // No full sentinel yet — hold back ONLY the longest suffix of the
+            // buffer that is a prefix of the start sentinel. Naive "hold back
+            // sentinelLength-1 chars" stalls dialog flushing unnecessarily
+            // (caught in Task 5 review — `testCharBeforePartialSentinelStillFlushed`
+            // requires this smarter approach).
+            let holdback = Self.longestSentinelPrefixSuffix(of: dialogBuffer)
+            let safeCount = dialogBuffer.count - holdback
             let safeEnd = dialogBuffer.index(dialogBuffer.startIndex, offsetBy: safeCount)
             let safe = String(dialogBuffer[..<safeEnd])
             dialogBuffer = String(dialogBuffer[safeEnd...])
             return Output(dialogChunk: safe, completedVerdict: nil)
         }
+    }
+
+    /// Length of the longest suffix of `buffer` that is also a prefix of `startSentinel`.
+    /// Walks from min(buffer.count, sentinelLen-1) down to 1.
+    private static func longestSentinelPrefixSuffix(of buffer: String) -> Int {
+        let maxN = min(buffer.count, startSentinel.count - 1)
+        for n in stride(from: maxN, through: 1, by: -1) {
+            let suffix = String(buffer.suffix(n))
+            if startSentinel.hasPrefix(suffix) { return n }
+        }
+        return 0
     }
 
     /// Flush at end-of-stream. If we were still in `.dialog` and the partial
