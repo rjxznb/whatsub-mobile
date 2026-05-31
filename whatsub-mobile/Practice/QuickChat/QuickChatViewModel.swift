@@ -38,7 +38,8 @@ final class QuickChatViewModel: ObservableObject {
 
     enum Phase: Equatable {
         case idle              // can record / type
-        case recording
+        case recording        // legacy (kept; typing fallback may still use briefly)
+        case listening        // NEW — auto-listen with VAD active
         case thinking          // user input sent, awaiting first chunk
         case speaking          // dialog + TTS streaming
         case paused            // backgrounded / interrupted
@@ -67,6 +68,8 @@ final class QuickChatViewModel: ObservableObject {
     // ---- internal session state ----
     private var turnIndex = 0                       // 0 = opening
     private var written = false                     // ensure single end-of-session write
+    /// How many times VAD timed out with no speech. After 2, end the session.
+    private(set) var noSpeechRounds: Int = 0
 
     init(phrases: [SessionPhrase],
          suggestedTag: String?,
@@ -111,7 +114,7 @@ final class QuickChatViewModel: ObservableObject {
 
     /// Move FSM to paused (scenePhase background, audio session interruption).
     func pause() {
-        if phase == .recording || phase == .speaking || phase == .thinking || phase == .idle {
+        if phase == .recording || phase == .listening || phase == .speaking || phase == .thinking || phase == .idle {
             phase = .paused
             Speaker.stop()
         }
@@ -120,6 +123,34 @@ final class QuickChatViewModel: ObservableObject {
     /// Move back to idle from paused (user tapped "继续" after returning to foreground).
     func resume() {
         if phase == .paused { phase = .idle }
+    }
+
+    /// Called by the view when VAD times out with no user speech. After 2
+    /// consecutive timeouts, ends the session.
+    func handleNoSpeechTimeout() async {
+        noSpeechRounds += 1
+        if noSpeechRounds >= 2 {
+            await endSession()
+        }
+    }
+
+    /// Called when a user message has been transcribed by ASR and is about to
+    /// be submitted. Resets the no-speech counter.
+    func resetNoSpeechCounter() {
+        noSpeechRounds = 0
+    }
+
+    /// Transition the FSM into `.listening`. The view should start the
+    /// VoiceActivityRecorder when this fires.
+    func enterListening() {
+        guard phase == .idle else { return }
+        phase = .listening
+    }
+
+    /// Exit `.listening` back to `.idle` (e.g. user tapped close on listening,
+    /// or switched to typing mode).
+    func exitListening() {
+        if phase == .listening { phase = .idle }
     }
 
     // ---- internal ----

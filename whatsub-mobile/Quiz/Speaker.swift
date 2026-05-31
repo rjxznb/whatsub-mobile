@@ -40,6 +40,9 @@ enum Speaker {
         synth.speak(makeUtterance(trimmed, locale: locale, rate: rate))
     }
 
+    /// True while any utterance is being spoken or is queued.
+    static var isSpeaking: Bool { synth.isSpeaking }
+
     /// Stop everything (called when QuickChat ends, user pauses, or the
     /// AVAudioSession is interrupted).
     static func stop() {

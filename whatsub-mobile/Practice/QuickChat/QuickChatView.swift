@@ -3,10 +3,13 @@ import AVFoundation
 import Speech
 import UIKit
 
-/// QuickChat root sheet. Voice-first UI (豆包/ChatGPT-Voice feel):
-/// the central pulsating orb is the primary interaction surface; chat
-/// bubbles are hidden by default and accessible via the top-right
-/// transcript drawer icon.
+/// QuickChat root sheet. Siri-style auto-listen voice loop:
+///
+/// 1. Sheet opens → compliance gate → vm.start() (LLM opens scene + TTS plays)
+/// 2. TTS done → auto-enter .listening with VoiceActivityRecorder
+/// 3. VAD detects speech → red orb; user finishes → transcribe + submit
+/// 4. LLM streams reply → TTS plays → loop back to step 2
+/// 5. 15s silence with no speech → end session
 struct QuickChatView: View {
     let phrases: [SessionPhrase]
     let suggestedTag: String?
@@ -15,30 +18,18 @@ struct QuickChatView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
-    // Compliance gate
     @State private var showCompliance: Bool
-    // Stuck card
     @State private var stuckPhrase: SessionPhrase?
-    // Transcript drawer
     @State private var showTranscript: Bool = false
-    // Input mode
     @State private var typingMode: Bool = false
-    // Mic + ASR state
-    @State private var micPhase: MicPhase = .idle
-    @State private var countdown: Int = 0
-    @State private var recorder: AVAudioRecorder?
-    @State private var recordingURL: URL?
     @State private var micPermissionDenied = false
 
-    enum MicPhase: Equatable {
-        case idle, countdown, recording, transcribing
-    }
+    // VAD state
+    @StateObject private var vadCoordinator = VADCoordinator()
 
     init(phrases: [SessionPhrase], suggestedTag: String?,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
          settings: LlmSettings = LlmSettingsStore.load()) {
-        // Defensive log — if a caller passes 0 phrases we want to surface that
-        // immediately rather than render a blank sheet.
         if phrases.isEmpty {
             print("[QuickChatView] WARNING: initialized with 0 phrases — UI will look empty")
         }
@@ -59,17 +50,17 @@ struct QuickChatView: View {
         NavigationStack {
             ZStack(alignment: .top) {
                 Color.whatsubBg.ignoresSafeArea()
-                // -------- Voice-mode primary layout --------
                 VStack(spacing: 0) {
-                    headerChips
-                        .padding(.top, 6)
+                    headerChips.padding(.top, 6)
                     Spacer(minLength: 0)
                     VoiceOrbView(state: orbState)
-                    Spacer().frame(height: 24)
+                    Spacer().frame(height: 18)
+                    latestAIBubble
+                    Spacer().frame(height: 12)
                     Text(statusText)
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.whatsubInkMuted)
-                        .frame(minHeight: 24)
+                        .frame(minHeight: 22)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                     if case .error(let msg) = vm.phase {
@@ -78,9 +69,8 @@ struct QuickChatView: View {
                             .padding(.horizontal, 16)
                     }
                     Spacer(minLength: 0)
-                    inputBar
+                    bottomControls
                 }
-                // -------- End-of-session summary overlay --------
                 if vm.phase == .done {
                     QuickChatSummaryView(
                         phrases: phrases,
@@ -96,7 +86,10 @@ struct QuickChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { Task { await vm.endSession(); dismiss() } }
+                    Button("关闭") {
+                        vadCoordinator.cancel()
+                        Task { await vm.endSession(); dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button { showTranscript = true } label: {
@@ -120,8 +113,7 @@ struct QuickChatView: View {
                 .presentationDetents([.medium])
             }
             .sheet(isPresented: $showTranscript) {
-                transcriptDrawer
-                    .presentationDetents([.medium, .large])
+                transcriptDrawer.presentationDetents([.medium, .large])
             }
         }
         .task {
@@ -131,50 +123,130 @@ struct QuickChatView: View {
         .onChange(of: showCompliance) { showing in
             if !showing, vm.turns.isEmpty { Task { await vm.start() } }
         }
+        // Watch VM phase transitions to drive the auto-listen loop.
+        .onChange(of: vm.phase) { newPhase in
+            handlePhaseChange(newPhase)
+        }
         .onChange(of: scenePhase) { phase in
-            if phase != .active { vm.pause() }
-            else if vm.phase == .paused { vm.resume() }
+            if phase != .active {
+                vm.pause()
+                vadCoordinator.cancel()
+            } else if vm.phase == .paused {
+                vm.resume()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
             guard let info = note.userInfo,
                   let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
-            if type == .began { vm.pause() }
+            if type == .began {
+                vm.pause()
+                vadCoordinator.cancel()
+            }
+        }
+        .onDisappear { vadCoordinator.cancel() }
+    }
+
+    // ---- auto-listen orchestration ----
+
+    /// Called whenever vm.phase changes. After AI finishes TTS (we detect by
+    /// transitioning from .speaking/.thinking to .idle with TTS not speaking
+    /// any more), enter listening mode.
+    private func handlePhaseChange(_ newPhase: QuickChatViewModel.Phase) {
+        guard !typingMode, !micPermissionDenied else { return }
+        guard newPhase == .idle else { return }
+        // The VM goes to .idle after a turn completes. Wait briefly for the TTS
+        // queue to drain, then enter listening.
+        Task {
+            // Poll until Speaker is done speaking the queued sentences.
+            for _ in 0..<150 {  // 150 × 100ms = 15s max wait
+                if !Speaker.isSpeaking { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            // Small grace before opening mic — avoid catching the speaker tail.
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard vm.phase == .idle, !typingMode else { return }
+            vm.enterListening()
+            await startVAD()
         }
     }
 
-    // ---- orb state + status text derived from VM + mic ----
-    private var orbState: VoiceOrbView.OrbState {
-        switch micPhase {
-        case .recording: return .recording
-        case .transcribing: return .transcribing
-        case .countdown, .idle:
-            switch vm.phase {
-            case .thinking: return .thinking
-            case .speaking: return .speaking
-            default: return .idle
+    private func startVAD() async {
+        vadCoordinator.start(
+            onSpeechDetected: { /* orb auto-updates via orbState */ },
+            onSpeechEnded: { url in
+                Task { await self.handleVADSpeechEnded(url) }
+            },
+            onNoSpeechTimeout: {
+                Task {
+                    await vm.handleNoSpeechTimeout()
+                    if vm.phase != .done { vm.exitListening() }
+                }
             }
+        )
+    }
+
+    private func handleVADSpeechEnded(_ url: URL) async {
+        vm.exitListening()    // back to .idle while we transcribe
+        vm.resetNoSpeechCounter()
+        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        guard let r = recognizer, r.isAvailable else { return }
+        let req = SFSpeechURLRecognitionRequest(url: url)
+        req.shouldReportPartialResults = false
+        if r.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+        do {
+            let text: String = try await withCheckedThrowingContinuation { cont in
+                var done = false
+                r.recognitionTask(with: req) { result, error in
+                    if done { return }
+                    if let error { done = true; cont.resume(throwing: error); return }
+                    if let result, result.isFinal {
+                        done = true
+                        cont.resume(returning: result.bestTranscription.formattedString)
+                    }
+                }
+            }
+            try? FileManager.default.removeItem(at: url)
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                await vm.submitUserInput(text)
+            } else {
+                // Empty transcription — treat as no-speech, restart VAD.
+                if vm.phase == .idle, !typingMode { vm.enterListening(); await startVAD() }
+            }
+        } catch {
+            // ASR failed — restart listening.
+            if vm.phase == .idle, !typingMode { vm.enterListening(); await startVAD() }
+        }
+    }
+
+    // ---- derived state ----
+
+    private var orbState: VoiceOrbView.OrbState {
+        if vadCoordinator.speechActive { return .recording }
+        switch vm.phase {
+        case .listening: return .idle           // listening but no speech yet — gentle pulse
+        case .thinking: return .thinking
+        case .speaking: return .speaking
+        case .recording: return .recording
+        default: return .idle
         }
     }
 
     private var statusText: String {
-        switch micPhase {
-        case .recording: return "正在听你说…"
-        case .transcribing: return "识别中…"
-        case .countdown: return "\(countdown)…"
-        case .idle: break
-        }
         switch vm.phase {
+        case .listening:
+            return vadCoordinator.speechActive ? "正在听你说…" : "请开始说话…"
         case .thinking: return "AI 正在想…"
         case .speaking: return "AI 正在说…"
-        case .paused: return "已暂停（点录音继续）"
+        case .recording: return "正在听你说…"
+        case .paused: return "已暂停"
         case .error(let msg): return msg
         case .summarizing, .done: return ""
-        case .idle, .recording: return vm.turns.isEmpty ? "准备开始…" : "按下麦克风说话"
+        case .idle: return vm.turns.isEmpty ? "准备开始…" : "稍等…"
         }
     }
 
-    // ---- header chips ----
+    // ---- chips ----
     private var headerChips: some View {
         HStack(spacing: 8) {
             ForEach(phrases) { p in
@@ -197,7 +269,94 @@ struct QuickChatView: View {
         .padding(.horizontal, 16).padding(.bottom, 4)
     }
 
-    // ---- transcript drawer ----
+    // ---- latest AI bubble (the ONE-message surface; below the orb) ----
+    @ViewBuilder
+    private var latestAIBubble: some View {
+        if let latest = vm.turns.last(where: { !$0.assistantText.isEmpty }) {
+            Text(latest.assistantText)
+                .font(.system(size: 17))
+                .foregroundStyle(.whatsubInk)
+                .multilineTextAlignment(.center)
+                .lineLimit(5)
+                .truncationMode(.tail)
+                .padding(.horizontal, 18).padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Color.whatsubBgElev))
+                .padding(.horizontal, 20)
+                .onTapGesture { showTranscript = true }  // tap bubble to see history
+                .contextMenu {
+                    Button {
+                        ReportMessageSheet.openMailReport(message: latest.assistantText)
+                    } label: { Label("上报这条回复", systemImage: "exclamationmark.bubble") }
+                }
+        } else {
+            // Empty placeholder so layout doesn't jump when first message arrives.
+            Color.clear.frame(height: 64)
+        }
+    }
+
+    // ---- bottom controls (no mic button anymore) ----
+    @ViewBuilder
+    private var bottomControls: some View {
+        if typingMode || micPermissionDenied {
+            HStack(spacing: 8) {
+                TextField("打字回应…", text: $vm.typedInput, axis: .vertical)
+                    .lineLimit(1...3)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgElev))
+                Button {
+                    let text = vm.typedInput
+                    vm.typedInput = ""
+                    Task { await vm.submitUserInput(text) }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2).foregroundStyle(.whatsubAccent)
+                }
+                .disabled(vm.typedInput.trimmingCharacters(in: .whitespaces).isEmpty || vm.phase != .idle)
+                if !micPermissionDenied {
+                    Button {
+                        typingMode = false
+                        // After leaving typing mode, immediately enter listening
+                        // for the user's next turn (don't wait for next AI reply).
+                        if vm.phase == .idle, !vm.turns.isEmpty {
+                            vm.enterListening()
+                            Task { await startVAD() }
+                        }
+                    } label: {
+                        Image(systemName: "mic.fill").foregroundStyle(.whatsubAccent)
+                    }
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(Color.whatsubBg)
+        } else {
+            HStack(spacing: 12) {
+                Button {
+                    vadCoordinator.cancel()
+                    Task { await vm.endSession() }
+                } label: {
+                    Text("结束")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.whatsubInk)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(Capsule().fill(Color.whatsubBgElev))
+                }
+                Spacer()
+                Button {
+                    typingMode = true
+                    vm.exitListening()
+                    vadCoordinator.cancel()
+                } label: {
+                    Image(systemName: "keyboard")
+                        .font(.title3).foregroundStyle(.whatsubAccent)
+                        .padding(10)
+                        .background(Circle().fill(Color.whatsubBgElev))
+                }
+            }
+            .padding(.horizontal, 20).padding(.bottom, 28).padding(.top, 12)
+        }
+    }
+
+    // ---- transcript drawer (full history) ----
     @ViewBuilder
     private var transcriptDrawer: some View {
         NavigationStack {
@@ -205,9 +364,7 @@ struct QuickChatView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(vm.turns) { turn in
                         VStack(alignment: .leading, spacing: 4) {
-                            if !turn.userText.isEmpty {
-                                bubble(turn.userText, isUser: true)
-                            }
+                            if !turn.userText.isEmpty { bubble(turn.userText, isUser: true) }
                             if !turn.assistantText.isEmpty {
                                 bubble(turn.assistantText, isUser: false)
                                     .contextMenu {
@@ -236,85 +393,34 @@ struct QuickChatView: View {
     private func bubble(_ text: String, isUser: Bool) -> some View {
         HStack {
             if isUser { Spacer(minLength: 30) }
-            Text(text)
-                .font(.system(size: 16))
-                .foregroundStyle(.whatsubInk)
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 12).fill(isUser ? Color.whatsubAccent.opacity(0.18) : Color.whatsubBgElev))
+            Text(text).font(.system(size: 16)).foregroundStyle(.whatsubInk).padding(10)
+                .background(RoundedRectangle(cornerRadius: 12)
+                    .fill(isUser ? Color.whatsubAccent.opacity(0.18) : Color.whatsubBgElev))
             if !isUser { Spacer(minLength: 30) }
         }
     }
 
-    // ---- input bar ----
     @ViewBuilder
-    private var inputBar: some View {
-        if micPermissionDenied || typingMode {
-            HStack(spacing: 8) {
-                TextField("打字回应…", text: $vm.typedInput, axis: .vertical)
-                    .lineLimit(1...3)
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgElev))
-                Button {
-                    let text = vm.typedInput
-                    vm.typedInput = ""
-                    Task { await vm.submitUserInput(text) }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.title2).foregroundStyle(.whatsubAccent)
-                }
-                .disabled(vm.typedInput.trimmingCharacters(in: .whitespaces).isEmpty || vm.phase != .idle)
-                if !micPermissionDenied {
-                    Button { typingMode = false } label: {
-                        Image(systemName: "mic.fill").foregroundStyle(.whatsubAccent)
-                    }
+    private func errorBanner(_ msg: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.title3).foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("对话失败").font(.subheadline.weight(.semibold)).foregroundStyle(.whatsubInk)
+                Text(msg).font(.footnote).foregroundStyle(.whatsubInkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if msg.contains("LLM 设置") || msg.contains("API Key") || msg.contains("notConfigured") {
+                    Text("提示：到「我的 → LLM 设置」填入 DeepSeek 等服务的 API Key。")
+                        .font(.caption2).foregroundStyle(.whatsubAccent).padding(.top, 2)
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .background(Color.whatsubBg)
-        } else {
-            HStack(spacing: 16) {
-                micButton
-                Button { typingMode = true } label: {
-                    Image(systemName: "keyboard")
-                        .font(.title3)
-                        .foregroundStyle(.whatsubAccent)
-                        .padding(10)
-                        .background(Circle().fill(Color.whatsubBgElev))
-                }
-            }
-            .padding(.horizontal, 24).padding(.bottom, 28).padding(.top, 12)
+            Spacer(minLength: 0)
         }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.red.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.red.opacity(0.35), lineWidth: 1))
     }
 
-    @ViewBuilder
-    private var micButton: some View {
-        switch micPhase {
-        case .idle:
-            Button { Task { await startCountdown() } } label: {
-                Image(systemName: "mic.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.whatsubAccent)
-            }
-            .disabled(vm.phase != .idle)
-        case .countdown:
-            Image(systemName: "mic.circle.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(.whatsubAccent.opacity(0.5))
-        case .recording:
-            Button { stopRecording() } label: {
-                Image(systemName: "stop.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.red)
-            }
-        case .transcribing:
-            ProgressView()
-                .controlSize(.large)
-                .tint(.whatsubAccent)
-                .frame(width: 56, height: 56)
-        }
-    }
-
-    // ---- permissions + mic/ASR (adapted from ShadowSheet.swift) ----
-
+    // ---- permissions ----
     private func requestPermissions() async {
         let mic: Bool
         if #available(iOS 17.0, *) {
@@ -330,108 +436,6 @@ struct QuickChatView: View {
         if !(mic && speech) { micPermissionDenied = true; typingMode = true }
     }
 
-    private func startCountdown() async {
-        guard !micPermissionDenied else { return }
-        micPhase = .countdown
-        for n in stride(from: 3, through: 1, by: -1) {
-            countdown = n
-            try? await Task.sleep(nanoseconds: 600_000_000)
-        }
-        startRecording()
-    }
-
-    private func startRecording() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .measurement,
-                                    options: [.defaultToSpeaker, .allowBluetooth])
-            try session.setActive(true)
-        } catch {
-            micPhase = .idle
-            return
-        }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("qc-\(UUID().uuidString).m4a")
-        recordingURL = url
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 16_000.0,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-        ]
-        do {
-            let r = try AVAudioRecorder(url: url, settings: settings)
-            r.record()
-            recorder = r
-            micPhase = .recording
-            Task { [weak r] in
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
-                if r?.isRecording == true { await MainActor.run { stopRecording() } }
-            }
-        } catch {
-            micPhase = .idle
-        }
-    }
-
-    private func stopRecording() {
-        recorder?.stop(); recorder = nil
-        guard let url = recordingURL else { micPhase = .idle; return }
-        micPhase = .transcribing
-        Task { await transcribe(url) }
-    }
-
-    private func transcribe(_ url: URL) async {
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        guard let r = recognizer, r.isAvailable else {
-            micPhase = .idle; typingMode = true
-            return
-        }
-        let req = SFSpeechURLRecognitionRequest(url: url)
-        req.shouldReportPartialResults = false
-        if r.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-        do {
-            let text: String = try await withCheckedThrowingContinuation { cont in
-                var done = false
-                r.recognitionTask(with: req) { result, error in
-                    if done { return }
-                    if let error { done = true; cont.resume(throwing: error); return }
-                    if let result, result.isFinal {
-                        done = true
-                        cont.resume(returning: result.bestTranscription.formattedString)
-                    }
-                }
-            }
-            try? FileManager.default.removeItem(at: url)
-            micPhase = .idle
-            await vm.submitUserInput(text)
-        } catch {
-            micPhase = .idle
-        }
-    }
-
-    // ---- error banner ----
-    @ViewBuilder
-    private func errorBanner(_ msg: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.title3)
-                .foregroundStyle(.yellow)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("对话失败").font(.subheadline.weight(.semibold)).foregroundStyle(.whatsubInk)
-                Text(msg).font(.footnote).foregroundStyle(.whatsubInkMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                if msg.contains("LLM 设置") || msg.contains("API Key") || msg.contains("notConfigured") {
-                    Text("提示：到「我的 → LLM 设置」填入 DeepSeek 等服务的 API Key。")
-                        .font(.caption2).foregroundStyle(.whatsubAccent)
-                        .padding(.top, 2)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.red.opacity(0.12)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.red.opacity(0.35), lineWidth: 1))
-    }
-
     // ---- youtube replay ----
     private func youtubeOpener(for p: SessionPhrase) -> (() -> Void)? {
         guard p.sourceKind == "youtube",
@@ -441,5 +445,48 @@ struct QuickChatView: View {
             let url = URL(string: "https://youtu.be/\(videoID)?t=\(Int(ts))")!
             UIApplication.shared.open(url)
         }
+    }
+}
+
+/// Owns the VoiceActivityRecorder and exposes `speechActive` as @Published so
+/// the view's `orbState` updates when VAD onset/offset fires. Lives only while
+/// the QuickChatView is on screen.
+@MainActor
+final class VADCoordinator: ObservableObject {
+    @Published var speechActive: Bool = false
+    private let recorder = VoiceActivityRecorder()
+
+    func start(onSpeechDetected: @escaping () -> Void,
+               onSpeechEnded: @escaping (URL) -> Void,
+               onNoSpeechTimeout: @escaping () -> Void) {
+        speechActive = false
+        recorder.onSpeechDetected = { [weak self] in
+            Task { @MainActor in
+                self?.speechActive = true
+                onSpeechDetected()
+            }
+        }
+        recorder.onSpeechEnded = { [weak self] url in
+            Task { @MainActor in
+                self?.speechActive = false
+                onSpeechEnded(url)
+            }
+        }
+        recorder.onNoSpeechTimeout = { [weak self] in
+            Task { @MainActor in
+                self?.speechActive = false
+                onNoSpeechTimeout()
+            }
+        }
+        do {
+            try recorder.start()
+        } catch {
+            // Mic failed — silently abort; view will eventually time out / user will tap keyboard.
+        }
+    }
+
+    func cancel() {
+        recorder.cancel()
+        speechActive = false
     }
 }
