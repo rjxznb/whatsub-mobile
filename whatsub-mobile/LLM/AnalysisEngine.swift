@@ -1,7 +1,7 @@
 import Foundation
 
 struct AnalysisEngine {
-    let client: OpenAICompatibleClient
+    let client: ChatCompletionsClient
 
     static func batches(_ cues: [Cue], size: Int = 50) -> [[Cue]] {
         stride(from: 0, to: cues.count, by: size).map { Array(cues[$0..<min($0 + size, cues.count)]) }

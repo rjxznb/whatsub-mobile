@@ -94,7 +94,7 @@ final class ImportViewModel: ObservableObject {
 
         // Step 3: Analyse with progress reporting.
         state = .analyzing(done: 0, total: 1)
-        let engine = AnalysisEngine(client: OpenAICompatibleClient(settings: settings))
+        let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
         do {
             let analysis = try await engine.analyze(cues) { [weak self] done, total in
                 Task { @MainActor [weak self] in

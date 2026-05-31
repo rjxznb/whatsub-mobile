@@ -2,10 +2,15 @@ import Foundation
 
 struct ChatMessage { let role: String; let content: String }
 
-/// Minimal non-streaming openai-compatible /chat/completions client.
+/// Minimal non-streaming /chat/completions client. Wire format follows the
+/// industry-standard "chat completions" JSON shape (model + messages + a
+/// single text response) that most modern LLM providers implement —
+/// DeepSeek, Moonshot, Zhipu, etc. The user configures baseUrl + apiKey +
+/// model in 我的 → LLM 设置; this client just POSTs.
+///
 /// (The desktop streams via SSE; for a batch import job we take the full
 /// response — simpler + adequate behind a progress bar.)
-struct OpenAICompatibleClient {
+struct ChatCompletionsClient {
     let settings: LlmSettings
 
     func chat(_ messages: [ChatMessage]) async throws -> String {

@@ -209,7 +209,7 @@ struct CollectSheet: View {
         }
         aiLoading = true
         aiError = nil
-        let client = OpenAICompatibleClient(settings: settings)
+        let client = ChatCompletionsClient(settings: settings)
         let sys = ChatMessage(role: "system", content:
             "你是英语学习助手。针对用户给出的英文短语（结合所在句子语境），用简洁中文输出：" +
             "① 中文翻译 ② 一句用法/语义解释。只输出中文，控制在 2-4 行，不要寒暄，不要重复英文原文。")

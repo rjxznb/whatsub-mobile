@@ -1,7 +1,8 @@
 import Foundation
 
-/// openai-compatible LLM config (v1 supports only this provider). Default =
-/// DeepSeek, matching the desktop's default openaiCompatible slot.
+/// LLM config — talks to any /chat/completions endpoint. Default = DeepSeek
+/// (api.deepseek.com), matching the desktop's default LLM slot. v1 supports
+/// only this single endpoint shape; provider swap is via baseUrl/apiKey/model.
 struct LlmSettings: Codable, Equatable {
     var baseUrl: String = "https://api.deepseek.com/v1"
     var apiKey: String = ""
