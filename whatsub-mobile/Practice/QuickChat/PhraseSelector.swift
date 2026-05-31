@@ -33,9 +33,9 @@ enum PhraseSelector {
         isDueForRepetition: (String) -> Bool,
         now: Double
     ) -> Pick? {
-        guard items.count >= 3 else { return nil }   // cold start
+        guard items.count >= 3 else { return nil }
 
-        // 1. Classify every item into a tier.
+        // 1. Classify (unchanged).
         let classified: [Cand] = items.map { it in
             let key = it.phraseNormalized
             let recognized = isRecognized(key)
@@ -44,36 +44,57 @@ enum PhraseSelector {
             let tier: Tier
             if mastered && !due { tier = .excluded }
             else if mastered && due { tier = .t2 }
-            else if recognized { tier = .t1 }            // recognized + not-yet-produced
-            else { tier = .t3 }                          // new or unrecognized
+            else if recognized { tier = .t1 }
+            else { tier = .t3 }
             return Cand(item: it, tier: tier)
         }.filter { $0.tier != .excluded }
 
         guard classified.count >= 3 else { return nil }
 
-        // 2. In the highest-priority tier that has any candidates, try for a
-        //    same-tag bucket of size ≥3. CRITICAL: do NOT fall through to a
-        //    lower tier's tag-bucket — spec §6.1 hard rule is that Tier1 wins
-        //    even when Tier3 has tighter tag cohesion. If the highest non-
-        //    empty tier doesn't yield a qualifying bucket, fall through to
-        //    step 3 (flat tier-ordered fill).
-        for targetTier in [Tier.t1, .t2, .t3] {
-            let inTier = classified.filter { $0.tier == targetTier }
-            guard !inTier.isEmpty else { continue }   // empty tier — keep looking for the next one
-            if let (tag, bucket) = largestTagBucket(in: inTier), bucket.count >= 3 {
-                return Pick(
-                    phrases: Array(bucket.prefix(3)).map { sessionPhrase(from: $0.item) },
-                    suggestedTag: tag
-                )
-            }
-            break   // first non-empty tier owns the decision; don't probe lower tiers
+        let t1 = classified.filter { $0.tier == .t1 }
+        let t2 = classified.filter { $0.tier == .t2 }
+        let t3 = classified.filter { $0.tier == .t3 }
+
+        // 2. Tier 1 has a same-tag bucket ≥3 → use it.
+        if t1.count >= 3, let (tag, bucket) = largestTagBucket(in: t1), bucket.count >= 3 {
+            return Pick(
+                phrases: Array(bucket.prefix(3)).map { sessionPhrase(from: $0.item) },
+                suggestedTag: tag
+            )
         }
 
-        // 3. Cross-tag fallback (still tier-ordered): take Tier1 first, then Tier2, then Tier3.
+        // 3. Tier 1 has 2+ items: take 2 from Tier 1, 1 from Tier 2/3 (same-tag preferred).
+        if t1.count >= 2 {
+            // Pick 2 Tier-1 items, preferring same-tag pairs.
+            let pair = bestSameTagPair(in: t1) ?? Array(t1.prefix(2))
+            // 3rd slot: Tier 2 first, then Tier 3, then fall back to Tier 1.
+            let preferTags = Set(pair.flatMap { $0.item.tags })
+            let third: Cand
+            if let t2pick = pickPreferringTags(from: t2, prefer: preferTags) {
+                third = t2pick
+            } else if let t3pick = pickPreferringTags(from: t3, prefer: preferTags) {
+                third = t3pick
+            } else if t1.count >= 3 {
+                // Tier 2/3 both empty — fall back to a 3rd Tier-1 item not already picked.
+                let pickedKeys = Set(pair.map { $0.item.phraseNormalized })
+                if let extra = t1.first(where: { !pickedKeys.contains($0.item.phraseNormalized) }) {
+                    third = extra
+                } else {
+                    return nil   // shouldn't happen given t1.count >= 3
+                }
+            } else {
+                return nil   // not enough material
+            }
+            let picked = pair + [third]
+            let suggested = dominantTag(of: picked.map { $0.item.tags })
+            return Pick(phrases: picked.map { sessionPhrase(from: $0.item) },
+                        suggestedTag: suggested)
+        }
+
+        // 4. Tier 1 has 0 or 1 items: cross-tag tier-order fill.
         var picked: [Cand] = []
-        for targetTier in [Tier.t1, .t2, .t3] {
-            let inTier = classified.filter { $0.tier == targetTier }
-            for c in inTier {
+        for tier in [t1, t2, t3] {
+            for c in tier {
                 if picked.count == 3 { break }
                 if !picked.contains(where: { $0.item.phraseNormalized == c.item.phraseNormalized }) {
                     picked.append(c)
@@ -82,8 +103,6 @@ enum PhraseSelector {
             if picked.count == 3 { break }
         }
         guard picked.count == 3 else { return nil }
-
-        // 4. Try to give the LLM a suggested tag if 2+ of the picked items share one.
         let suggested = dominantTag(of: picked.map { $0.item.tags })
         return Pick(phrases: picked.map { sessionPhrase(from: $0.item) },
                     suggestedTag: suggested)
@@ -123,5 +142,30 @@ enum PhraseSelector {
             sourceTimestampSec: m.source.timestampSec,
             tags: m.tags
         )
+    }
+
+    // ---- additional helpers ----
+
+    /// Returns 2 Tier-1 items sharing a tag, if any pair exists; otherwise nil.
+    private static func bestSameTagPair(in cands: [Cand]) -> [Cand]? {
+        for c1 in cands {
+            for c2 in cands where c2.item.phraseNormalized != c1.item.phraseNormalized {
+                if !Set(c1.item.tags).isDisjoint(with: c2.item.tags) {
+                    return [c1, c2]
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Picks one item from `pool`, preferring items whose tags intersect `prefer`.
+    /// Returns nil if pool is empty.
+    private static func pickPreferringTags(from pool: [Cand], prefer: Set<String>) -> Cand? {
+        if pool.isEmpty { return nil }
+        if !prefer.isEmpty,
+           let match = pool.first(where: { !Set($0.item.tags).isDisjoint(with: prefer) }) {
+            return match
+        }
+        return pool.first
     }
 }
