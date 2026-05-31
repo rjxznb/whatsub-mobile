@@ -3,7 +3,10 @@ import AVFoundation
 import Speech
 import UIKit
 
-/// QuickChat root sheet. The product surface of spec §6.5.
+/// QuickChat root sheet. Voice-first UI (豆包/ChatGPT-Voice feel):
+/// the central pulsating orb is the primary interaction surface; chat
+/// bubbles are hidden by default and accessible via the top-right
+/// transcript drawer icon.
 struct QuickChatView: View {
     let phrases: [SessionPhrase]
     let suggestedTag: String?
@@ -16,6 +19,8 @@ struct QuickChatView: View {
     @State private var showCompliance: Bool
     // Stuck card
     @State private var stuckPhrase: SessionPhrase?
+    // Transcript drawer
+    @State private var showTranscript: Bool = false
     // Input mode
     @State private var typingMode: Bool = false
     // Mic + ASR state
@@ -49,17 +54,29 @@ struct QuickChatView: View {
         NavigationStack {
             ZStack(alignment: .top) {
                 Color.whatsubBg.ignoresSafeArea()
+                // -------- Voice-mode primary layout --------
                 VStack(spacing: 0) {
                     headerChips
-                    transcriptScroll
+                        .padding(.top, 6)
+                    Spacer(minLength: 0)
+                    VoiceOrbView(state: orbState)
+                    Spacer().frame(height: 24)
+                    Text(statusText)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.whatsubInkMuted)
+                        .frame(minHeight: 24)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    Spacer(minLength: 0)
                     inputBar
                 }
+                // -------- End-of-session summary overlay --------
                 if vm.phase == .done {
                     QuickChatSummaryView(
                         phrases: phrases,
                         completed: vm.completedPhrases,
                         notes: vm.perPhraseLastNote,
-                        onPlayAgain: { dismiss() },     // re-pick from CorpusView entry
+                        onPlayAgain: { dismiss() },
                         onClose: { dismiss() }
                     )
                     .background(Color.whatsubBg.ignoresSafeArea())
@@ -70,6 +87,14 @@ struct QuickChatView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭") { Task { await vm.endSession(); dismiss() } }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showTranscript = true } label: {
+                        Image(systemName: "text.bubble")
+                            .foregroundStyle(.whatsubAccent)
+                    }
+                    .accessibilityLabel("显示对话文字")
+                    .disabled(vm.turns.isEmpty)
                 }
             }
             .sheet(isPresented: $showCompliance) {
@@ -84,13 +109,16 @@ struct QuickChatView: View {
                 )
                 .presentationDetents([.medium])
             }
+            .sheet(isPresented: $showTranscript) {
+                transcriptDrawer
+                    .presentationDetents([.medium, .large])
+            }
         }
         .task {
             await requestPermissions()
             if !showCompliance { await vm.start() }
         }
         .onChange(of: showCompliance) { showing in
-            // After the user dismisses the compliance gate, start the dialogue.
             if !showing, vm.turns.isEmpty { Task { await vm.start() } }
         }
         .onChange(of: scenePhase) { phase in
@@ -98,11 +126,41 @@ struct QuickChatView: View {
             else if vm.phase == .paused { vm.resume() }
         }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
-            // Phone call / Siri / etc. — pause for safety.
             guard let info = note.userInfo,
                   let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
             if type == .began { vm.pause() }
+        }
+    }
+
+    // ---- orb state + status text derived from VM + mic ----
+    private var orbState: VoiceOrbView.OrbState {
+        switch micPhase {
+        case .recording: return .recording
+        case .transcribing: return .transcribing
+        case .countdown, .idle:
+            switch vm.phase {
+            case .thinking: return .thinking
+            case .speaking: return .speaking
+            default: return .idle
+            }
+        }
+    }
+
+    private var statusText: String {
+        switch micPhase {
+        case .recording: return "正在听你说…"
+        case .transcribing: return "识别中…"
+        case .countdown: return "\(countdown)…"
+        case .idle: break
+        }
+        switch vm.phase {
+        case .thinking: return "AI 正在想…"
+        case .speaking: return "AI 正在说…"
+        case .paused: return "已暂停（点录音继续）"
+        case .error(let msg): return msg
+        case .summarizing, .done: return ""
+        case .idle, .recording: return vm.turns.isEmpty ? "准备开始…" : "按下麦克风说话"
         }
     }
 
@@ -126,13 +184,13 @@ struct QuickChatView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+        .padding(.horizontal, 16).padding(.bottom, 4)
     }
 
-    // ---- transcript ----
+    // ---- transcript drawer ----
     @ViewBuilder
-    private var transcriptScroll: some View {
-        ScrollViewReader { proxy in
+    private var transcriptDrawer: some View {
+        NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(vm.turns) { turn in
@@ -149,19 +207,17 @@ struct QuickChatView: View {
                                     }
                             }
                         }
-                        .id(turn.id)
-                    }
-                    if case .thinking = vm.phase {
-                        ProgressView().tint(.whatsubAccent).padding(.leading, 12)
-                    }
-                    if case .error(let msg) = vm.phase {
-                        Text(msg).font(.caption).foregroundStyle(.red).padding()
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
             }
-            .onChange(of: vm.turns.last?.assistantText ?? "") { _ in
-                withAnimation { proxy.scrollTo(vm.turns.last?.id, anchor: .bottom) }
+            .background(Color.whatsubBg.ignoresSafeArea())
+            .navigationTitle("对话文字")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { showTranscript = false }
+                }
             }
         }
     }
@@ -205,14 +261,17 @@ struct QuickChatView: View {
             .padding(.horizontal, 12).padding(.vertical, 10)
             .background(Color.whatsubBg)
         } else {
-            HStack(spacing: 12) {
+            HStack(spacing: 16) {
                 micButton
                 Button { typingMode = true } label: {
-                    Image(systemName: "keyboard").foregroundStyle(.whatsubAccent)
+                    Image(systemName: "keyboard")
+                        .font(.title3)
+                        .foregroundStyle(.whatsubAccent)
+                        .padding(10)
+                        .background(Circle().fill(Color.whatsubBgElev))
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .background(Color.whatsubBg)
+            .padding(.horizontal, 24).padding(.bottom, 28).padding(.top, 12)
         }
     }
 
@@ -221,26 +280,26 @@ struct QuickChatView: View {
         switch micPhase {
         case .idle:
             Button { Task { await startCountdown() } } label: {
-                Label("按麦说", systemImage: "mic.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+                Image(systemName: "mic.circle.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(.whatsubAccent)
             }
-            .buttonStyle(.borderedProminent).tint(.whatsubAccent)
             .disabled(vm.phase != .idle)
         case .countdown:
-            Text("\(countdown)…").font(.title2.weight(.bold)).foregroundStyle(.whatsubAccent)
-                .frame(maxWidth: .infinity).padding(.vertical, 12)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubAccent.opacity(0.15)))
+            Image(systemName: "mic.circle.fill")
+                .font(.system(size: 56))
+                .foregroundStyle(.whatsubAccent.opacity(0.5))
         case .recording:
             Button { stopRecording() } label: {
-                Label("停止", systemImage: "stop.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+                Image(systemName: "stop.circle.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(.red)
             }
-            .buttonStyle(.borderedProminent).tint(.red)
         case .transcribing:
-            HStack { ProgressView().tint(.whatsubAccent); Text("识别中…").font(.subheadline) }
-                .frame(maxWidth: .infinity).padding(.vertical, 12)
+            ProgressView()
+                .controlSize(.large)
+                .tint(.whatsubAccent)
+                .frame(width: 56, height: 56)
         }
     }
 
@@ -294,7 +353,6 @@ struct QuickChatView: View {
             r.record()
             recorder = r
             micPhase = .recording
-            // 20-second hard cap (sentences are short).
             Task { [weak r] in
                 try? await Task.sleep(nanoseconds: 20_000_000_000)
                 if r?.isRecording == true { await MainActor.run { stopRecording() } }
@@ -340,15 +398,12 @@ struct QuickChatView: View {
         }
     }
 
-    // ---- youtube replay (best-effort: only youtube + timestamp) ----
+    // ---- youtube replay ----
     private func youtubeOpener(for p: SessionPhrase) -> (() -> Void)? {
-        // ⚠️ `extractYouTubeID` is a free function (see Corpus/YouTubeID.swift).
         guard p.sourceKind == "youtube",
               let ts = p.sourceTimestampSec,
               let videoID = extractYouTubeID(p.sourceURL) else { return nil }
         return {
-            // Just open the canonical youtu.be URL with t= so the system browser
-            // (or YouTube app, if installed) jumps to the right second.
             let url = URL(string: "https://youtu.be/\(videoID)?t=\(Int(ts))")!
             UIApplication.shared.open(url)
         }
