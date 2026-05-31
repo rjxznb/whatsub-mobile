@@ -51,6 +51,14 @@ final class QuickChatPromptsTests: XCTestCase {
         XCTAssertTrue(p.contains("本轮") || p.contains("仅本轮"))
     }
 
+    func testPromptForbidsMarkdownAndTagPrefixes() {
+        let p = QuickChatPrompts.systemPrompt(phrases: [phrase("a", mean: "x", usage: nil)],
+                                              suggestedTag: nil)
+        XCTAssertTrue(p.contains("禁止使用 markdown") || p.contains("禁止 markdown"))
+        XCTAssertTrue(p.contains("<assistant>") && p.contains("不要"),
+                      "must explicitly forbid the <assistant> literal prefix LLM was emitting")
+    }
+
     func testPromptIncludesAllThreePhrasesInOrder() {
         let phrases = [
             phrase("bouncing off the walls", mean: "兴奋", usage: "口语"),
