@@ -51,15 +51,22 @@ enum PhraseSelector {
 
         guard classified.count >= 3 else { return nil }
 
-        // 2. Try each tier in turn, finding the largest same-tag bucket within it.
+        // 2. In the highest-priority tier that has any candidates, try for a
+        //    same-tag bucket of size ≥3. CRITICAL: do NOT fall through to a
+        //    lower tier's tag-bucket — spec §6.1 hard rule is that Tier1 wins
+        //    even when Tier3 has tighter tag cohesion. If the highest non-
+        //    empty tier doesn't yield a qualifying bucket, fall through to
+        //    step 3 (flat tier-ordered fill).
         for targetTier in [Tier.t1, .t2, .t3] {
             let inTier = classified.filter { $0.tier == targetTier }
+            guard !inTier.isEmpty else { continue }   // empty tier — keep looking for the next one
             if let (tag, bucket) = largestTagBucket(in: inTier), bucket.count >= 3 {
                 return Pick(
                     phrases: Array(bucket.prefix(3)).map { sessionPhrase(from: $0.item) },
                     suggestedTag: tag
                 )
             }
+            break   // first non-empty tier owns the decision; don't probe lower tiers
         }
 
         // 3. Cross-tag fallback (still tier-ordered): take Tier1 first, then Tier2, then Tier3.
