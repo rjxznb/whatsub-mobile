@@ -38,7 +38,7 @@ struct QuickChatView: View {
     // VAD state
     @StateObject private var vadCoordinator = VADCoordinator()
 
-    init(phrases: [SessionPhrase], suggestedTag: String?,
+    init(phrases: [SessionPhrase], suggestedTag: String?, maxTurns: Int? = 5,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
          settings: LlmSettings = LlmSettingsStore.load()) {
         if phrases.isEmpty {
@@ -52,7 +52,8 @@ struct QuickChatView: View {
         _vm = StateObject(wrappedValue: QuickChatViewModel(
             phrases: phrases, suggestedTag: suggestedTag,
             progressStore: progressStore,
-            engineDriver: .live(engine)
+            engineDriver: .live(engine),
+            maxTurns: maxTurns
         ))
         _showCompliance = State(initialValue: !QuickChatComplianceGate.hasAcknowledged)
     }

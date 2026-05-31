@@ -10,6 +10,8 @@ struct CorpusView: View {
     @State private var showSubscribe = false
     @State private var quickChatPick: PhraseSelector.Pick?
     @State private var quickChatColdStart: Bool = false
+    @State private var showQuickChatLauncher: Bool = false
+    @State private var pendingTurnCap: Int? = 5    // set by the launcher, consumed when sheet opens
 
     var body: some View {
         NavigationStack {
@@ -71,8 +73,14 @@ struct CorpusView: View {
                 .environmentObject(store)
             }
             .sheet(item: $quickChatPick) { pick in
-                QuickChatView(phrases: pick.phrases, suggestedTag: pick.suggestedTag)
+                QuickChatView(phrases: pick.phrases, suggestedTag: pick.suggestedTag, maxTurns: pendingTurnCap)
                     .environmentObject(appState)
+            }
+            .sheet(isPresented: $showQuickChatLauncher) {
+                QuickChatLauncherView(mine: vm.mine) { pick, turnCap in
+                    pendingTurnCap = turnCap
+                    quickChatPick = pick
+                }
             }
             .alert("语料不够", isPresented: $quickChatColdStart) {
                 Button("好") { quickChatColdStart = false }
@@ -166,20 +174,12 @@ struct CorpusView: View {
     }
 
     private func tapQuickChat() {
-        // Pull mine items + the two progress stores; run the pure selector.
-        let prodStore = ProductionProgressStore()
-        let quizStore = QuizProgressStore()
-        let pick = PhraseSelector.pick(
-            from: vm.mine,
-            isRecognized: { quizStore.progress(for: $0).isMastered },
-            productionMastered: { prodStore.progress(for: $0)?.masteredAt != nil },
-            isDueForRepetition: { prodStore.isDueForRepetition(phrase: $0, now: Date().timeIntervalSince1970) },
-            now: Date().timeIntervalSince1970
-        )
-        if let p = pick {
-            quickChatPick = p
-        } else {
+        // Launcher handles both auto-pick and manual flows + turn-cap choice.
+        if vm.mine.count < 2 {
+            // Even manual mode needs 2 phrases — cold-start prompt.
             quickChatColdStart = true
+        } else {
+            showQuickChatLauncher = true
         }
     }
 

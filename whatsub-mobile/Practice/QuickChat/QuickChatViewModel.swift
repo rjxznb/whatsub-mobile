@@ -54,7 +54,9 @@ final class QuickChatViewModel: ObservableObject {
     let progressStore: ProductionProgressStore
     private let driver: EngineDriver
     private let now: () -> Double                  // injectable clock
-    private static let maxTurns = 5                // spec §9 #4
+    /// Per-session turn cap. nil = unlimited (only end on explicit close or
+    /// LLM error). Set in init. Spec §9 #4 default = 5.
+    let maxTurns: Int?
 
     // ---- @Published state for the view ----
     @Published private(set) var phase: Phase = .idle
@@ -75,11 +77,13 @@ final class QuickChatViewModel: ObservableObject {
          suggestedTag: String?,
          progressStore: ProductionProgressStore,
          engineDriver: EngineDriver,
+         maxTurns: Int? = 5,
          now: @escaping () -> Double = { Date().timeIntervalSince1970 }) {
         self.phrases = phrases
         self.suggestedTag = suggestedTag
         self.progressStore = progressStore
         self.driver = engineDriver
+        self.maxTurns = maxTurns
         self.now = now
     }
 
@@ -199,7 +203,8 @@ final class QuickChatViewModel: ObservableObject {
 
         turnIndex += 1
         // Hard cap on user turns. The opening turn (0) doesn't count toward the user budget.
-        if !isOpening, turnIndex - 1 >= Self.maxTurns {
+        // nil maxTurns = unlimited (only end on explicit user close).
+        if !isOpening, let cap = maxTurns, turnIndex - 1 >= cap {
             await persistAndFinish()
         } else {
             phase = .idle

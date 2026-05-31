@@ -114,6 +114,24 @@ final class QuickChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.phase, .done, "5-turn hard cap (spec §9 #4)")
     }
 
+    func testUnlimitedTurnsDoesNotEndOnTurn5() async throws {
+        let storeURL = tempStoreURL()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storeURL) }
+        let store = ProductionProgressStore(fileURL: storeURL)
+        let vm = QuickChatViewModel(
+            phrases: [phrase("a"), phrase("b"), phrase("c")],
+            suggestedTag: nil,
+            progressStore: store,
+            engineDriver: .stub(turns: Array(repeating: .init(events: [.finished]), count: 10)),
+            maxTurns: nil,      // ← unlimited
+            now: { 100 }
+        )
+        await vm.start()
+        for _ in 1...8 { await vm.submitUserInput("x") }
+        XCTAssertEqual(vm.phase, .idle, "unlimited cap: 8 user turns must not auto-end")
+        XCTAssertNotEqual(vm.phase, .done)
+    }
+
     func testExitMidSessionPersistsAccumulatedVerdicts() async throws {
         let storeURL = tempStoreURL()
         addTeardownBlock { try? FileManager.default.removeItem(at: storeURL) }
