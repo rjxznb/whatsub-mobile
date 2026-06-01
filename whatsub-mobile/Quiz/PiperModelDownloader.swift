@@ -30,14 +30,16 @@ final class PiperModelDownloader: ObservableObject {
     ]
 
     /// Root dir for Piper voices. Lazy-created on first access.
-    static var modelRootDir: URL {
+    /// nonisolated so PiperTTS can read it from a background queue without
+    /// hopping to MainActor every inference.
+    nonisolated static var modelRootDir: URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("tts-model")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }
 
-    static var ljspeechDir: URL {
+    nonisolated static var ljspeechDir: URL {
         modelRootDir.appendingPathComponent("ljspeech")
     }
 
@@ -47,7 +49,8 @@ final class PiperModelDownloader: ObservableObject {
     }
 
     /// Synchronous read: all 3 ljspeech files exist on disk.
-    static func isLjspeechReady() -> Bool {
+    /// nonisolated for the same reason as modelRootDir above.
+    nonisolated static func isLjspeechReady() -> Bool {
         let dir = ljspeechDir
         let required = [
             "en_US-ljspeech-medium.onnx",
