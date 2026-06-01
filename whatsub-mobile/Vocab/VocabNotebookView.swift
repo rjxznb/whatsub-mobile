@@ -12,6 +12,9 @@ struct VocabNotebookView: View {
     @ObservedObject private var store = VocabStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var editing: VocabItem?
+    @State private var showPracticeLauncher: Bool = false
+    @State private var quickChatPick: PhraseSelector.Pick?
+    @State private var pendingTurnCap: Int? = 5
 
     private var isStaging: Bool { entryId == VocabStore.stagingKey }
     private var items: [VocabItem] { store.items(for: entryId) }
@@ -50,9 +53,32 @@ struct VocabNotebookView: View {
             .navigationTitle(isStaging ? "暂存区" : "词汇本")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showPracticeLauncher = true
+                    } label: {
+                        Label("AI 对话", systemImage: "bubble.left.and.bubble.right")
+                            .labelStyle(.titleAndIcon)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(items.count >= 2 ? .whatsubAccent : .whatsubInkFaint)
+                    }
+                    .disabled(items.count < 2)
+                    .accessibilityLabel("开始 AI 对话练习")
+                }
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             }
             .sheet(item: $editing) { item in NoteEditor(item: item, entryId: entryId) }
+            .sheet(isPresented: $showPracticeLauncher) {
+                VocabPracticeLauncherView(items: items) { pick, turnCap in
+                    pendingTurnCap = turnCap
+                    quickChatPick = pick
+                }
+            }
+            .sheet(item: $quickChatPick) { pick in
+                QuickChatView(phrases: pick.phrases,
+                              suggestedTag: pick.suggestedTag,
+                              maxTurns: pendingTurnCap)
+            }
         }
     }
 
