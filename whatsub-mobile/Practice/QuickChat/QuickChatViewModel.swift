@@ -8,11 +8,18 @@ import UIKit
 struct EngineDriver {
     /// Runs one turn (user input → AsyncThrowingStream of events).
     let runTurn: (String) -> AsyncThrowingStream<ConversationEngine.Event, Error>
+    /// Pre-parser raw stream content from the most recent turn — surfaces what
+    /// the LLM actually sent (incl. text VerdictParser routed away from dialog).
+    /// Used by the VM's empty-response guard for a useful diagnostic.
+    let lastRawText: () -> String
 
     /// Construct a real driver around a ConversationEngine.
     @MainActor
     static func live(_ engine: ConversationEngine) -> EngineDriver {
-        EngineDriver(runTurn: { input in engine.runTurn(userInput: input) })
+        EngineDriver(
+            runTurn: { input in engine.runTurn(userInput: input) },
+            lastRawText: { engine.lastTurnRawText }
+        )
     }
 
     /// Test stub: a pre-canned list of turns, each with a pre-canned event list.
@@ -21,13 +28,16 @@ struct EngineDriver {
         // Box the mutable list in a reference type so the closure can pop turns.
         final class Cursor { var remaining: [StubTurn]; init(_ t: [StubTurn]) { remaining = t } }
         let cursor = Cursor(turns)
-        return EngineDriver(runTurn: { _ in
-            let turn = cursor.remaining.isEmpty ? StubTurn(events: [.finished]) : cursor.remaining.removeFirst()
-            return AsyncThrowingStream { continuation in
-                for e in turn.events { continuation.yield(e) }
-                continuation.finish()
-            }
-        })
+        return EngineDriver(
+            runTurn: { _ in
+                let turn = cursor.remaining.isEmpty ? StubTurn(events: [.finished]) : cursor.remaining.removeFirst()
+                return AsyncThrowingStream { continuation in
+                    for e in turn.events { continuation.yield(e) }
+                    continuation.finish()
+                }
+            },
+            lastRawText: { "" }
+        )
     }
 }
 
@@ -168,17 +178,10 @@ final class QuickChatViewModel: ObservableObject {
         turns.append(bubble)
         let turnIdx = turns.count - 1
 
-        // Accumulate the RAW (unsanitized) stream content alongside the
-        // displayed (sanitized) assistantText. If the sanitizer over-strips
-        // (e.g. LLM only emits `<assistant>` and stops), the empty-response
-        // guard below uses this raw buffer to tell the user what actually came in.
-        var rawAssistantBuffer = ""
-
         do {
             for try await event in driver.runTurn(userInput) {
                 switch event {
                 case .dialogDelta(let s):
-                    rawAssistantBuffer += s
                     turns[turnIdx].assistantText += s
                     // Re-sanitize the full running buffer on each delta so that a
                     // leading `<assistant>` tag arriving split across chunks is still
@@ -209,22 +212,32 @@ final class QuickChatViewModel: ObservableObject {
         }
 
         // Empty-response guard: stream completed but no dialogue text arrived.
-        // Common causes: LLM returned empty, prompt rejected, sanitizer over-stripped.
+        // Common causes: LLM returned empty, prompt rejected, parser swallowed
+        // everything into verdict buffer (no <<<END>>>), sanitizer over-stripped.
         // Without this, vm.phase falls through to .idle and the UI shows
-        // "稍等..." forever with no signal to the user. When raw bytes DID
-        // arrive but post-sanitizer is empty, surface the raw content so it's
-        // clear that the sanitizer over-stripped (most common: LLM emitted
-        // only `<assistant>` tag or pure markdown).
+        // "稍等..." forever with no signal to the user. We surface the engine's
+        // pre-parser raw text (everything the LLM actually emitted, including
+        // text routed to the verdict buffer) so the cause is immediately visible.
         if turns[turnIdx].assistantText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            turns[turnIdx].verdict == nil {
             var msg = isOpening
-                ? "AI 没有给出开场。检查「我的 → LLM 设置」里的 API Key 和 baseUrl 是否正确，或换个网络重试。"
-                : "AI 这一轮没有回复。再说一次或换种说法试试。"
-            let rawTrimmed = rawAssistantBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !rawTrimmed.isEmpty {
-                msg += "\n\n[实际收到原始内容] \(rawTrimmed.prefix(300))"
+                ? "AI 没有给出开场。"
+                : "AI 这一轮没有回复。"
+            let raw = driver.lastRawText().trimmingCharacters(in: .whitespacesAndNewlines)
+            if raw.isEmpty {
+                msg += " 服务端返回空内容，检查「我的 → LLM 设置」里的 API Key 和 baseUrl，或换个网络重试。"
             } else {
-                msg += "\n\n[stream 完全空 — LLM 一个 content chunk 都没发]"
+                // Tag obvious causes inline so the user / I can read the banner
+                // and know what to fix.
+                var diagnosis = ""
+                if raw.contains("<<<VERDICT>>>") && !raw.contains("<<<END>>>") {
+                    diagnosis = "[parser 卡在 verdict — LLM 发了 <<<VERDICT>>> 但没 <<<END>>>，可能 token 上限切断]"
+                } else if raw.contains("<<<VERDICT>>>") && !raw.contains("\n") {
+                    diagnosis = "[LLM 只输出了 verdict 块没写 dialog]"
+                } else {
+                    diagnosis = "[LLM 返回内容未走 dialog 路径，可能格式不符 prompt]"
+                }
+                msg += "\n\n\(diagnosis)\n\n[LLM 实际返回] \(raw.prefix(400))"
             }
             phase = .error(msg)
             return

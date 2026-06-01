@@ -24,6 +24,15 @@ final class ConversationEngine {
 
     private let client: ChatCompletionsClient
     private(set) var messages: [ChatMessage]
+    /// Pre-parser raw stream content from the most recent runTurn(). Captures
+    /// EVERYTHING the LLM emitted, including content that VerdictParser routed
+    /// into the verdict buffer (which never reaches the VM's dialogDelta path).
+    /// Used by QuickChatViewModel's empty-response guard to surface what the
+    /// LLM actually returned — without this, "empty assistantText + nil verdict"
+    /// looks identical regardless of whether the LLM truly said nothing or said
+    /// "<<<VERDICT>>>..." without a closing "<<<END>>>" (parser stays stuck in
+    /// verdict phase, no dialog ever emitted).
+    private(set) var lastTurnRawText: String = ""
 
     init(client: ChatCompletionsClient, systemPrompt: String) {
         self.client = client
@@ -40,6 +49,7 @@ final class ConversationEngine {
         if !userInput.isEmpty {
             messages.append(ChatMessage(role: "user", content: userInput))
         }
+        lastTurnRawText = ""
         let stream = client.stream(messages)
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -63,6 +73,7 @@ final class ConversationEngine {
                     for try await raw in stream {
                         lastChunkAt = Date()
                         fullAssistantText += raw
+                        self.lastTurnRawText = fullAssistantText
                         let out = parser.feed(raw)
                         if !out.dialogChunk.isEmpty {
                             continuation.yield(.dialogDelta(out.dialogChunk))

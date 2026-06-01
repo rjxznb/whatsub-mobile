@@ -107,7 +107,13 @@ struct ChatCompletionsClient {
             switch self {
             case .notConfigured: return "请先在「我的 → LLM 设置」填入 API Key"
             case .network(let d): return "网络失败：\(d)"
-            case .api(let c, _): return "LLM 接口错误（\(c)）"
+            // Include the diagnostic detail — caller often packs useful info
+            // (server error body, "content 字段空字符串", etc.) and dropping it
+            // forced us to chase ghosts the first time QuickChat went silent.
+            case .api(let c, let detail):
+                return detail.isEmpty
+                    ? "LLM 接口错误（\(c)）"
+                    : "LLM 接口错误（\(c)）：\(detail)"
             case .badResponse: return "LLM 返回格式异常"
             }
         }
