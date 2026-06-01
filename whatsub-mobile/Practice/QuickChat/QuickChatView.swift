@@ -73,7 +73,7 @@ struct QuickChatView: View {
                 VStack(spacing: 0) {
                     headerChips.padding(.top, 6)
                     Spacer(minLength: 0)
-                    VoiceOrbView(state: orbState)
+                    VoiceOrbView(state: orbState, audioLevel: vadCoordinator.audioLevel)
                         .onTapGesture { dismissKeyboard() }
                     Spacer().frame(height: 18)
                     latestAIBubble
@@ -525,7 +525,10 @@ struct QuickChatView: View {
 @MainActor
 final class VADCoordinator: ObservableObject {
     @Published var speechActive: Bool = false
+    /// Smoothed 0..1 audio level for the orb's real-time pulse.
+    @Published var audioLevel: Float = 0
     private let recorder = VoiceActivityRecorder()
+    private let smoothingAlpha: Float = 0.4    // 0..1: lower = smoother, higher = more responsive
 
     func start(onSpeechDetected: @escaping () -> Void,
                onSpeechEnded: @escaping (URL) -> Void,
@@ -540,13 +543,23 @@ final class VADCoordinator: ObservableObject {
         recorder.onSpeechEnded = { [weak self] url in
             Task { @MainActor in
                 self?.speechActive = false
+                self?.audioLevel = 0
                 onSpeechEnded(url)
             }
         }
         recorder.onNoSpeechTimeout = { [weak self] in
             Task { @MainActor in
                 self?.speechActive = false
+                self?.audioLevel = 0
                 onNoSpeechTimeout()
+            }
+        }
+        recorder.onLevelUpdate = { [weak self] raw in
+            Task { @MainActor in
+                guard let self else { return }
+                // Exponential moving average to smooth jitter — at 10Hz polling,
+                // alpha 0.4 gives a ~100ms time constant.
+                self.audioLevel = (1 - self.smoothingAlpha) * self.audioLevel + self.smoothingAlpha * raw
             }
         }
         do {
@@ -559,5 +572,6 @@ final class VADCoordinator: ObservableObject {
     func cancel() {
         recorder.cancel()
         speechActive = false
+        audioLevel = 0
     }
 }

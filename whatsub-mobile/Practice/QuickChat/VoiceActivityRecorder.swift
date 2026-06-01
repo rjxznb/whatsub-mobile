@@ -33,6 +33,9 @@ final class VoiceActivityRecorder {
     var onSpeechDetected: (() -> Void)?
     var onSpeechEnded: ((URL) -> Void)?
     var onNoSpeechTimeout: (() -> Void)?
+    /// Fires every poll (~100ms) with a normalized 0..1 audio amplitude.
+    /// Drives real-time orb reactivity in the view.
+    var onLevelUpdate: ((Float) -> Void)?
 
     /// Start the recorder + polling. Throws if AVAudioRecorder init fails.
     /// Returns immediately (polling runs on a Task).
@@ -95,6 +98,15 @@ final class VoiceActivityRecorder {
         guard let r = recorder, r.isRecording, let started = startedAt else { return }
         r.updateMeters()
         let power = r.averagePower(forChannel: 0)
+
+        // Normalize the AVAudioRecorder power (dBFS, typically -60 .. 0) to 0..1.
+        // Below -50dB is treated as silence; -10dB or louder maps to 1.0.
+        let normalized: Float = {
+            let clamped = max(-50, min(-10, power))
+            return (clamped + 50) / 40   // [-50, -10] → [0, 1]
+        }()
+        onLevelUpdate?(normalized)
+
         let now = Date()
         let elapsedSec = now.timeIntervalSince(started)
 
