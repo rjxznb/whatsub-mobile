@@ -12,9 +12,17 @@ struct VoiceSettingsView: View {
     @State private var voices: [AVSpeechSynthesisVoice] = []
     /// Identifier currently previewing (for ProgressView in the row).
     @State private var previewingId: String?
+    @State private var showGuide: Bool = false
 
     var body: some View {
         List {
+            if !hasGoodVoice && !voices.isEmpty {
+                Section {
+                    calloutBanner
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
+                }
+            }
             Section {
                 autoRow
                 ForEach(voices, id: \.identifier) { voice in
@@ -30,9 +38,54 @@ struct VoiceSettingsView: View {
         .background(Color.whatsubBg.ignoresSafeArea())
         .navigationTitle("语音设置")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { showGuide = true } label: {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.whatsubAccent)
+                }
+                .accessibilityLabel("下载教程")
+            }
+        }
+        .sheet(isPresented: $showGuide) {
+            PremiumVoiceGuideView()
+        }
         .onAppear {
             voices = Speaker.availableEnglishVoices()
         }
+    }
+
+    /// True iff at least one Premium or Enhanced English voice is installed.
+    /// When false, the top callout banner appears.
+    private var hasGoodVoice: Bool {
+        voices.contains { $0.quality == .premium || $0.quality == .enhanced }
+    }
+
+    private var calloutBanner: some View {
+        Button { showGuide = true } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.title2)
+                    .foregroundStyle(.yellow)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("你还没装 Premium 语音").font(.subheadline.weight(.bold)).foregroundStyle(.whatsubInk)
+                    Text("默认 Samantha 是机器音。装一个 Premium 神经语音听感跟 Siri 一致。点这里看 7 步教程 →")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.whatsubInkFaint)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.yellow.opacity(0.12)))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.yellow.opacity(0.4), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     // ---- rows ----
@@ -170,16 +223,26 @@ struct VoiceSettingsView: View {
                 Text("下载更自然的语音").font(.caption.weight(.semibold)).foregroundStyle(.whatsubInk)
                 Text("iOS 设置 → 辅助功能 → 朗读内容 → 语音 → 英语 → 找标着 Premium 的（例如 Ava、Evan、Zoe）→ 下载")
                     .font(.caption).foregroundStyle(.whatsubInkMuted)
-                Button {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
+                HStack(spacing: 10) {
+                    Button {
+                        showGuide = true
+                    } label: {
+                        Label("看图文教程", systemImage: "questionmark.circle")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.whatsubAccent)
                     }
-                } label: {
-                    Label("打开 whatsub 系统设置", systemImage: "gear")
-                        .font(.caption.weight(.semibold))
+                    .buttonStyle(.borderless)
+                    Button {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    } label: {
+                        Label("打开系统设置", systemImage: "gear")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.whatsubAccent)
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.whatsubAccent)
                 .padding(.top, 2)
                 Text("（iOS 不允许 app 直接跳到「朗读内容」深路径，请进系统设置后手动找。）")
                     .font(.caption2).foregroundStyle(.whatsubInkFaint)
