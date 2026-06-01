@@ -54,14 +54,17 @@ jobs:
             echo "Using cached ${TARBALL}"
           fi
           mkdir -p frameworks
-          # Tarball layout (verified from a real CI run):
+          # Tarball layout (verified from CI):
           #   <top>/build-ios/sherpa-onnx.xcframework               (depth 2)
-          #   <top>/build-ios/ios-onnxruntime/onnxruntime.xcframework (depth 3)
-          # Strip 2 levels so sherpa-onnx lands directly, then flatten
-          # onnxruntime up out of ios-onnxruntime/.
+          #   <top>/build-ios/ios-onnxruntime/onnxruntime.xcframework -> 1.17.1/onnxruntime.xcframework (symlink)
+          #   <top>/build-ios/ios-onnxruntime/1.17.1/onnxruntime.xcframework/ (the real bundle)
+          # Strip 2 levels so sherpa-onnx lands directly, then locate the REAL
+          # onnxruntime.xcframework directory (not the symlink) and flatten it up.
           tar -xjf "$CACHE_PATH" -C frameworks --strip-components=2
-          if [ -d frameworks/ios-onnxruntime/onnxruntime.xcframework ]; then
-            mv frameworks/ios-onnxruntime/onnxruntime.xcframework frameworks/
+          REAL_ONNX=$(find frameworks/ -mindepth 2 -name "onnxruntime.xcframework" -type d | head -1)
+          if [ -n "$REAL_ONNX" ]; then
+            rm -f frameworks/onnxruntime.xcframework   # the broken symlink at top level, if any
+            mv "$REAL_ONNX" frameworks/onnxruntime.xcframework
             rm -rf frameworks/ios-onnxruntime
           fi
           ls -lh frameworks/
