@@ -106,6 +106,10 @@ struct MeView: View {
                             Label("LLM 设置", systemImage: "cpu")
                                 .foregroundStyle(.whatsubInk)
                         }
+                        NavigationLink(destination: VoiceSettingsView()) {
+                            Label("语音设置", systemImage: "speaker.wave.2")
+                                .foregroundStyle(.whatsubInk)
+                        }
                         NavigationLink(destination: ImportQueueView()) {
                             Label("导入队列", systemImage: "tray.and.arrow.down")
                                 .foregroundStyle(.whatsubInk)

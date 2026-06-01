@@ -21,6 +21,11 @@ enum Speaker {
         "Karen", "Moira", "Tessa", "Serena", "Fiona", "Zoe",
     ]
 
+    /// UserDefaults key for the optional pinned voice identifier. Set by
+    /// VoiceSettingsView. When nil (empty string), Speaker auto-picks the best
+    /// installed voice.
+    static let pinnedVoiceDefaultsKey = "speaker.pinned-voice-identifier.v1"
+
     /// Quiz-card flow (unchanged contract): interrupts any in-flight speech.
     static func speak(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -88,6 +93,17 @@ enum Speaker {
     /// `hasPremiumEnglishVoice` lets the QuickChatView surface a one-time hint
     /// if no premium voice is found locally.
     private static func pickVoice(locale: String) -> AVSpeechSynthesisVoice? {
+        // 1. If the user has pinned a specific voice in 我的 → 语音设置 AND
+        //    that voice is still installed AND its language matches the requested
+        //    locale prefix, prefer it over auto-pick.
+        let pinnedId = UserDefaults.standard.string(forKey: pinnedVoiceDefaultsKey) ?? ""
+        if !pinnedId.isEmpty,
+           let pinned = AVSpeechSynthesisVoice(identifier: pinnedId),
+           pinned.language.hasPrefix(locale.prefix(2)) {
+            return pinned
+        }
+
+        // 2. Otherwise: auto-pick logic (premium → enhanced → default).
         let allVoices = AVSpeechSynthesisVoice.speechVoices()
         let matching = allVoices.filter { $0.language.hasPrefix(locale.prefix(2)) }
         guard !matching.isEmpty else { return AVSpeechSynthesisVoice(language: locale) }
@@ -116,6 +132,28 @@ enum Speaker {
             }
         }
         return matching.first ?? AVSpeechSynthesisVoice(language: locale)
+    }
+
+    /// Returns all installed English TTS voices, sorted by quality tier
+    /// (premium → enhanced → default), then by language code, then by name.
+    /// Used by VoiceSettingsView.
+    static func availableEnglishVoices() -> [AVSpeechSynthesisVoice] {
+        let voices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
+        return voices.sorted { a, b in
+            let qa = qualityRank(a.quality)
+            let qb = qualityRank(b.quality)
+            if qa != qb { return qa < qb }
+            if a.language != b.language { return a.language < b.language }
+            return a.name < b.name
+        }
+    }
+
+    private static func qualityRank(_ q: AVSpeechSynthesisVoiceQuality) -> Int {
+        switch q {
+        case .premium: return 0
+        case .enhanced: return 1
+        default: return 2
+        }
     }
 
     /// True iff at least one English voice with `.premium` or `.enhanced`
