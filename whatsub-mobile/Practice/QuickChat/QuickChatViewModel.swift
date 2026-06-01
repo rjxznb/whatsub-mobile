@@ -168,10 +168,17 @@ final class QuickChatViewModel: ObservableObject {
         turns.append(bubble)
         let turnIdx = turns.count - 1
 
+        // Accumulate the RAW (unsanitized) stream content alongside the
+        // displayed (sanitized) assistantText. If the sanitizer over-strips
+        // (e.g. LLM only emits `<assistant>` and stops), the empty-response
+        // guard below uses this raw buffer to tell the user what actually came in.
+        var rawAssistantBuffer = ""
+
         do {
             for try await event in driver.runTurn(userInput) {
                 switch event {
                 case .dialogDelta(let s):
+                    rawAssistantBuffer += s
                     turns[turnIdx].assistantText += s
                     // Re-sanitize the full running buffer on each delta so that a
                     // leading `<assistant>` tag arriving split across chunks is still
@@ -204,12 +211,22 @@ final class QuickChatViewModel: ObservableObject {
         // Empty-response guard: stream completed but no dialogue text arrived.
         // Common causes: LLM returned empty, prompt rejected, sanitizer over-stripped.
         // Without this, vm.phase falls through to .idle and the UI shows
-        // "稍等..." forever with no signal to the user.
+        // "稍等..." forever with no signal to the user. When raw bytes DID
+        // arrive but post-sanitizer is empty, surface the raw content so it's
+        // clear that the sanitizer over-stripped (most common: LLM emitted
+        // only `<assistant>` tag or pure markdown).
         if turns[turnIdx].assistantText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            turns[turnIdx].verdict == nil {
-            phase = .error(isOpening
+            var msg = isOpening
                 ? "AI 没有给出开场。检查「我的 → LLM 设置」里的 API Key 和 baseUrl 是否正确，或换个网络重试。"
-                : "AI 这一轮没有回复。再说一次或换种说法试试。")
+                : "AI 这一轮没有回复。再说一次或换种说法试试。"
+            let rawTrimmed = rawAssistantBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rawTrimmed.isEmpty {
+                msg += "\n\n[实际收到原始内容] \(rawTrimmed.prefix(300))"
+            } else {
+                msg += "\n\n[stream 完全空 — LLM 一个 content chunk 都没发]"
+            }
+            phase = .error(msg)
             return
         }
 
