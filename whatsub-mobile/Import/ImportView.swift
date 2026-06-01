@@ -32,7 +32,7 @@ struct ImportView: View {
                 progressBody(icon: "captions.bubble", label: "提取字幕中…（需挂 VPN）", progress: nil)
             case .analyzing(let done, let total):
                 progressBody(
-                    icon: "brain",
+                    icon: "sparkles",
                     label: "AI 解析中 \(done)/\(total)",
                     progress: total > 0 ? Double(done) / Double(total) : nil
                 )
