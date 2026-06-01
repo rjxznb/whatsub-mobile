@@ -1,8 +1,19 @@
 import SwiftUI
 
-/// Audio-reactive orb. Continuous TimelineView at 60fps. Blob drift uses a
-/// phase accumulator (not time × speed) so when speed changes the angle stays
-/// continuous — no visual teleportation.
+/// Siri-style iridescent glow orb. Bright emissive body with cyan/pink/white
+/// gradients and a slowly rotating white "swoosh" wisp inside. Audio-reactive:
+/// the whole orb scales up dramatically with mic level (the size IS the
+/// listening signal — no color flip).
+///
+/// Layers, back to front:
+/// 1. Soft outer glow — cyan halo, blurred, scales with size + pulse
+/// 2. Pink/lavender tint wisp — slow rotating elongated ellipse, very blurred,
+///    gives the orb its iridescent secondary hue at the edges
+/// 3. Cyan/white body — radial gradient from near-white center → bright cyan
+///    → soft cyan edge. This is the visible "orb"
+/// 4. White swoosh wisp — slowly rotating bright white ellipse (the Siri
+///    signature brushstroke); clipped to the orb circle, heavily blurred
+/// 5. Top highlight — small bright spot upper-right for the glass sheen
 struct VoiceOrbView: View {
     enum OrbState: Equatable {
         case idle, thinking, speaking, recording, transcribing
@@ -11,12 +22,11 @@ struct VoiceOrbView: View {
     let state: OrbState
     var audioLevel: Float = 0    // 0..1, smoothed in VADCoordinator
 
-    private let orbSize: CGFloat = 200
-    private let haloSize: CGFloat = 290
+    /// Resting orb diameter. Grows from this base by `(1 + level * scaleBoost)`.
+    private let baseSize: CGFloat = 140
+    private let haloMultiplier: CGFloat = 1.9   // halo diameter = body × this
+    private let scaleBoost: Double = 0.6        // up to +60% at full voice
 
-    @State private var sparkle1: Double = 0
-    @State private var sparkle2: Double = 0
-    @State private var sparkle3: Double = 0
     @State private var phase = PhaseTracker()
 
     var body: some View {
@@ -28,88 +38,165 @@ struct VoiceOrbView: View {
             )
 
             ZStack {
-                outerAura(scale: frame.pulse, opacity: frame.haloOpacity)
+                outerGlow(scale: frame.pulse, opacity: frame.haloOpacity)
                 ZStack {
-                    innerGlow(driftA: frame.driftA, driftB: frame.driftB,
-                              rotation: frame.rotation, amplitude: frame.driftAmplitude)
-                    frostedGlass()
-                    specularSheen()
-                    rimStroke()
+                    pinkWisp(rotation: frame.wispRotationA)
+                    orbBody
+                    whiteSwoosh(rotation: frame.wispRotationB)
+                    topHighlight
                 }
-                .frame(width: orbSize, height: orbSize)
+                .frame(width: baseSize, height: baseSize)
+                .clipShape(Circle())
                 .scaleEffect(frame.pulse)
-                .shadow(color: glowColor.opacity(0.4 + Double(audioLevel) * 0.3),
-                        radius: 20 + CGFloat(audioLevel * 10))
-                sparkles
+                .shadow(color: cyanGlow.opacity(0.5 + Double(audioLevel) * 0.3),
+                        radius: 18 + CGFloat(audioLevel * 12))
             }
-            .frame(width: haloSize, height: haloSize)
+            .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
         }
-        .onAppear { startSparkles() }
     }
 
-    // ---- phase accumulator ----
+    // ---- Layers ----
 
-    /// `@State` works for any class — SwiftUI just preserves the reference
-    /// across renders. We don't need @Published since TimelineView already
-    /// drives the redraw cadence.
+    private func outerGlow(scale: CGFloat, opacity: Double) -> some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [cyanGlow.opacity(opacity), pinkGlow.opacity(opacity * 0.5), .clear],
+                    center: .center,
+                    startRadius: 5,
+                    endRadius: baseSize * 0.9
+                )
+            )
+            .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
+            .blur(radius: 30)
+            .scaleEffect(scale)
+    }
+
+    private func pinkWisp(rotation: Double) -> some View {
+        // Elongated soft pink-lavender shape that tints the bottom-right of
+        // the orb (rotates slowly to suggest organic motion).
+        Ellipse()
+            .fill(
+                LinearGradient(
+                    colors: [pinkGlow.opacity(0.0), pinkGlow.opacity(0.85), pinkGlow.opacity(0.0)],
+                    startPoint: .leading, endPoint: .trailing
+                )
+            )
+            .frame(width: baseSize * 1.15, height: baseSize * 0.55)
+            .rotationEffect(.degrees(rotation))
+            .blur(radius: 20)
+    }
+
+    /// The bright emissive core. White-cyan center fading to soft cyan edge.
+    private var orbBody: some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [
+                        Color(red: 0.96, green: 0.99, blue: 1.0),                  // near white center
+                        Color(red: 0.55, green: 0.85, blue: 1.0),                  // bright sky cyan
+                        Color(red: 0.30, green: 0.65, blue: 0.95).opacity(0.85)    // softer cyan edge
+                    ],
+                    center: UnitPoint(x: 0.45, y: 0.40),
+                    startRadius: 0,
+                    endRadius: baseSize * 0.55
+                )
+            )
+            .frame(width: baseSize, height: baseSize)
+    }
+
+    private func whiteSwoosh(rotation: Double) -> some View {
+        // Bright white brushstroke that flows through the orb. Heavily blurred
+        // so it reads as "light" not "shape". Rotates slowly for life.
+        Ellipse()
+            .fill(
+                LinearGradient(
+                    colors: [.white.opacity(0.0), .white.opacity(0.95), .white.opacity(0.0)],
+                    startPoint: .leading, endPoint: .trailing
+                )
+            )
+            .frame(width: baseSize * 1.0, height: baseSize * 0.45)
+            .rotationEffect(.degrees(rotation))
+            .blur(radius: 14)
+            .blendMode(.plusLighter)
+    }
+
+    private var topHighlight: some View {
+        // Small concentrated bright spot upper-right (like Siri's gloss).
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [.white.opacity(0.75), .white.opacity(0.15), .clear],
+                    center: UnitPoint(x: 0.32, y: 0.27),
+                    startRadius: 1,
+                    endRadius: baseSize * 0.35
+                )
+            )
+            .frame(width: baseSize, height: baseSize)
+            .blendMode(.plusLighter)
+    }
+
+    // ---- palette ----
+
+    private var cyanGlow: Color {
+        switch state {
+        case .transcribing: return Color(red: 1.0, green: 0.85, blue: 0.45)   // warm shift only here
+        default:            return Color(red: 0.40, green: 0.75, blue: 1.0)   // sky cyan
+        }
+    }
+
+    private var pinkGlow: Color {
+        switch state {
+        case .transcribing: return Color(red: 1.0, green: 0.65, blue: 0.25)
+        default:            return Color(red: 0.98, green: 0.62, blue: 0.85)  // soft pink-lavender
+        }
+    }
+
+    // ---- phase accumulator (preserves smoothness when speed changes) ----
+
     final class PhaseTracker {
-        var phaseA: Double = 0
-        var phaseB: Double = 2.1
         var pulsePhase: Double = 0
-        var rotation: Double = 0
+        var wispA: Double = 0
+        var wispB: Double = .pi / 2     // start 90° apart
         private var lastDate: Date? = nil
 
         struct Frame {
             let pulse: CGFloat
             let haloOpacity: Double
-            let driftA: Double
-            let driftB: Double
-            let driftAmplitude: Double
-            let rotation: Double
+            let wispRotationA: Double
+            let wispRotationB: Double
         }
 
         func advance(to date: Date, state: OrbState, level: Double) -> Frame {
-            // dt clamped to avoid huge jumps if the app was backgrounded.
             let dt: Double = {
                 guard let last = lastDate else { return 0 }
                 return min(0.1, date.timeIntervalSince(last))
             }()
             lastDate = date
 
-            // State-tuned base parameters.
             let breath = breathingParams(for: state)
-            let driftBase = blobBaseSpeed(for: state)
-            let rotPeriod: Double = (state == .thinking) ? 4.5 : 22.0
+            let wispBase = wispBaseSpeed(for: state)
+            // Audio level accelerates wisps modestly (up to 2× faster on loud voice).
+            let wispSpeed = wispBase * (1.0 + level * 1.0)
 
-            // Speed boosted by audio level (up to 2.5×).
-            let driftSpeed = driftBase * (1.0 + level * 1.5)
-
-            // INTEGRATE phase — when driftSpeed changes, only the next dt's
-            // contribution changes; the past phase is preserved → no jumps.
-            phaseA += dt * driftSpeed
-            phaseB += dt * driftSpeed * 1.4
-            // Pulse breathing also uses phase accumulator so rate changes don't jump.
             pulsePhase += dt * (.pi * 2 / breath.period)
-            rotation += dt * (360.0 / rotPeriod)
-            if rotation > 360 { rotation = rotation.truncatingRemainder(dividingBy: 360) }
+            wispA += dt * wispSpeed * 60         // 60 = scale to deg/sec
+            wispB += dt * wispSpeed * 60 * 1.4   // counter-rotating-ish (different rate)
 
-            let breathPhase = (sin(pulsePhase) + 1) / 2     // 0..1
-            let breathPulse = 1.0 + breathPhase * (breath.peak - 1.0)
-            let pulse = breathPulse + level * 0.28
+            let breathFrac = (sin(pulsePhase) + 1) / 2      // 0..1
+            let breathPulse = 1.0 + breathFrac * (breath.peak - 1.0)
+            // Audio level adds a much bigger growth: up to +60% scale on loud voice.
+            let levelGrowth = level * 0.6
+            let pulse = breathPulse + levelGrowth
 
-            let haloBase: Double = (state == .recording || state == .speaking) ? 0.58 : 0.45
-            let haloOpacity = haloBase + level * 0.35
-
-            // Blob radius: base + level boost.
-            let amplitude = 22.0 + level * 16.0
+            let haloBase: Double = (state == .recording || state == .speaking) ? 0.55 : 0.40
+            let haloOpacity = haloBase + level * 0.30
 
             return Frame(
                 pulse: CGFloat(pulse),
                 haloOpacity: haloOpacity,
-                driftA: phaseA,
-                driftB: phaseB,
-                driftAmplitude: amplitude,
-                rotation: rotation
+                wispRotationA: wispA.truncatingRemainder(dividingBy: 360),
+                wispRotationB: wispB.truncatingRemainder(dividingBy: 360)
             )
         }
 
@@ -117,145 +204,23 @@ struct VoiceOrbView: View {
 
         private func breathingParams(for s: OrbState) -> BreathParams {
             switch s {
-            case .idle:         return BreathParams(period: 3.2, peak: 1.05)
-            case .thinking:     return BreathParams(period: 2.4, peak: 1.06)
-            case .speaking:     return BreathParams(period: 1.3, peak: 1.16)
-            case .recording:    return BreathParams(period: 1.6, peak: 1.04)
-            case .transcribing: return BreathParams(period: 0.6, peak: 1.10)
+            case .idle:         return BreathParams(period: 4.0, peak: 1.04)
+            case .thinking:     return BreathParams(period: 2.6, peak: 1.05)
+            case .speaking:     return BreathParams(period: 1.4, peak: 1.10)
+            case .recording:    return BreathParams(period: 2.0, peak: 1.03)   // breath subtle; level boosts the rest
+            case .transcribing: return BreathParams(period: 0.7, peak: 1.08)
             }
         }
 
-        private func blobBaseSpeed(for s: OrbState) -> Double {
-            // rad/sec at silence
+        private func wispBaseSpeed(for s: OrbState) -> Double {
+            // rotation rate (1.0 = baseline)
             switch s {
-            case .idle: return 0.8
-            case .thinking: return 1.0
-            case .speaking: return 1.6
-            case .recording: return 1.4
-            case .transcribing: return 2.4
+            case .idle: return 0.3
+            case .thinking: return 0.45
+            case .speaking: return 0.6
+            case .recording: return 0.5
+            case .transcribing: return 0.85
             }
-        }
-    }
-
-    // ---- layers ----
-
-    private func outerAura(scale: CGFloat, opacity: Double) -> some View {
-        Circle()
-            .fill(glowColor.opacity(opacity))
-            .frame(width: haloSize, height: haloSize)
-            .blur(radius: 55)
-            .scaleEffect(scale)
-    }
-
-    private func innerGlow(driftA: Double, driftB: Double, rotation: Double, amplitude: Double) -> some View {
-        ZStack {
-            glowBlob(color: glowColor,
-                     size: 165,
-                     offsetX: CGFloat(amplitude * cos(driftA)),
-                     offsetY: CGFloat(amplitude * sin(driftA)),
-                     blur: 30)
-            glowBlob(color: accentColor,
-                     size: 130,
-                     offsetX: CGFloat(amplitude * cos(driftB)),
-                     offsetY: CGFloat(amplitude * sin(driftB)),
-                     blur: 26)
-        }
-        .frame(width: orbSize, height: orbSize)
-        .clipShape(Circle())
-        .rotationEffect(.degrees(rotation))
-    }
-
-    private func glowBlob(color: Color, size: CGFloat,
-                          offsetX: CGFloat, offsetY: CGFloat, blur: CGFloat) -> some View {
-        Circle()
-            .fill(
-                RadialGradient(
-                    colors: [color.opacity(0.95), color.opacity(0.5), color.opacity(0.0)],
-                    center: .center, startRadius: 1, endRadius: size / 2
-                )
-            )
-            .frame(width: size, height: size)
-            .offset(x: offsetX, y: offsetY)
-            .blur(radius: blur)
-    }
-
-    private func frostedGlass() -> some View {
-        Circle()
-            .fill(.ultraThinMaterial)
-            .frame(width: orbSize, height: orbSize)
-            .opacity(0.85)
-    }
-
-    private func specularSheen() -> some View {
-        Circle()
-            .fill(
-                RadialGradient(
-                    colors: [.white.opacity(0.35), .white.opacity(0.05), .clear],
-                    center: UnitPoint(x: 0.32, y: 0.27),
-                    startRadius: 1, endRadius: 70
-                )
-            )
-            .frame(width: orbSize, height: orbSize)
-            .blendMode(.plusLighter)
-    }
-
-    private func rimStroke() -> some View {
-        Circle()
-            .strokeBorder(
-                LinearGradient(
-                    colors: [.white.opacity(0.4), .white.opacity(0.05), .clear, accentColor.opacity(0.35)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ),
-                lineWidth: 1.0
-            )
-            .frame(width: orbSize, height: orbSize)
-    }
-
-    // ---- sparkles ----
-
-    private var sparkles: some View {
-        ZStack {
-            sparkleDot(offsetX: -58, offsetY: -72, opacity: sparkle1)
-            sparkleDot(offsetX: 64, offsetY: -45, opacity: sparkle2)
-            sparkleDot(offsetX: -28, offsetY: 78, opacity: sparkle3)
-        }
-        .frame(width: haloSize, height: haloSize)
-    }
-
-    private func sparkleDot(offsetX: CGFloat, offsetY: CGFloat, opacity: Double) -> some View {
-        ZStack {
-            Circle().fill(.white.opacity(0.35)).frame(width: 10, height: 10).blur(radius: 4)
-            Circle().fill(.white).frame(width: 3, height: 3)
-        }
-        .opacity(opacity)
-        .offset(x: offsetX, y: offsetY)
-    }
-
-    private func startSparkles() {
-        sparkle1 = 0; sparkle2 = 0; sparkle3 = 0
-        withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true).delay(0.0)) {
-            sparkle1 = 0.85
-        }
-        withAnimation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true).delay(0.6)) {
-            sparkle2 = 0.7
-        }
-        withAnimation(.easeInOut(duration: 2.1).repeatForever(autoreverses: true).delay(0.3)) {
-            sparkle3 = 0.55
-        }
-    }
-
-    // ---- palette ----
-
-    private var glowColor: Color {
-        switch state {
-        case .transcribing: return Color(red: 1.0, green: 0.72, blue: 0.18)
-        default:            return Color(red: 0.20, green: 0.50, blue: 1.0)
-        }
-    }
-    private var accentColor: Color {
-        switch state {
-        case .transcribing: return Color(red: 1.0, green: 0.92, blue: 0.55)
-        default:            return Color(red: 0.45, green: 0.78, blue: 1.0)
         }
     }
 }
