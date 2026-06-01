@@ -201,6 +201,18 @@ final class QuickChatViewModel: ObservableObject {
             return
         }
 
+        // Empty-response guard: stream completed but no dialogue text arrived.
+        // Common causes: LLM returned empty, prompt rejected, sanitizer over-stripped.
+        // Without this, vm.phase falls through to .idle and the UI shows
+        // "稍等..." forever with no signal to the user.
+        if turns[turnIdx].assistantText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           turns[turnIdx].verdict == nil {
+            phase = .error(isOpening
+                ? "AI 没有给出开场。检查「我的 → LLM 设置」里的 API Key 和 baseUrl 是否正确，或换个网络重试。"
+                : "AI 这一轮没有回复。再说一次或换种说法试试。")
+            return
+        }
+
         turnIndex += 1
         // Hard cap on user turns. The opening turn (0) doesn't count toward the user budget.
         // nil maxTurns = unlimited (only end on explicit user close).

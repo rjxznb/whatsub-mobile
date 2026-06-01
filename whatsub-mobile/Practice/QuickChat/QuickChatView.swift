@@ -90,7 +90,6 @@ struct QuickChatView: View {
                             .padding(.horizontal, 16)
                     }
                     Spacer(minLength: 0)
-                    bottomControls
                 }
                 if vm.phase == .done {
                     QuickChatSummaryView(
@@ -102,6 +101,10 @@ struct QuickChatView: View {
                     )
                     .background(Color.whatsubBg.ignoresSafeArea())
                 }
+            }
+            .safeAreaInset(edge: .bottom) {
+                bottomControls
+                    .background(Color.whatsubBg)
             }
             .navigationTitle("对话陪练")
             .navigationBarTitleDisplayMode(.inline)
