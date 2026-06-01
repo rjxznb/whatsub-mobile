@@ -193,6 +193,83 @@ actor WhatsubAPI {
         return try decode(CorpusQuota.self, from: data)
     }
 
+    /// POSTs a new phrase to /api/corpus/contribute. Returns the new contribution id.
+    /// Throws APIError on quota/rate-limit/blocklist/network errors.
+    func contributePhrase(
+        phraseRaw: String,
+        contextSentence: String,
+        sourceKind: String,
+        sourceURL: String,
+        sourceTitle: String?,
+        meaningZh: String?,
+        usageNote: String?,
+        tags: [String],
+        token: String
+    ) async throws -> Int {
+        let url = Endpoints.corpus("contribute")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 30
+
+        var source: [String: Any] = ["kind": sourceKind, "url": sourceURL]
+        if let title = sourceTitle, !title.isEmpty { source["title"] = title }
+
+        var body: [String: Any] = [
+            "phraseRaw": phraseRaw,
+            "contextSentence": contextSentence,
+            "source": source,
+            "tags": tags,
+        ]
+        if let m = meaningZh, !m.isEmpty { body["meaningZh"] = m }
+        if let u = usageNote, !u.isEmpty { body["usageNote"] = u }
+
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: req)
+        } catch {
+            throw APIError.network(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.network("no http response")
+        }
+        if (200..<300).contains(http.statusCode) {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let id = obj["id"] as? Int {
+                return id
+            }
+            return 0
+        }
+        // Parse server error reason for a friendlier message.
+        let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let reason = parsed?["reason"] as? String ?? ""
+        switch http.statusCode {
+        case 401:
+            throw APIError.unauthorized
+        case 403 where reason == "quota_exceeded":
+            let used = (parsed?["used"] as? Int) ?? 0
+            let limit = (parsed?["limit"] as? Int) ?? 0
+            throw APIError.server(403, "已达上限 (\(used)/\(limit)) — 升级订阅或先删除一些短语")
+        case 429:
+            let window = (parsed?["window"] as? String) ?? "minute"
+            throw APIError.server(429, window == "day" ? "今日添加次数已达上限" : "添加太频繁，稍后再试")
+        case 400 where reason == "blocklist_match":
+            throw APIError.server(400, "该短语不能添加")
+        case 400 where reason == "empty_phrase":
+            throw APIError.server(400, "短语不能为空")
+        case 400 where reason == "invalid_source" || reason == "invalid_url":
+            throw APIError.server(400, "来源 URL 无效")
+        case 400 where reason == "missing_fields":
+            throw APIError.server(400, "缺少必填字段")
+        default:
+            throw APIError.server(http.statusCode, "添加失败 (HTTP \(http.statusCode))")
+        }
+    }
+
     /// Returns nil when the backend reports no_data (404).
     func lookupPhrase(_ phrase: String, token: String) async throws -> LookupResponse? {
         let enc = phrase.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? phrase

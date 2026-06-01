@@ -7,6 +7,7 @@ struct CorpusView: View {
 
     private var token: String? { appState.session?.sessionToken }
     @State private var showQuiz = false
+    @State private var showAddPhrase: Bool = false
     @State private var showSubscribe = false
     @State private var quickChatPick: PhraseSelector.Pick?
     @State private var quickChatColdStart: Bool = false
@@ -20,6 +21,14 @@ struct CorpusView: View {
                     Text("语料库")
                         .font(.system(size: 34, weight: .bold))
                         .foregroundStyle(.whatsubInk)
+                    if vm.scope == .mine {
+                        Button { showAddPhrase = true } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(.whatsubAccent)
+                        }
+                        .accessibilityLabel("添加短语")
+                    }
                     Spacer()
                     Button { tapQuickChat() } label: {
                         Label("对话陪练", systemImage: "bubble.left.and.bubble.right")
@@ -59,6 +68,17 @@ struct CorpusView: View {
             .refreshable { if let t = token { await vm.reload(token: t) } }
             .sheet(isPresented: $showQuiz) {
                 QuizView().environmentObject(appState)
+            }
+            .sheet(isPresented: $showAddPhrase) {
+                AddCorpusPhraseView(
+                    availableTags: vm.tags,
+                    onSuccess: {
+                        if let t = token {
+                            Task { await vm.reload(token: t) }
+                        }
+                    }
+                )
+                .environmentObject(appState)
             }
             // Pro subscription upsell — presented when user taps "订阅 Pro" on the
             // 公共语料库 lock. Attached at the root so a Picker / List re-render
