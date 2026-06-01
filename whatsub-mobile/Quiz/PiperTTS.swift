@@ -123,8 +123,13 @@ final class PiperTTS {
             p.delegate = playerDelegate
             p.prepareToPlay()
             // Drive the LyricTicker word-by-word using player duration as the
-            // total time budget. simulateWords runs a Timer on MainActor.
-            LyricTicker.shared.simulateWords(in: text, duration: p.duration)
+            // total time budget. simulateWords is @MainActor (runs a Timer
+            // on the main run loop); we're on main here too but Swift's strict
+            // concurrency requires the explicit hop.
+            let duration = p.duration
+            Task { @MainActor in
+                LyricTicker.shared.simulateWords(in: text, duration: duration)
+            }
             p.play()
             currentPlayer = p
         } catch {
