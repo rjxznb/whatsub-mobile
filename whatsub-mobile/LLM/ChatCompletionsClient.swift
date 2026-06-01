@@ -93,6 +93,17 @@ struct ChatCompletionsClient {
                         throw LlmError.api(http.statusCode, sample)
                     }
 
+                    // Track stream stats so we can produce a useful error if the
+                    // stream completes without any content chunks. Common causes:
+                    // deprecated model alias rejected on streaming endpoint
+                    // (caught DeepSeek doing this with deepseek-chat post-v4),
+                    // content_filter, length cap, account rate-limit signaled
+                    // via top-level `error` field.
+                    var contentChunks = 0
+                    var lastFinishReason: String?
+                    var lastErrorMessage: String?
+                    var rawSample = ""
+
                     for try await line in bytes.lines {
                         // SSE: each event is a `data: ...` line, plus blank line. We
                         // only care about the data lines; `bytes.lines` already gives
@@ -102,15 +113,59 @@ struct ChatCompletionsClient {
                         if payload == "[DONE]" {
                             break
                         }
+                        if rawSample.count < 500 {
+                            rawSample += payload + " | "
+                        }
                         if let data = payload.data(using: .utf8),
-                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let choices = obj["choices"] as? [[String: Any]],
-                           let delta = choices.first?["delta"] as? [String: Any],
-                           let chunk = delta["content"] as? String,
-                           !chunk.isEmpty {
-                            continuation.yield(chunk)
+                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            // Top-level `error` field — some providers stream errors in body.
+                            if let errorObj = obj["error"] as? [String: Any] {
+                                lastErrorMessage = errorObj["message"] as? String ?? "unknown stream error"
+                                continue
+                            }
+                            if let choices = obj["choices"] as? [[String: Any]],
+                               let choice = choices.first {
+                                if let fr = choice["finish_reason"] as? String, !fr.isEmpty {
+                                    lastFinishReason = fr
+                                }
+                                if let delta = choice["delta"] as? [String: Any],
+                                   let chunk = delta["content"] as? String,
+                                   !chunk.isEmpty {
+                                    contentChunks += 1
+                                    continuation.yield(chunk)
+                                }
+                            }
                         }
                     }
+
+                    // No content chunks received — throw a diagnostic so user sees
+                    // why instead of silently falling through to the VM's empty-
+                    // response guard which only says "AI 没有给出开场".
+                    if contentChunks == 0 {
+                        var diag = "LLM 流式返回零内容"
+                        if let lastErrorMessage {
+                            diag += "（服务端错误：\(lastErrorMessage)）"
+                        } else if let lastFinishReason {
+                            diag += "（finish_reason=\(lastFinishReason)）"
+                            switch lastFinishReason {
+                            case "content_filter":
+                                diag += "—内容审核拦截，换个 prompt 试试"
+                            case "length":
+                                diag += "—token 上限被吃完，可能 reasoning 模型在思考阶段耗尽"
+                            case "stop":
+                                diag += "—模型主动停止但没输出内容，常见于模型名废弃 (例如 deepseek-chat → 改 deepseek-v4-flash)"
+                            default: break
+                            }
+                        } else if rawSample.isEmpty {
+                            diag += "（stream 完全空，可能网络问题）"
+                        }
+                        if !rawSample.isEmpty {
+                            let preview = String(rawSample.prefix(200))
+                            diag += "\n原始片段: \(preview)"
+                        }
+                        throw LlmError.api(200, diag)
+                    }
+
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

@@ -6,7 +6,12 @@ import Foundation
 struct LlmSettings: Codable, Equatable {
     var baseUrl: String = "https://api.deepseek.com/v1"
     var apiKey: String = ""
-    var model: String = "deepseek-chat"
+    // DeepSeek deprecated `deepseek-chat` / `deepseek-reasoner` aliases as of
+    // 2026. New canonical names: `deepseek-v4-flash` (non-thinking, primary)
+    // and `deepseek-v4-pro` (thinking). The old aliases still resolve for the
+    // non-streaming endpoint but the streaming endpoint may return empty for
+    // them — caught us once (QuickChat opening turn silent). Use the new name.
+    var model: String = "deepseek-v4-flash"
 
     var isConfigured: Bool { !apiKey.trimmingCharacters(in: .whitespaces).isEmpty }
 }
