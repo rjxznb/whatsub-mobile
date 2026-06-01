@@ -14,6 +14,7 @@ struct VocabPracticeLauncherView: View {
     @AppStorage("quickchat.last-turn-choice") private var savedTurnChoice: String = TurnChoice.five.rawValue
     @State private var turnChoice: TurnChoice = .five
     @State private var selectedIds: Set<String> = []
+    @State private var showIntro: Bool = false
 
     enum TurnChoice: String, CaseIterable, Identifiable {
         case three = "3"
@@ -52,11 +53,24 @@ struct VocabPracticeLauncherView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showIntro = true } label: {
+                        Image(systemName: "questionmark.circle")
+                            .foregroundStyle(.whatsubAccent)
+                    }
+                    .accessibilityLabel("使用教程")
+                }
+            }
+            .sheet(isPresented: $showIntro) {
+                QuickChatIntroView()
             }
             .overlay(alignment: .bottom) { startButton }
             .onAppear {
                 if let saved = TurnChoice(rawValue: savedTurnChoice) {
                     turnChoice = saved
+                }
+                if !QuickChatIntroView.hasAcknowledged {
+                    showIntro = true
                 }
             }
         }
