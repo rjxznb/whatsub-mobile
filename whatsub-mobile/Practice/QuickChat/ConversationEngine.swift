@@ -48,6 +48,16 @@ final class ConversationEngine {
     func runTurn(userInput: String) -> AsyncThrowingStream<Event, Error> {
         if !userInput.isEmpty {
             messages.append(ChatMessage(role: "user", content: userInput))
+        } else {
+            // Opening turn — no user has spoken yet. DeepSeek (unlike OpenAI)
+            // returns empty `content` when given system-only messages with no
+            // user turn; the import flow works because it always has a real
+            // user message with the subtitles. Inject a minimal English-only
+            // kickoff so the model has something to respond to. We keep it in
+            // English (no Chinese) because system rule 3 forbids Chinese in
+            // dialog body — a Chinese user message would tempt the model to
+            // open in Chinese too.
+            messages.append(ChatMessage(role: "user", content: "(Begin the scene now per the system instructions.)"))
         }
         lastTurnRawText = ""
         let stream = client.stream(messages)
