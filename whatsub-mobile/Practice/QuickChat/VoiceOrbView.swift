@@ -1,16 +1,8 @@
 import SwiftUI
 
-/// Audio-reactive orb. Two animation drivers:
-/// - Breathing: state-based sin pulse, always running, gives the orb life
-///   when idle/speaking/thinking/etc.
-/// - Audio level: when caller passes a non-zero audioLevel (0..1), it adds
-///   on top of breathing — orb grows, halo expands, blobs swing wider.
-///   Color stays sapphire blue across all states (no red flip on recording).
-///
-/// Implementation: `TimelineView(.animation)` redraws ~30 fps. Every frame we
-/// compute pulse, halo opacity, blob offsets, and rotation from time + the
-/// current audioLevel. No `withAnimation` — direct value derivation is
-/// smoother for amplitude-tracking.
+/// Audio-reactive orb. Continuous TimelineView at 60fps. Blob drift uses a
+/// phase accumulator (not time × speed) so when speed changes the angle stays
+/// continuous — no visual teleportation.
 struct VoiceOrbView: View {
     enum OrbState: Equatable {
         case idle, thinking, speaking, recording, transcribing
@@ -22,17 +14,18 @@ struct VoiceOrbView: View {
     private let orbSize: CGFloat = 200
     private let haloSize: CGFloat = 290
 
-    // Sparkle timing state — these use SwiftUI's withAnimation since they
-    // twinkle independently and don't track audio.
     @State private var sparkle1: Double = 0
     @State private var sparkle2: Double = 0
     @State private var sparkle3: Double = 0
+    @State private var phase = PhaseTracker()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-            let now = timeline.date.timeIntervalSinceReferenceDate
-            let level = Double(audioLevel)
-            let frame = computeFrame(time: now, level: level)
+        TimelineView(.animation) { timeline in
+            let frame = phase.advance(
+                to: timeline.date,
+                state: state,
+                level: Double(audioLevel)
+            )
 
             ZStack {
                 outerAura(scale: frame.pulse, opacity: frame.haloOpacity)
@@ -45,7 +38,8 @@ struct VoiceOrbView: View {
                 }
                 .frame(width: orbSize, height: orbSize)
                 .scaleEffect(frame.pulse)
-                .shadow(color: glowColor.opacity(0.4 + level * 0.3), radius: 20 + CGFloat(level * 10))
+                .shadow(color: glowColor.opacity(0.4 + Double(audioLevel) * 0.3),
+                        radius: 20 + CGFloat(audioLevel * 10))
                 sparkles
             }
             .frame(width: haloSize, height: haloSize)
@@ -53,80 +47,93 @@ struct VoiceOrbView: View {
         .onAppear { startSparkles() }
     }
 
-    // ---- frame derivation (pure function of time + level) ----
+    // ---- phase accumulator ----
 
-    private struct FrameValues {
-        let pulse: CGFloat
-        let haloOpacity: Double
-        let driftA: Double           // drift angle for blob 1
-        let driftB: Double           // drift angle for blob 2
-        let driftAmplitude: Double   // how far blobs swing (px)
-        let rotation: Double         // inner rotation (deg)
-    }
+    /// `@State` works for any class — SwiftUI just preserves the reference
+    /// across renders. We don't need @Published since TimelineView already
+    /// drives the redraw cadence.
+    final class PhaseTracker {
+        var phaseA: Double = 0
+        var phaseB: Double = 2.1
+        var pulsePhase: Double = 0
+        var rotation: Double = 0
+        private var lastDate: Date? = nil
 
-    private func computeFrame(time: Double, level: Double) -> FrameValues {
-        // Breathing pulse — always running, state-tuned.
-        let bpPeriod = breathingPeriod
-        let bpPeak = breathingPeak
-        let phase = (sin(time * .pi * 2 / bpPeriod) + 1) / 2      // 0..1
-        let breathPulse = 1.0 + phase * (bpPeak - 1.0)
-
-        // Audio level adds on top — up to +0.28 scale for loud voice.
-        let levelBoost = level * 0.28
-        let pulse = breathPulse + levelBoost
-
-        // Halo opacity — state base + level boost.
-        let haloBase: Double = (state == .recording || state == .speaking) ? 0.58 : 0.45
-        let haloOpacity = haloBase + level * 0.35
-
-        // Blob drift — angle increments by time, amplitude expands with level.
-        let driftBaseSpeed = blobBaseSpeed      // rad/sec at rest
-        let driftSpeedMult = 1.0 + level * 1.5  // up to 2.5x faster swing
-        let driftA = time * driftBaseSpeed * driftSpeedMult
-        let driftB = time * driftBaseSpeed * driftSpeedMult * 1.4 + 2.1
-        let driftAmplitude = 22.0 + level * 16.0  // px, base 22 → up to 38
-
-        // Inner rotation — only meaningful on .thinking; otherwise very slow.
-        let rotPeriod: Double = (state == .thinking) ? 4.5 : 22.0
-        let rotation = (time.truncatingRemainder(dividingBy: rotPeriod)) / rotPeriod * 360
-
-        return FrameValues(
-            pulse: CGFloat(pulse),
-            haloOpacity: haloOpacity,
-            driftA: driftA,
-            driftB: driftB,
-            driftAmplitude: driftAmplitude,
-            rotation: rotation
-        )
-    }
-
-    private var breathingPeriod: Double {
-        switch state {
-        case .idle: return 3.2
-        case .thinking: return 2.4
-        case .speaking: return 1.3
-        case .recording: return 1.6     // calmer breath — audio level adds the punch
-        case .transcribing: return 0.6
+        struct Frame {
+            let pulse: CGFloat
+            let haloOpacity: Double
+            let driftA: Double
+            let driftB: Double
+            let driftAmplitude: Double
+            let rotation: Double
         }
-    }
 
-    private var breathingPeak: Double {
-        switch state {
-        case .idle: return 1.05
-        case .thinking: return 1.06
-        case .speaking: return 1.16
-        case .recording: return 1.04    // smaller breath; level does the work
-        case .transcribing: return 1.10
+        func advance(to date: Date, state: OrbState, level: Double) -> Frame {
+            // dt clamped to avoid huge jumps if the app was backgrounded.
+            let dt: Double = {
+                guard let last = lastDate else { return 0 }
+                return min(0.1, date.timeIntervalSince(last))
+            }()
+            lastDate = date
+
+            // State-tuned base parameters.
+            let breath = breathingParams(for: state)
+            let driftBase = blobBaseSpeed(for: state)
+            let rotPeriod: Double = (state == .thinking) ? 4.5 : 22.0
+
+            // Speed boosted by audio level (up to 2.5×).
+            let driftSpeed = driftBase * (1.0 + level * 1.5)
+
+            // INTEGRATE phase — when driftSpeed changes, only the next dt's
+            // contribution changes; the past phase is preserved → no jumps.
+            phaseA += dt * driftSpeed
+            phaseB += dt * driftSpeed * 1.4
+            // Pulse breathing also uses phase accumulator so rate changes don't jump.
+            pulsePhase += dt * (.pi * 2 / breath.period)
+            rotation += dt * (360.0 / rotPeriod)
+            if rotation > 360 { rotation = rotation.truncatingRemainder(dividingBy: 360) }
+
+            let breathPhase = (sin(pulsePhase) + 1) / 2     // 0..1
+            let breathPulse = 1.0 + breathPhase * (breath.peak - 1.0)
+            let pulse = breathPulse + level * 0.28
+
+            let haloBase: Double = (state == .recording || state == .speaking) ? 0.58 : 0.45
+            let haloOpacity = haloBase + level * 0.35
+
+            // Blob radius: base + level boost.
+            let amplitude = 22.0 + level * 16.0
+
+            return Frame(
+                pulse: CGFloat(pulse),
+                haloOpacity: haloOpacity,
+                driftA: phaseA,
+                driftB: phaseB,
+                driftAmplitude: amplitude,
+                rotation: rotation
+            )
         }
-    }
 
-    private var blobBaseSpeed: Double {
-        switch state {
-        case .idle: return 0.8
-        case .thinking: return 1.0
-        case .speaking: return 1.6
-        case .recording: return 1.4
-        case .transcribing: return 2.4
+        private struct BreathParams { let period: Double; let peak: Double }
+
+        private func breathingParams(for s: OrbState) -> BreathParams {
+            switch s {
+            case .idle:         return BreathParams(period: 3.2, peak: 1.05)
+            case .thinking:     return BreathParams(period: 2.4, peak: 1.06)
+            case .speaking:     return BreathParams(period: 1.3, peak: 1.16)
+            case .recording:    return BreathParams(period: 1.6, peak: 1.04)
+            case .transcribing: return BreathParams(period: 0.6, peak: 1.10)
+            }
+        }
+
+        private func blobBaseSpeed(for s: OrbState) -> Double {
+            // rad/sec at silence
+            switch s {
+            case .idle: return 0.8
+            case .thinking: return 1.0
+            case .speaking: return 1.6
+            case .recording: return 1.4
+            case .transcribing: return 2.4
+            }
         }
     }
 
@@ -137,7 +144,7 @@ struct VoiceOrbView: View {
             .fill(glowColor.opacity(opacity))
             .frame(width: haloSize, height: haloSize)
             .blur(radius: 55)
-            .scaleEffect(scale * 1.0)
+            .scaleEffect(scale)
     }
 
     private func innerGlow(driftA: Double, driftB: Double, rotation: Double, amplitude: Double) -> some View {
@@ -204,7 +211,7 @@ struct VoiceOrbView: View {
             .frame(width: orbSize, height: orbSize)
     }
 
-    // ---- sparkles (independent twinkle, not audio-driven) ----
+    // ---- sparkles ----
 
     private var sparkles: some View {
         ZStack {
@@ -237,19 +244,18 @@ struct VoiceOrbView: View {
         }
     }
 
-    // ---- color palette: SAPPHIRE for all non-warm states; warm only for transcribing ----
-    // NOTE: .recording deliberately uses the SAPPHIRE palette (no red) — user
-    // wanted size/amplitude to communicate the listening state, not color.
+    // ---- palette ----
+
     private var glowColor: Color {
         switch state {
         case .transcribing: return Color(red: 1.0, green: 0.72, blue: 0.18)
-        default:            return Color(red: 0.20, green: 0.50, blue: 1.0)   // sapphire blue
+        default:            return Color(red: 0.20, green: 0.50, blue: 1.0)
         }
     }
     private var accentColor: Color {
         switch state {
         case .transcribing: return Color(red: 1.0, green: 0.92, blue: 0.55)
-        default:            return Color(red: 0.45, green: 0.78, blue: 1.0)   // brighter cyan
+        default:            return Color(red: 0.45, green: 0.78, blue: 1.0)
         }
     }
 }

@@ -528,7 +528,10 @@ final class VADCoordinator: ObservableObject {
     /// Smoothed 0..1 audio level for the orb's real-time pulse.
     @Published var audioLevel: Float = 0
     private let recorder = VoiceActivityRecorder()
-    private let smoothingAlpha: Float = 0.4    // 0..1: lower = smoother, higher = more responsive
+    // At 30ms poll rate, alpha = 0.25 gives a ~90ms time constant — visible
+    // reaction to voice within a few frames without the orb twitching on
+    // every small fluctuation.
+    private let smoothingAlpha: Float = 0.25
 
     func start(onSpeechDetected: @escaping () -> Void,
                onSpeechEnded: @escaping (URL) -> Void,

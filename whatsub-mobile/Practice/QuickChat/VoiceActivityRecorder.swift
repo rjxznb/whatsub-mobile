@@ -18,7 +18,7 @@ final class VoiceActivityRecorder {
     private let speechOffsetDB: Float = -40       // power below this for offsetHoldMs after onset = offset
     private let onsetHoldMs: Int = 200
     private let offsetHoldMs: Int = 1500
-    private let pollIntervalMs: Int = 100
+    private let pollIntervalMs: Int = 30
     private let noSpeechTimeoutSec: Double = 15
     private let hardCapSec: Double = 30           // even if speaking continuously, cap recording
 
