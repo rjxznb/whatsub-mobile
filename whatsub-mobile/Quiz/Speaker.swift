@@ -26,10 +26,19 @@ enum Speaker {
     /// installed voice.
     static let pinnedVoiceDefaultsKey = "speaker.pinned-voice-identifier.v1"
 
+    /// True when the user has pinned the Piper LJSpeech voice in VoiceSettings.
+    static var isPiperPinned: Bool {
+        UserDefaults.standard.string(forKey: pinnedVoiceDefaultsKey) == piperLjspeechIdentifier
+    }
+
     /// Quiz-card flow (unchanged contract): interrupts any in-flight speech.
     static func speak(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if isPiperPinned, PiperTTS.shared.canSpeak {
+            PiperTTS.shared.speak(trimmed, interrupt: true)
+            return
+        }
         configureSessionIfNeeded()
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         synth.speak(makeUtterance(trimmed, locale: "en-US", rate: AVSpeechUtteranceDefaultSpeechRate * 0.95))
@@ -41,12 +50,16 @@ enum Speaker {
                        rate: Float = AVSpeechUtteranceDefaultSpeechRate) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if locale.hasPrefix("en"), isPiperPinned, PiperTTS.shared.canSpeak {
+            PiperTTS.shared.speak(trimmed, interrupt: false)
+            return
+        }
         configureSessionIfNeeded()
         synth.speak(makeUtterance(trimmed, locale: locale, rate: rate))
     }
 
     /// True while any utterance is being spoken or is queued.
-    static var isSpeaking: Bool { synth.isSpeaking }
+    static var isSpeaking: Bool { synth.isSpeaking || PiperTTS.shared.isSpeaking }
 
     /// Stop current speech without releasing the audio session. Safe to call
     /// repeatedly during a session (e.g. from vm.pause() on scenePhase changes).
@@ -54,6 +67,7 @@ enum Speaker {
     /// reported flakiness where it returns false while queued utterances still play.
     static func stop() {
         synth.stopSpeaking(at: .immediate)
+        PiperTTS.shared.stop()
     }
 
     /// Stop speech AND release the audio session. Call this only when the

@@ -65,6 +65,17 @@ jobs:
           # Verify the two XCFrameworks ended up where we expect
           test -d frameworks/sherpa-onnx.xcframework || (echo "sherpa-onnx.xcframework missing"; exit 1)
           test -d frameworks/onnxruntime.xcframework || (echo "onnxruntime.xcframework missing"; exit 1)
+          # Copy espeak-ng-data into the app's Resources so it's bundled in the IPA.
+          # Piper TTS needs this for phonemization. Without it, generate() crashes.
+          ESPEAK_SRC=$(find frameworks/ -name "espeak-ng-data" -type d | head -1)
+          if [ -z "$ESPEAK_SRC" ]; then
+            echo "espeak-ng-data missing from sherpa-onnx tarball — Piper TTS won't work"
+            exit 1
+          fi
+          mkdir -p whatsub-mobile/Resources
+          rm -rf whatsub-mobile/Resources/espeak-ng-data
+          cp -R "$ESPEAK_SRC" whatsub-mobile/Resources/
+          echo "Copied espeak-ng-data ($(du -sh whatsub-mobile/Resources/espeak-ng-data | cut -f1)) to bundle resources"
 
       - name: Generate .xcodeproj
         run: xcodegen generate --quiet

@@ -13,6 +13,7 @@ struct VoiceSettingsView: View {
     /// Identifier currently previewing (for ProgressView in the row).
     @State private var previewingId: String?
     @State private var showGuide: Bool = false
+    @ObservedObject private var piperDownloader = PiperModelDownloader.shared
 
     var body: some View {
         List {
@@ -22,6 +23,15 @@ struct VoiceSettingsView: View {
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
                 }
+            }
+            Section {
+                piperRow
+            } header: {
+                Text("内置神经语音").foregroundStyle(.whatsubInkMuted)
+            } footer: {
+                Text("Whatsub 内置 Piper · LJSpeech 美式女声。离线运行 (~64MB 一次性下载到 Documents)；首次启用要下载语音模型。下载完成后无需网络，直接生成。")
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkMuted)
             }
             Section {
                 autoRow
@@ -86,6 +96,105 @@ struct VoiceSettingsView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.yellow.opacity(0.4), lineWidth: 1))
         }
         .buttonStyle(.plain)
+    }
+
+    // ---- Piper row ----
+
+    private var piperRow: some View {
+        let isPinned = pinnedIdentifier == piperLjspeechIdentifier
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Button {
+                    if piperReady { pinnedIdentifier = piperLjspeechIdentifier }
+                } label: {
+                    Image(systemName: isPinned ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle((isPinned && piperReady) ? Color.whatsubAccent : Color.whatsubInkFaint)
+                        .font(.title3)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!piperReady)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("Piper · LJSpeech 英文")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.whatsubInk)
+                        Text("内置")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color.purple)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.purple.opacity(0.15), in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.purple.opacity(0.5), lineWidth: 0.8))
+                    }
+                    Text("离线 · 神经 TTS · 无需联网")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.whatsubInkFaint)
+                }
+                Spacer()
+                piperRightAction
+            }
+            piperStatusLine
+        }
+        .padding(.vertical, 4)
+        .listRowBackground(Color.whatsubBgElev)
+    }
+
+    /// Returns true if the model is ready to use.
+    private var piperReady: Bool {
+        if case .ready = piperDownloader.status { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private var piperRightAction: some View {
+        switch piperDownloader.status {
+        case .notDownloaded, .error:
+            Button {
+                Task { await piperDownloader.download() }
+            } label: {
+                Text("下载 ~64MB")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Color.whatsubAccent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        case .downloading(let p):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small).tint(.whatsubAccent)
+                Text("\(Int(p * 100))%")
+                    .font(.caption2).foregroundStyle(.whatsubInkMuted)
+            }
+        case .ready:
+            Button {
+                previewPiper()
+            } label: {
+                Image(systemName: "speaker.wave.2.fill")
+                    .foregroundStyle(.whatsubAccent)
+                    .padding(10)
+                    .background(Color.whatsubBg, in: Circle())
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    @ViewBuilder
+    private var piperStatusLine: some View {
+        switch piperDownloader.status {
+        case .downloading(let p):
+            ProgressView(value: p).tint(.whatsubAccent)
+        case .error(let msg):
+            Text(msg).font(.caption2).foregroundStyle(.red)
+        default:
+            EmptyView()
+        }
+    }
+
+    private func previewPiper() {
+        PiperTTS.shared.speak(
+            "Hello! Welcome to whatsub. Let's practice some English together.",
+            interrupt: true
+        )
     }
 
     // ---- rows ----

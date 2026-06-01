@@ -46,6 +46,7 @@ targets:
         excludes:
           - "Info.plist"
           - "PrivacyInfo.xcprivacy"
+          - "Resources/espeak-ng-data/**"
     resources:
       - whatsub-mobile/Assets.xcassets
       - whatsub-mobile/PrivacyInfo.xcprivacy
@@ -53,6 +54,8 @@ targets:
       - whatsub-mobile/Resources/ecdict-cn.json
       - whatsub-mobile/Resources/correct.wav
       - whatsub-mobile/Resources/Caveat-Bold.ttf
+      - path: whatsub-mobile/Resources/espeak-ng-data
+        type: folder
     info:
       path: whatsub-mobile/Info.plist
       properties:
