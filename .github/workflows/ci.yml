@@ -54,10 +54,16 @@ jobs:
             echo "Using cached ${TARBALL}"
           fi
           mkdir -p frameworks
-          # Tarball layout is <top>/build-ios/{sherpa-onnx,onnxruntime}.xcframework
-          # — strip BOTH the top dir AND the build-ios dir so .xcframework
-          # bundles land directly under frameworks/ (where project.yml expects).
+          # Tarball layout (verified from a real CI run):
+          #   <top>/build-ios/sherpa-onnx.xcframework               (depth 2)
+          #   <top>/build-ios/ios-onnxruntime/onnxruntime.xcframework (depth 3)
+          # Strip 2 levels so sherpa-onnx lands directly, then flatten
+          # onnxruntime up out of ios-onnxruntime/.
           tar -xjf "$CACHE_PATH" -C frameworks --strip-components=2
+          if [ -d frameworks/ios-onnxruntime/onnxruntime.xcframework ]; then
+            mv frameworks/ios-onnxruntime/onnxruntime.xcframework frameworks/
+            rm -rf frameworks/ios-onnxruntime
+          fi
           ls -lh frameworks/
           # Verify the two XCFrameworks ended up where we expect
           test -d frameworks/sherpa-onnx.xcframework || (echo "sherpa-onnx.xcframework missing"; exit 1)
