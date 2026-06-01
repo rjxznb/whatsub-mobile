@@ -76,7 +76,10 @@ struct QuickChatView: View {
                     VoiceOrbView(state: orbState, audioLevel: vadCoordinator.audioLevel)
                         .onTapGesture { dismissKeyboard() }
                     Spacer().frame(height: 18)
-                    latestAIBubble
+                    LyricTickerView(
+                        onTranslate: { translatePresented = TranslationTarget(text: $0) },
+                        onReport: { ReportMessageSheet.openMailReport(message: $0) }
+                    )
                     Spacer().frame(height: 12)
                     Text(statusText)
                         .font(.system(size: 15, weight: .medium))
@@ -328,34 +331,6 @@ struct QuickChatView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16).padding(.bottom, 4)
-    }
-
-    // ---- latest AI bubble (the ONE-message surface; below the orb) ----
-    @ViewBuilder
-    private var latestAIBubble: some View {
-        if let latest = vm.turns.last(where: { !$0.assistantText.isEmpty }) {
-            Text(latest.assistantText)
-                .font(.system(size: 17))
-                .foregroundStyle(.whatsubInk)
-                .multilineTextAlignment(.center)
-                .lineLimit(5)
-                .truncationMode(.tail)
-                .padding(.horizontal, 18).padding(.vertical, 12)
-                .background(RoundedRectangle(cornerRadius: 14).fill(Color.whatsubBgElev))
-                .padding(.horizontal, 20)
-                .onTapGesture { showTranscript = true }  // tap bubble to see history
-                .contextMenu {
-                    Button {
-                        translatePresented = TranslationTarget(text: latest.assistantText)
-                    } label: { Label("显示中文", systemImage: "character.bubble") }
-                    Button {
-                        ReportMessageSheet.openMailReport(message: latest.assistantText)
-                    } label: { Label("上报这条回复", systemImage: "exclamationmark.bubble") }
-                }
-        } else {
-            // Empty placeholder so layout doesn't jump when first message arrives.
-            Color.clear.frame(height: 64)
-        }
     }
 
     // ---- bottom controls (no mic button anymore) ----

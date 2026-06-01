@@ -1,5 +1,35 @@
 import AVFoundation
 
+/// Forwards AVSpeechSynthesizer word-timing callbacks to LyricTicker so the
+/// in-app "Apple Music lyrics" view can sync highlighting to the audio.
+/// Singleton because the Speaker's synth is a `static let`.
+private final class SpeakerLyricDelegate: NSObject, AVSpeechSynthesizerDelegate {
+    static let shared = SpeakerLyricDelegate()
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            LyricTicker.shared.beginUtterance(utterance.speechString)
+        }
+    }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
+                           willSpeakRangeOfSpeechString characterRange: NSRange,
+                           utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            LyricTicker.shared.setWordRange(characterRange)
+        }
+    }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            LyricTicker.shared.endUtterance()
+        }
+    }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            LyricTicker.shared.endUtterance()
+        }
+    }
+}
+
 /// English / Chinese TTS using `AVSpeechSynthesizer`. Two entry points:
 ///
 /// - `speak(_:)`            — Quiz word card; reads a short English phrase
@@ -15,7 +45,11 @@ import AVFoundation
 /// Spec §6.3 (v1 single-language en-US after spike result; bilingual routing
 /// deferred to v1.1 per §12).
 enum Speaker {
-    private static let synth = AVSpeechSynthesizer()
+    private static let synth: AVSpeechSynthesizer = {
+        let s = AVSpeechSynthesizer()
+        s.delegate = SpeakerLyricDelegate.shared
+        return s
+    }()
     private static let femaleNames = [
         "Samantha", "Ava", "Allison", "Susan", "Nicky", "Joelle",
         "Karen", "Moira", "Tessa", "Serena", "Fiona", "Zoe",
@@ -68,6 +102,7 @@ enum Speaker {
     static func stop() {
         synth.stopSpeaking(at: .immediate)
         PiperTTS.shared.stop()
+        Task { @MainActor in LyricTicker.shared.reset() }
     }
 
     /// Stop speech AND release the audio session. Call this only when the

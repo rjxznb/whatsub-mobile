@@ -22,7 +22,7 @@ final class PiperTTS {
 
     /// AVAudioPlayers for queued sentence playback. We retain them and let
     /// AVAudioPlayer's own delegate finish each before kicking the next.
-    private var playbackQueue: [URL] = []
+    private var playbackQueue: [(url: URL, text: String)] = []
     private var currentPlayer: AVAudioPlayer?
     private let playerDelegate = PlayerDelegate()
 
@@ -84,7 +84,7 @@ final class PiperTTS {
                 .appendingPathComponent("piper-\(UUID().uuidString).wav")
             guard Self.writeWAV(samples: samples, sampleRate: sampleRate, to: url) else { return }
             DispatchQueue.main.async {
-                self.enqueueFile(url)
+                self.enqueueFile(url, text: text)
             }
         }
     }
@@ -93,10 +93,11 @@ final class PiperTTS {
     func stop() {
         currentPlayer?.stop()
         currentPlayer = nil
-        for url in playbackQueue {
-            try? FileManager.default.removeItem(at: url)
+        for entry in playbackQueue {
+            try? FileManager.default.removeItem(at: entry.url)
         }
         playbackQueue.removeAll()
+        Task { @MainActor in LyricTicker.shared.reset() }
     }
 
     /// True if anything is currently playing or queued.
@@ -106,21 +107,24 @@ final class PiperTTS {
 
     // ---- internals ----
 
-    private func enqueueFile(_ url: URL) {
+    private func enqueueFile(_ url: URL, text: String) {
         if currentPlayer == nil || currentPlayer?.isPlaying == false {
-            playFile(url)
+            playFile(url, text: text)
         } else {
-            playbackQueue.append(url)
+            playbackQueue.append((url: url, text: text))
         }
     }
 
-    private func playFile(_ url: URL) {
+    private func playFile(_ url: URL, text: String) {
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
         do {
             let p = try AVAudioPlayer(contentsOf: url)
             p.delegate = playerDelegate
             p.prepareToPlay()
+            // Drive the LyricTicker word-by-word using player duration as the
+            // total time budget. simulateWords runs a Timer on MainActor.
+            LyricTicker.shared.simulateWords(in: text, duration: p.duration)
             p.play()
             currentPlayer = p
         } catch {
@@ -134,7 +138,7 @@ final class PiperTTS {
         currentPlayer = nil
         if let next = playbackQueue.first {
             playbackQueue.removeFirst()
-            playFile(next)
+            playFile(next.url, text: next.text)
         }
     }
 
