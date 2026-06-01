@@ -168,7 +168,7 @@ final class PiperTTS {
         data.append("data".data(using: .ascii)!)
         data.append(UInt32(dataBytes).littleEndianData)
         samples.withUnsafeBufferPointer { buf in
-            data.append(UnsafeRawBufferPointer(buf))
+            data.append(contentsOf: UnsafeRawBufferPointer(buf))
         }
         return (try? data.write(to: url)) != nil
     }
