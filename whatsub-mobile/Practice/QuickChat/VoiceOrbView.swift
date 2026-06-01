@@ -22,10 +22,10 @@ struct VoiceOrbView: View {
     let state: OrbState
     var audioLevel: Float = 0    // 0..1, smoothed in VADCoordinator
 
-    /// Resting orb diameter. Grows from this base by `(1 + level * scaleBoost)`.
-    private let baseSize: CGFloat = 140
-    private let haloMultiplier: CGFloat = 1.9   // halo diameter = body × this
-    private let scaleBoost: Double = 0.6        // up to +60% at full voice
+    /// Resting orb diameter. Grows up to (baseSize × ~1.85) on loud voice.
+    private let baseSize: CGFloat = 180
+    private let haloMultiplier: CGFloat = 1.8
+    private let scaleBoost: Double = 0.85       // up to +85% at full voice
 
     @State private var phase = PhaseTracker()
 
@@ -73,18 +73,18 @@ struct VoiceOrbView: View {
     }
 
     private func pinkWisp(rotation: Double) -> some View {
-        // Elongated soft pink-lavender shape that tints the bottom-right of
-        // the orb (rotates slowly to suggest organic motion).
+        // Elongated pink-lavender shape; less blur (20→14) so the iridescent
+        // tint is clearly readable as a hue gradient sweeping across the orb.
         Ellipse()
             .fill(
                 LinearGradient(
-                    colors: [pinkGlow.opacity(0.0), pinkGlow.opacity(0.85), pinkGlow.opacity(0.0)],
+                    colors: [pinkGlow.opacity(0.0), pinkGlow.opacity(0.95), pinkGlow.opacity(0.0)],
                     startPoint: .leading, endPoint: .trailing
                 )
             )
-            .frame(width: baseSize * 1.15, height: baseSize * 0.55)
+            .frame(width: baseSize * 1.18, height: baseSize * 0.55)
             .rotationEffect(.degrees(rotation))
-            .blur(radius: 20)
+            .blur(radius: 14)
     }
 
     /// The bright emissive core. White-cyan center fading to soft cyan edge.
@@ -106,18 +106,19 @@ struct VoiceOrbView: View {
     }
 
     private func whiteSwoosh(rotation: Double) -> some View {
-        // Bright white brushstroke that flows through the orb. Heavily blurred
-        // so it reads as "light" not "shape". Rotates slowly for life.
+        // Bright white brushstroke flowing through the orb. Less blur than v1
+        // (14 → 8) so the stroke is clearly visible as a moving shape, not just
+        // a diffuse glow. Slightly elongated so it looks like a curved sweep.
         Ellipse()
             .fill(
                 LinearGradient(
-                    colors: [.white.opacity(0.0), .white.opacity(0.95), .white.opacity(0.0)],
+                    colors: [.white.opacity(0.0), .white.opacity(1.0), .white.opacity(0.0)],
                     startPoint: .leading, endPoint: .trailing
                 )
             )
-            .frame(width: baseSize * 1.0, height: baseSize * 0.45)
+            .frame(width: baseSize * 1.1, height: baseSize * 0.42)
             .rotationEffect(.degrees(rotation))
-            .blur(radius: 14)
+            .blur(radius: 8)
             .blendMode(.plusLighter)
     }
 
@@ -176,8 +177,9 @@ struct VoiceOrbView: View {
 
             let breath = breathingParams(for: state)
             let wispBase = wispBaseSpeed(for: state)
-            // Audio level accelerates wisps modestly (up to 2× faster on loud voice).
-            let wispSpeed = wispBase * (1.0 + level * 1.0)
+            // Audio level accelerates wisps strongly (up to ~3.5× faster on loud voice)
+            // so the white swoosh visibly streaks across the orb when user speaks.
+            let wispSpeed = wispBase * (1.0 + level * 2.5)
 
             pulsePhase += dt * (.pi * 2 / breath.period)
             wispA += dt * wispSpeed * 60         // 60 = scale to deg/sec
@@ -185,8 +187,9 @@ struct VoiceOrbView: View {
 
             let breathFrac = (sin(pulsePhase) + 1) / 2      // 0..1
             let breathPulse = 1.0 + breathFrac * (breath.peak - 1.0)
-            // Audio level adds a much bigger growth: up to +60% scale on loud voice.
-            let levelGrowth = level * 0.6
+            // Audio level adds dramatic growth: up to +85% scale on loud voice.
+            // Combined with breathing's ~+10% peak, max effective scale ≈ 1.85-2.0×.
+            let levelGrowth = level * 0.85
             let pulse = breathPulse + levelGrowth
 
             let haloBase: Double = (state == .recording || state == .speaking) ? 0.55 : 0.40

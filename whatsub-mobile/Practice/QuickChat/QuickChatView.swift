@@ -528,10 +528,12 @@ final class VADCoordinator: ObservableObject {
     /// Smoothed 0..1 audio level for the orb's real-time pulse.
     @Published var audioLevel: Float = 0
     private let recorder = VoiceActivityRecorder()
-    // At 30ms poll rate, alpha = 0.25 gives a ~90ms time constant — visible
-    // reaction to voice within a few frames without the orb twitching on
-    // every small fluctuation.
-    private let smoothingAlpha: Float = 0.25
+    /// Fast attack — when voice rises, EMA snaps up in 1-2 frames (~30-60ms).
+    /// User feedback wanted dramatic + immediate response when they start speaking.
+    private let attackAlpha: Float = 0.7
+    /// Slow release — when voice falls, EMA decays gently over ~400ms.
+    /// This creates the "balloon-inflate-and-slow-deflate" feel.
+    private let releaseAlpha: Float = 0.15
 
     func start(onSpeechDetected: @escaping () -> Void,
                onSpeechEnded: @escaping (URL) -> Void,
@@ -560,9 +562,9 @@ final class VADCoordinator: ObservableObject {
         recorder.onLevelUpdate = { [weak self] raw in
             Task { @MainActor in
                 guard let self else { return }
-                // Exponential moving average to smooth jitter — at 10Hz polling,
-                // alpha 0.4 gives a ~100ms time constant.
-                self.audioLevel = (1 - self.smoothingAlpha) * self.audioLevel + self.smoothingAlpha * raw
+                // Asymmetric envelope: fast on rise (dramatic), slow on fall (smooth).
+                let alpha = raw > self.audioLevel ? self.attackAlpha : self.releaseAlpha
+                self.audioLevel = (1 - alpha) * self.audioLevel + alpha * raw
             }
         }
         do {
