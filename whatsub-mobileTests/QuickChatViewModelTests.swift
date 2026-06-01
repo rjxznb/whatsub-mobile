@@ -54,7 +54,7 @@ final class QuickChatViewModelTests: XCTestCase {
             suggestedTag: nil,
             progressStore: store,
             engineDriver: .stub(turns: [
-                .init(events: [.finished]),                                  // opening
+                .init(events: [.dialogDelta("ok"), .finished]),                                  // opening
                 .init(events: [.verdict(verdict), .finished]),               // user turn 1
             ]),
             now: { 100 }
@@ -81,7 +81,7 @@ final class QuickChatViewModelTests: XCTestCase {
             suggestedTag: nil,
             progressStore: store,
             engineDriver: .stub(turns: [
-                .init(events: [.finished]),                          // opening
+                .init(events: [.dialogDelta("ok"), .finished]),                          // opening
                 .init(events: [.verdict(correctA), .finished]),      // turn 1
                 .init(events: [.verdict(correctA), .finished]),      // turn 2 — same flag (drift)
             ]),
@@ -104,7 +104,7 @@ final class QuickChatViewModelTests: XCTestCase {
             phrases: [phrase("a"), phrase("b"), phrase("c")],
             suggestedTag: nil,
             progressStore: store,
-            engineDriver: .stub(turns: Array(repeating: .init(events: [.finished]), count: 6)),
+            engineDriver: .stub(turns: Array(repeating: .init(events: [.dialogDelta("ok"), .finished]), count: 6)),
             now: { 100 }
         )
         await vm.start()                          // turn 0 (opening)
@@ -122,7 +122,7 @@ final class QuickChatViewModelTests: XCTestCase {
             phrases: [phrase("a"), phrase("b"), phrase("c")],
             suggestedTag: nil,
             progressStore: store,
-            engineDriver: .stub(turns: Array(repeating: .init(events: [.finished]), count: 10)),
+            engineDriver: .stub(turns: Array(repeating: .init(events: [.dialogDelta("ok"), .finished]), count: 10)),
             maxTurns: nil,      // ← unlimited
             now: { 100 }
         )
@@ -146,7 +146,7 @@ final class QuickChatViewModelTests: XCTestCase {
             suggestedTag: nil,
             progressStore: store,
             engineDriver: .stub(turns: [
-                .init(events: [.finished]),
+                .init(events: [.dialogDelta("ok"), .finished]),
                 .init(events: [.verdict(correctA), .finished]),
             ]),
             now: { 100 }
