@@ -40,3 +40,6 @@ Thumbs.db
 *.png
 !whatsub-mobile/**/*.png
 !whatsub-mobile/Assets.xcassets/**
+
+# sherpa-onnx XCFrameworks — downloaded in CI per build, never committed
+/frameworks/

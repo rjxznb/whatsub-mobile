@@ -35,6 +35,31 @@ jobs:
           xcodebuild -version
           xcrun --show-sdk-version --sdk iphonesimulator
 
+      - name: Cache sherpa-onnx tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/sherpa-onnx-cache
+          key: sherpa-onnx-ios-v1.13.2
+
+      - name: Download sherpa-onnx iOS XCFramework
+        run: |
+          VERSION="1.13.2"
+          TARBALL="sherpa-onnx-v${VERSION}-ios.tar.bz2"
+          CACHE_PATH="$HOME/sherpa-onnx-cache/${TARBALL}"
+          mkdir -p "$HOME/sherpa-onnx-cache"
+          if [ ! -f "$CACHE_PATH" ]; then
+            echo "Downloading ${TARBALL}…"
+            curl -fL -o "$CACHE_PATH" "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${VERSION}/${TARBALL}"
+          else
+            echo "Using cached ${TARBALL}"
+          fi
+          mkdir -p frameworks
+          tar -xjf "$CACHE_PATH" -C frameworks --strip-components=1
+          ls -lh frameworks/
+          # Verify the two XCFrameworks ended up where we expect
+          test -d frameworks/sherpa-onnx.xcframework || (echo "sherpa-onnx.xcframework missing"; exit 1)
+          test -d frameworks/onnxruntime.xcframework || (echo "onnxruntime.xcframework missing"; exit 1)
+
       - name: Generate .xcodeproj
         run: xcodegen generate --quiet
 

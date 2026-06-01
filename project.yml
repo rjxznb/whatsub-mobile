@@ -95,12 +95,20 @@ targets:
     dependencies:
       - target: whatsub-share
         embed: true
+      - framework: frameworks/sherpa-onnx.xcframework
+        embed: false
+        link: true
+      - framework: frameworks/onnxruntime.xcframework
+        embed: false
+        link: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.eversay.whatsub.mobile
         INFOPLIST_KEY_CFBundleDisplayName: whatSub
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_OBJC_BRIDGING_HEADER: whatsub-mobile/SherpaOnnx-Bridging-Header.h
+        OTHER_LDFLAGS: "$(inherited) -lc++"
 
   whatsub-share:
     type: app-extension
