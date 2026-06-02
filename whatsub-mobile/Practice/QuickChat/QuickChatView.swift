@@ -287,8 +287,8 @@ struct QuickChatView: View {
     private func startVAD() async {
         vadCoordinator.start(
             onSpeechDetected: { /* orb auto-updates via orbState */ },
-            onSpeechEnded: { url in
-                Task { await self.handleVADSpeechEnded(url) }
+            onSpeechEnded: { transcript, backupURL in
+                Task { await self.handleVADSpeechEnded(transcript: transcript, backupURL: backupURL) }
             },
             onNoSpeechTimeout: {
                 Task {
@@ -299,35 +299,20 @@ struct QuickChatView: View {
         )
     }
 
-    private func handleVADSpeechEnded(_ url: URL) async {
-        vm.exitListening()    // back to .idle while we transcribe
+    /// VoiceActivityRecorder now ships the live ASR transcript along with the
+    /// end-of-turn signal (builds ≤ 232 re-recognized the recorded file after
+    /// the fact). The backup .caf URL is included for forensics — we always
+    /// delete it once we've decided what to do.
+    private func handleVADSpeechEnded(transcript: String, backupURL: URL?) async {
+        vm.exitListening()
         vm.resetNoSpeechCounter()
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        guard let r = recognizer, r.isAvailable else { return }
-        let req = SFSpeechURLRecognitionRequest(url: url)
-        req.shouldReportPartialResults = false
-        if r.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-        do {
-            let text: String = try await withCheckedThrowingContinuation { cont in
-                var done = false
-                r.recognitionTask(with: req) { result, error in
-                    if done { return }
-                    if let error { done = true; cont.resume(throwing: error); return }
-                    if let result, result.isFinal {
-                        done = true
-                        cont.resume(returning: result.bestTranscription.formattedString)
-                    }
-                }
-            }
-            try? FileManager.default.removeItem(at: url)
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                await vm.submitUserInput(text)
-            } else {
-                // Empty transcription — treat as no-speech, restart VAD.
-                if vm.phase == .idle, !typingMode { vm.enterListening(); await startVAD() }
-            }
-        } catch {
-            // ASR failed — restart listening.
+        if let backupURL { try? FileManager.default.removeItem(at: backupURL) }
+
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty {
+            await vm.submitUserInput(text)
+        } else {
+            // Empty transcript — treat as no-speech, restart VAD.
             if vm.phase == .idle, !typingMode { vm.enterListening(); await startVAD() }
         }
     }
@@ -570,7 +555,7 @@ final class VADCoordinator: ObservableObject {
     private let releaseAlpha: Float = 0.15
 
     func start(onSpeechDetected: @escaping () -> Void,
-               onSpeechEnded: @escaping (URL) -> Void,
+               onSpeechEnded: @escaping (_ transcript: String, _ backupURL: URL?) -> Void,
                onNoSpeechTimeout: @escaping () -> Void) {
         speechActive = false
         recorder.onSpeechDetected = { [weak self] in
@@ -579,11 +564,11 @@ final class VADCoordinator: ObservableObject {
                 onSpeechDetected()
             }
         }
-        recorder.onSpeechEnded = { [weak self] url in
+        recorder.onSpeechEnded = { [weak self] transcript, backupURL in
             Task { @MainActor in
                 self?.speechActive = false
                 self?.audioLevel = 0
-                onSpeechEnded(url)
+                onSpeechEnded(transcript, backupURL)
             }
         }
         recorder.onNoSpeechTimeout = { [weak self] in
