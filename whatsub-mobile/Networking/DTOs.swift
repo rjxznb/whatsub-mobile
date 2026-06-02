@@ -35,6 +35,14 @@ struct OkResponse: Decodable { let ok: Bool? }
 struct ErrorResponse: Decodable { let error: String? }
 /// 403 quota_exceeded body from POST /sync and /import-queue: { error, used, limit }.
 struct QuotaErrorBody: Decodable { let error: String?; let used: Int?; let limit: Int? }
+/// 429 rate_limited body from POST /api/license/auth/{send,verify}-code.
+/// Wire contract: src/lib/authRateLimit.ts in whatsub-license.
+struct RateLimitErrorBody: Decodable {
+    let error: String        // always "rate_limited"
+    let scope: String        // "email-minute" | "email-hour" | "ip-hour"
+    let retryAfterSec: Int   // also echoed in the Retry-After header
+    let message: String      // server-supplied zh-Hans message
+}
 
 // ----- Library -----
 

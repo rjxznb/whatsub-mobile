@@ -7,6 +7,13 @@ enum APIError: Error, Equatable {
     case decoding(String)        // response didn't match the expected shape
     case badInput(String)        // client-side validation (e.g. bad email)
     case quotaExceeded(used: Int, limit: Int)   // 403 from library sync/push — over the OSS-video cap
+    /// 429 from /api/license/auth/{send,verify}-code. Wire shape:
+    ///   { error: "rate_limited",
+    ///     scope: "email-minute" | "email-hour" | "ip-hour",
+    ///     retryAfterSec: <int>,
+    ///     message: <zh-Hans> }
+    /// `retryAfterSec` is also echoed in the `Retry-After` header.
+    case rateLimited(scope: String, retryAfterSec: Int, message: String)
 
     /// Chinese message for display in the UI.
     var chinese: String {
@@ -31,6 +38,9 @@ enum APIError: Error, Equatable {
             return detail
         case .quotaExceeded(let used, let limit):
             return "云端视频已达上限（\(used)/\(limit)）"
+        case .rateLimited(_, _, let message):
+            // Server-supplied Chinese message already accounts for scope.
+            return message
         }
     }
 }

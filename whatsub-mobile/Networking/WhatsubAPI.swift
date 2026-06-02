@@ -335,6 +335,27 @@ actor WhatsubAPI {
                 let q = try? JSONDecoder().decode(QuotaErrorBody.self, from: data)
                 throw APIError.quotaExceeded(used: q?.used ?? 0, limit: q?.limit ?? 0)
             }
+            if http.statusCode == 429 {
+                // Backend may either return the structured rate_limited body or
+                // a bare 429 with just a Retry-After header. Try the rich path
+                // first, fall back to the header.
+                if let body = try? JSONDecoder().decode(RateLimitErrorBody.self, from: data),
+                   body.error == "rate_limited" {
+                    throw APIError.rateLimited(
+                        scope: body.scope,
+                        retryAfterSec: body.retryAfterSec,
+                        message: body.message
+                    )
+                }
+                let retryHeader = http.value(forHTTPHeaderField: "Retry-After")
+                    ?? http.value(forHTTPHeaderField: "retry-after")
+                let retry = Int(retryHeader ?? "") ?? 60
+                throw APIError.rateLimited(
+                    scope: "unknown",
+                    retryAfterSec: retry,
+                    message: "请求过于频繁，请稍后再试。"
+                )
+            }
             throw APIError.server(http.statusCode, err?.error)
         }
         return data

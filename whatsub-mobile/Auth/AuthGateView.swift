@@ -54,12 +54,7 @@ struct AuthGateView: View {
                 .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 12))
                 .foregroundStyle(.whatsubInk)
 
-            Button {
-                Task { await vm.sendCode() }
-            } label: {
-                primaryLabel(vm.busy ? "发送中…" : "发送验证码")
-            }
-            .disabled(vm.busy)
+            sendCodeButton
         }
     }
 
@@ -87,18 +82,59 @@ struct AuthGateView: View {
             }
             .disabled(vm.busy)
 
-            Button("← 换个邮箱 / 重新发送") { vm.backToEmail() }
-                .font(.footnote)
-                .foregroundStyle(.whatsubInkMuted)
+            // Resend-code line: when cooled down, also shows a 倒计时 next to
+            // "重新发送" so the user understands why it's disabled.
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let remaining = vm.sendRetrySeconds(at: ctx.date)
+                HStack(spacing: 14) {
+                    Button("← 换个邮箱") { vm.backToEmail() }
+                        .font(.footnote)
+                        .foregroundStyle(.whatsubInkMuted)
+                    if remaining > 0 {
+                        Text("· \(remaining) 秒后可重发")
+                            .font(.footnote)
+                            .foregroundStyle(.whatsubInkFaint)
+                    } else {
+                        Button("重新发送") {
+                            Task { await vm.sendCode() }
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.whatsubAccent)
+                        .disabled(vm.busy)
+                    }
+                }
+            }
         }
     }
 
-    private func primaryLabel(_ text: String) -> some View {
+    /// 发送验证码 button — TimelineView drives a per-second tick so the
+    /// countdown label refreshes without us managing a separate Timer.
+    private var sendCodeButton: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let remaining = vm.sendRetrySeconds(at: ctx.date)
+            Button {
+                Task { await vm.sendCode() }
+            } label: {
+                let label: String = {
+                    if vm.busy { return "发送中…" }
+                    if remaining > 0 { return "请等待 \(remaining) 秒" }
+                    return "发送验证码"
+                }()
+                primaryLabel(label, dimmed: remaining > 0)
+            }
+            .disabled(vm.busy || remaining > 0)
+        }
+    }
+
+    private func primaryLabel(_ text: String, dimmed: Bool = false) -> some View {
         Text(text)
             .font(.headline)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(Color.whatsubAccent, in: RoundedRectangle(cornerRadius: 12))
+            .background(
+                (dimmed ? Color.whatsubAccent.opacity(0.45) : Color.whatsubAccent),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
             .foregroundStyle(.white)
     }
 }

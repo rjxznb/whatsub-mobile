@@ -113,6 +113,16 @@ Library detail plays synced videos via native `AVPlayerViewController` (`Compone
 
 Each Library card shows a badge: "免VPN" (blue, when `videoUrl` is non-nil = OSS-hosted = no VPN needed) or "需VPN" (gray, YouTube embed only). Imported videos (no desktop thumb) upload a thumbnail by fetching `i.ytimg.com/vi/{id}/mqdefault.jpg` and sending it as `thumbData` in the sync payload — so the Library card shows a cover without VPN on subsequent loads.
 
+### Login rate-limit awareness (2026-06-02, build 231)
+
+The backend's `/api/license/auth/{send-code,verify-code}` is rate-limited (policy: `whatsub-license/src/lib/authRateLimit.ts` — 2/min + 20/h per email + 30/h per IP for send-code; 15/h aggregate attempts per email + 30/h per IP for verify-code). The iOS client cooperates on three layers:
+
+1. **Wire**: `APIError.rateLimited(scope, retryAfterSec, message)` parses the 429 body (`{error, scope, retryAfterSec, message}`) AND falls back to the `Retry-After` header. See `WhatsubAPI.send()` 429 branch + `RateLimitErrorBody` in `DTOs.swift`.
+2. **VM state**: `AuthViewModel.sendBlockedUntil: Date?` is set on both successful sends (local 30s soft cooldown — strictly shorter than the server's 60s/2 window so users never trip the real 429 in normal use) and 429 responses (server-driven retryAfterSec). `sendRetrySeconds(at:)` is read by the view inside a `TimelineView` so the countdown ticks every second without a separate Timer.
+3. **UI**: `AuthGateView` shows "请等待 N 秒" on the send button + dims its accent color while blocked. The code-step view also shows "· N 秒后可重发" next to the back-to-email link, transitioning to a "重新发送" button when the cooldown elapses.
+
+If the server policy changes, edit `whatsub-license/src/lib/authRateLimit.ts` only — the client respects whatever `retryAfterSec` the server sends.
+
 ## 踩过的坑 (avoid repeating)
 
 ### CI / GitHub Actions / iOS toolchain
