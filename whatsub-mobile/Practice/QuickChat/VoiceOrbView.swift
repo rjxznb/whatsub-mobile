@@ -49,13 +49,28 @@ struct VoiceOrbView: View {
                 state: state,
                 rawLevel: Double(audioLevel)
             )
+            // Continuous time for the Metal shader. We modulo to [0, 1000) s
+            // before converting to Float — `timeIntervalSinceReferenceDate`
+            // is ~7e8 s today, and Float32 has only ~7 sig figs so the
+            // shader's `time * 2.0` term would lose sub-second resolution.
+            // 1000 s of headroom keeps the rotating-hotspot animation smooth
+            // and the period-mismatch at the wrap is invisible (modulo 1000
+            // doesn't align with any of the shader's frequencies).
+            let t = Float(timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 1000))
 
             ZStack {
-                // Single soft halo (was two layers — outerHalo + ambientFalloff
-                // — but their boundaries didn't coincide, creating a visible
-                // darker ring at the discontinuity. One layer + many gradient
-                // stops + heavy blur = no boundary).
-                softHalo(scale: frame.pulse, opacity: frame.haloOpacity)
+                // Animated glow halo. iOS 17+: Metal shader (port of React-Bits
+                // Orb fragment shader, minus the hover-deformation per user's
+                // 2026-06-03 request) — gives a rotating bright hotspot + noisy
+                // ring that intensifies with voice level. iOS 16: static
+                // multi-stop soft halo (fallback path).
+                if #available(iOS 17.0, *) {
+                    shaderGlow(time: t, level: frame.smoothedLevel)
+                        .scaleEffect(frame.pulse)
+                } else {
+                    softHalo(scale: frame.pulse, opacity: frame.haloOpacity)
+                }
 
                 // (2) caustic backdrop — uses a SOFT radial mask instead of
                 // a hard Circle clip (build ≤ 233 had a visible boundary
@@ -175,7 +190,36 @@ struct VoiceOrbView: View {
             .blendMode(.plusLighter)
     }
 
-    // ---- Halo (back of stack) ----
+    // ---- Halo: Metal shader (iOS 17+) ----
+
+    /// Bright sized so the shader's bright ring (at uv ≈ 0.6) sits just
+    /// outside the Liquid Glass orb's circumference. Math:
+    ///   uv = (px - center) / minDim * 2
+    ///   bright ring at uv 0.6 ⇒ position 0.3 * minDim from center
+    ///   want that at (baseSize/2) * 1.10 ⇒ minDim ≈ baseSize * 1.83
+    /// We use 2.0 to give the outer fade some breathing room past the
+    /// halo-multiplier frame.
+    private var shaderSize: CGFloat { baseSize * 2.0 }
+
+    /// Render the OrbGlow shader. The Rectangle is given a non-transparent
+    /// fill so .colorEffect has pixels to operate on; the shader overwrites
+    /// the color with its own pre-multiplied output.
+    @available(iOS 17.0, *)
+    @ViewBuilder
+    private func shaderGlow(time: Float, level: Double) -> some View {
+        Rectangle()
+            .fill(Color.white)
+            .colorEffect(
+                ShaderLibrary.orbGlow(
+                    .float2(CGSize(width: shaderSize, height: shaderSize)),
+                    .float(time),
+                    .float(Float(level))
+                )
+            )
+            .frame(width: shaderSize, height: shaderSize)
+    }
+
+    // ---- Halo: legacy gradient fallback (iOS 16) ----
 
     /// Single soft halo. Uses MANY gradient stops with monotonically-decreasing
     /// alpha so the curve is essentially smooth (no visible inflection where
