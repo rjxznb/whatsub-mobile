@@ -19,6 +19,7 @@ struct QuickChatLauncherView: View {
     @State private var selectedKeys: Set<String> = []
     @AppStorage("quickchat.last-turn-choice") private var savedTurnChoice: String = TurnChoice.five.rawValue
     @State private var showIntro: Bool = false
+    @State private var startFailureMessage: String? = nil
 
     enum TurnChoice: String, CaseIterable, Identifiable {
         case three = "3"
@@ -72,6 +73,14 @@ struct QuickChatLauncherView: View {
                 QuickChatIntroView()
             }
             .overlay(alignment: .bottom) { startButton }
+            .alert("无法开始", isPresented: Binding(
+                get: { startFailureMessage != nil },
+                set: { if !$0 { startFailureMessage = nil } }
+            )) {
+                Button("好的", role: .cancel) { startFailureMessage = nil }
+            } message: {
+                Text(startFailureMessage ?? "")
+            }
             .onAppear {
                 if let saved = TurnChoice(rawValue: savedTurnChoice) {
                     turnChoice = saved
@@ -217,13 +226,45 @@ struct QuickChatLauncherView: View {
         case .auto:
             let prodStore = ProductionProgressStore()
             let quizStore = QuizProgressStore()
-            pick = PhraseSelector.pick(
+            let smart = PhraseSelector.pick(
                 from: mine,
                 isRecognized: { quizStore.progress(for: $0).isMastered },
                 productionMastered: { prodStore.progress(for: $0)?.masteredAt != nil },
                 isDueForRepetition: { prodStore.isDueForRepetition(phrase: $0, now: Date().timeIntervalSince1970) },
                 now: Date().timeIntervalSince1970
             )
+            // Smart selector can return nil when the user's corpus is mostly
+            // recently mastered (spaced-repetition window still open → all
+            // candidates filtered as .excluded → fewer than 3 left). The
+            // button label says "随机抽 3 个" so falling back to a literal
+            // random pick is on-brand AND prevents the silent-no-op bug the
+            // user reported (2026-06-02). canStart already guarantees
+            // mine.count >= 3 so the prefix(3) is safe.
+            if let smart {
+                pick = smart
+            } else if mine.count >= 3 {
+                let shuffled = Array(mine.shuffled().prefix(3))
+                let sessionPhrases = shuffled.map { m in
+                    SessionPhrase(
+                        phraseNormalized: m.phraseNormalized,
+                        phraseRaw: m.phraseRaw,
+                        meaningZh: m.meaningZh,
+                        usageNote: m.usageNote,
+                        contextSentence: m.contextSentence,
+                        sourceKind: m.source.kind,
+                        sourceURL: m.source.url,
+                        sourceTimestampSec: m.source.timestampSec,
+                        tags: m.tags
+                    )
+                }
+                var tagCounts: [String: Int] = [:]
+                for p in shuffled { for t in p.tags { tagCounts[t, default: 0] += 1 } }
+                let majority = (shuffled.count / 2) + 1
+                let dominant = tagCounts.filter { $0.value >= majority }.max(by: { $0.value < $1.value })?.key
+                pick = PhraseSelector.Pick(phrases: sessionPhrases, suggestedTag: dominant)
+            } else {
+                pick = nil
+            }
         case .manual:
             // Build a Pick directly from the user's picks. suggestedTag = the
             // most common tag among picks (if any 2+ share one) so the LLM
@@ -249,7 +290,10 @@ struct QuickChatLauncherView: View {
             let dominant = tagCounts.filter { $0.value >= majority }.max(by: { $0.value < $1.value })?.key
             pick = PhraseSelector.Pick(phrases: sessionPhrases, suggestedTag: dominant)
         }
-        guard let pick else { return }
+        guard let pick else {
+            startFailureMessage = "至少需要 3 个个人语料库短语才能开启对话陪练。先去「语料库」收藏一些再回来试试。"
+            return
+        }
         dismiss()
         // Defer onStart slightly so the launcher sheet fully dismisses before the
         // QuickChatView sheet presents — SwiftUI gets confused when two sheets
