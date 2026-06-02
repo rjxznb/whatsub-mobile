@@ -38,11 +38,15 @@ struct QuickChatView: View {
     // VAD state
     @StateObject private var vadCoordinator = VADCoordinator()
 
-    // Keyboard tracking was manual (build 216-224) to work around an apparent
-    // `safeAreaInset(.bottom)` non-avoidance bug — but build 224's chat()
-    // cancellation fix (detaching vm.start from .task) restored normal SwiftUI
-    // lifecycle, and the auto-avoidance now fires correctly. The manual offset
-    // became a DOUBLE pad and showed up as a huge gap above the keyboard.
+    // Keyboard tracking — fully manual + opt-out of SwiftUI's auto avoidance
+    // (see .ignoresSafeArea(.keyboard) on the ZStack below). Builds 216-224
+    // were manual to work around a bug. Build 226 removed manual + relied on
+    // auto avoidance, which seemed to work — but the auto path is FLAKY in
+    // this layout (NavigationStack + Color.ignoresSafeArea() + safeAreaInset
+    // bottom + TextField axis:.vertical): some state transitions leave it
+    // off, and the keyboard then hides the input. Best to control everything
+    // ourselves — one source of truth = no race between manual and auto.
+    @State private var keyboardOffset: CGFloat = 0
     @FocusState private var typingFieldFocused: Bool
 
     init(phrases: [SessionPhrase], suggestedTag: String?, maxTurns: Int? = 5,
@@ -104,25 +108,49 @@ struct QuickChatView: View {
                     .background(Color.whatsubBg.ignoresSafeArea())
                 }
             }
+            // Opt out of SwiftUI's automatic keyboard avoidance so it doesn't
+            // race with our manual padding below. With both active, builds
+            // 216-225 saw a 2× gap above the keyboard; with neither, builds
+            // 226-231 saw the keyboard hide the input. Manual-only is the
+            // reliable middle.
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .safeAreaInset(edge: .bottom) {
                 bottomControls
                     .background(Color.whatsubBg)
+                    .padding(.bottom, keyboardOffset)
+                    .animation(.easeOut(duration: 0.22), value: keyboardOffset)
             }
-            // Keyboard dismissal policy (user feedback 2026-06-02):
+            // Keyboard dismissal policy:
             // - Taps don't dismiss (avoids stealing focus on stray taps).
             // - A downward swipe ≥ 30pt anywhere on the screen DOES dismiss
             //   (mirrors iMessage). simultaneousGesture so the gesture fires
-            //   even when the touch lands on the VStack content covering the
-            //   background Color (otherwise the bg's gesture never sees the
-            //   touch because VStack children claim the hit region).
+            //   even when the touch lands on VStack children covering the bg.
+            // - Use UIResponder.resignFirstResponder directly (NOT a
+            //   @FocusState toggle) — the focus state can desync from the
+            //   actual keyboard state, leaving the swipe inert when the user
+            //   most needs it.
             .simultaneousGesture(
                 DragGesture(minimumDistance: 30)
                     .onEnded { v in
-                        if v.translation.height > 30 && typingFieldFocused {
-                            typingFieldFocused = false
+                        if v.translation.height > 30 {
+                            UIApplication.shared.sendAction(
+                                #selector(UIResponder.resignFirstResponder),
+                                to: nil, from: nil, for: nil
+                            )
                         }
                     }
             )
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+                guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+                let bottomInset = (UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .flatMap { $0.windows }
+                    .first { $0.isKeyWindow }?.safeAreaInsets.bottom) ?? 0
+                keyboardOffset = max(0, frame.height - bottomInset)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardOffset = 0
+            }
             .navigationTitle("对话陪练")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
