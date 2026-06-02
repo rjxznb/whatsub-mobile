@@ -1,27 +1,25 @@
 import SwiftUI
 
-/// Liquid-glass orb. Replaces the v1 Siri emissive orb with a translucent
-/// glass body that has slow-drifting caustic color blobs inside, a bright
-/// Fresnel-style rim, and a small specular highlight up top.
+/// Liquid-glass orb. Uses iOS 26's native `.glassEffect(in:)` for the glass
+/// material (real Metal pipeline — refraction, Fresnel edge, specular kiss,
+/// press warp all included), with iridescent caustic blobs drifting BEHIND
+/// the glass so there's actually something for the glass to refract. On a
+/// pure black background a glass material renders as flat gray — the
+/// colored backdrop is what makes it read as liquid.
 ///
-/// Audio reactivity is exponentially smoothed (~150 ms time constant) so the
-/// orb breathes/grows fluidly with voice — never a discrete jump. Scale
-/// response is also less aggressive than v1 (was +85% on full voice, now ~+30%)
-/// because the visual cue here is the caustic motion + rim brighten, not
-/// dramatic size pumping.
+/// Architecture (back to front):
+///   1. Outer halo — large blurred radial gradient, sells "this thing glows"
+///   2. Caustic backdrop — 3 colored discs drifting on slow lissajous orbits,
+///      blended additively, blurred. This is what shows THROUGH the glass.
+///   3. Glass orb — a clear circle with `.glassEffect(in: Circle())` overlaid
+///      on top. iOS 26 SDK renders the actual liquid-glass material here.
+///   4. Fallback for iOS 16-25: a hand-built ultraThinMaterial + Fresnel
+///      rim stroke + specular highlight (close visual to v2 build 225).
 ///
-/// Layers, back to front:
-/// 1. Soft outer halo — large blurred radial glow that grows with smoothed
-///    level. Tinted cyan/pink.
-/// 2. Caustic backdrop — three blurred colored discs (blue/pink/violet) drifting
-///    inside slow lissajous orbits, blended additively for the iridescent
-///    "liquid swirl" look. This is what shows THROUGH the glass.
-/// 3. Glass tint — thin white fog so the caustic doesn't read as raw color.
-/// 4. Inner rim shadow — soft dark vignette near the inside edge giving the
-///    "thick glass shell" depth cue.
-/// 5. Rim highlight — angular gradient stroke around the edge, bright at the
-///    upper-left, dim at the lower-right (light source convention).
-/// 6. Specular highlight — small bright spot upper-left for the gloss kiss.
+/// Audio reactivity is exponentially smoothed (~167 ms time constant) so the
+/// orb breathes/grows fluidly — never a discrete jump. Scale response is
+/// modest (+30% at full voice) because most of the voice cue lives in the
+/// caustic-blob orbit radius growth + halo brightening, not in the orb size.
 struct VoiceOrbView: View {
     enum OrbState: Equatable {
         case idle, thinking, speaking, recording, transcribing
@@ -32,6 +30,11 @@ struct VoiceOrbView: View {
 
     private let baseSize: CGFloat = 180
     private let haloMultiplier: CGFloat = 1.85
+    /// The caustic backdrop extends BEYOND the glass circle so that as blobs
+    /// drift, the refracted color inside the glass keeps changing — if the
+    /// backdrop were the same size as the orb, the edges would always be the
+    /// same color and the refraction would look dead.
+    private let backdropMultiplier: CGFloat = 1.30
 
     @State private var phase = PhaseTracker()
 
@@ -46,64 +49,101 @@ struct VoiceOrbView: View {
             ZStack {
                 outerHalo(scale: frame.pulse, opacity: frame.haloOpacity)
 
-                ZStack {
-                    // (2) caustic backdrop
-                    causticBlob(color: blueCaustic, offset: frame.blobA, scale: 1.10)
-                    causticBlob(color: pinkCaustic, offset: frame.blobB, scale: 1.20)
-                    causticBlob(color: violetCaustic, offset: frame.blobC, scale: 1.00)
+                // (2) caustic backdrop — clipped slightly larger than the
+                // orb so the glass refracts a continuously-shifting color
+                // pattern.
+                causticBackdrop(frame: frame)
+                    .frame(
+                        width: baseSize * backdropMultiplier,
+                        height: baseSize * backdropMultiplier
+                    )
+                    .clipShape(Circle())
+                    .scaleEffect(frame.pulse)
 
-                    // (3) glass tint — slight white wash so the caustic reads
-                    // as "fluid behind glass", not as raw color.
-                    Circle().fill(.white.opacity(0.06))
-
-                    // (4) inner rim shadow (thick-glass depth cue)
-                    Circle()
-                        .strokeBorder(
-                            RadialGradient(
-                                colors: [.clear, .black.opacity(0.0), .black.opacity(0.25)],
-                                center: .center,
-                                startRadius: baseSize * 0.30,
-                                endRadius: baseSize * 0.50
-                            ),
-                            lineWidth: 18
-                        )
-                        .blur(radius: 6)
-
-                    // (5) rim highlight (Fresnel-style)
-                    Circle()
-                        .stroke(
-                            AngularGradient(
-                                colors: [
-                                    .white.opacity(0.95),
-                                    .white.opacity(0.10),
-                                    .white.opacity(0.35),
-                                    .white.opacity(0.05),
-                                    .white.opacity(0.95),
-                                ],
-                                center: .center,
-                                angle: .degrees(-45)
-                            ),
-                            lineWidth: 2.0
-                        )
-                        .blur(radius: 0.6)
-
-                    // (6) specular highlight upper-left
-                    specularHighlight
-                }
-                .frame(width: baseSize, height: baseSize)
-                .clipShape(Circle())
-                .scaleEffect(frame.pulse)
-                // Soft cyan ambient shadow underneath, brightens with voice.
-                .shadow(
-                    color: blueCaustic.opacity(0.35 + frame.smoothedLevel * 0.25),
-                    radius: 18 + CGFloat(frame.smoothedLevel * 8)
-                )
+                // (3) glass orb — the material itself.
+                glassOrb
+                    .scaleEffect(frame.pulse)
+                    .shadow(
+                        color: blueCaustic.opacity(0.35 + frame.smoothedLevel * 0.25),
+                        radius: 18 + CGFloat(frame.smoothedLevel * 8)
+                    )
             }
             .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
         }
     }
 
-    // ---- Layers ----
+    // ---- The glass material (iOS 26 native; manual fallback below) ----
+
+    @ViewBuilder
+    private var glassOrb: some View {
+        if #available(iOS 26.0, *) {
+            // Native iOS 26 Liquid Glass. The Circle is clear — the material
+            // does the entire job: refraction of the caustic backdrop, Fresnel
+            // edge, specular, the lot.
+            Circle()
+                .fill(Color.clear)
+                .frame(width: baseSize, height: baseSize)
+                .glassEffect(in: Circle())
+        } else {
+            // iOS 16-25 fallback — hand-built to land close to the real
+            // material visually. ultraThinMaterial does the frosted blur,
+            // angular-gradient stroke fakes the Fresnel rim, a small radial
+            // highlight fakes the specular kiss.
+            ZStack {
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.85)
+                Circle()
+                    .stroke(
+                        AngularGradient(
+                            colors: [
+                                .white.opacity(0.95),
+                                .white.opacity(0.10),
+                                .white.opacity(0.35),
+                                .white.opacity(0.05),
+                                .white.opacity(0.95),
+                            ],
+                            center: .center,
+                            angle: .degrees(-45)
+                        ),
+                        lineWidth: 2.0
+                    )
+                    .blur(radius: 0.6)
+                specularHighlight
+            }
+            .frame(width: baseSize, height: baseSize)
+            .clipShape(Circle())
+        }
+    }
+
+    // ---- Caustic backdrop (what the glass refracts) ----
+
+    @ViewBuilder
+    private func causticBackdrop(frame: PhaseTracker.Frame) -> some View {
+        ZStack {
+            causticBlob(color: blueCaustic, offset: frame.blobA, sizeScale: 1.10)
+            causticBlob(color: pinkCaustic, offset: frame.blobB, sizeScale: 1.20)
+            causticBlob(color: violetCaustic, offset: frame.blobC, sizeScale: 1.00)
+        }
+    }
+
+    private func causticBlob(color: Color, offset: CGSize, sizeScale: CGFloat) -> some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [color.opacity(0.95), color.opacity(0.45), .clear],
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: baseSize * 0.48
+                )
+            )
+            .frame(width: baseSize * sizeScale, height: baseSize * sizeScale)
+            .offset(offset)
+            .blur(radius: 22)
+            .blendMode(.plusLighter)
+    }
+
+    // ---- Outer halo (back layer) ----
 
     private func outerHalo(scale: CGFloat, opacity: Double) -> some View {
         Circle()
@@ -120,23 +160,7 @@ struct VoiceOrbView: View {
             .scaleEffect(scale)
     }
 
-    /// One drifting caustic disc — radial gradient with heavy blur.
-    private func causticBlob(color: Color, offset: CGSize, scale: CGFloat) -> some View {
-        Circle()
-            .fill(
-                RadialGradient(
-                    colors: [color.opacity(0.95), color.opacity(0.45), .clear],
-                    center: .center,
-                    startRadius: 0,
-                    endRadius: baseSize * 0.48
-                )
-            )
-            .frame(width: baseSize * scale, height: baseSize * scale)
-            .offset(offset)
-            .blur(radius: 20)
-            .blendMode(.plusLighter)
-    }
-
+    /// Fallback-only specular kiss for iOS 16-25.
     private var specularHighlight: some View {
         Circle()
             .fill(
@@ -155,8 +179,6 @@ struct VoiceOrbView: View {
     }
 
     // ---- palette ----
-    // Saturated jewel tones — caustic blobs are blended additively so the
-    // visible result is softer pastel where they overlap.
 
     private var blueCaustic: Color {
         switch state {
@@ -202,37 +224,30 @@ struct VoiceOrbView: View {
             lastDate = date
             t += dt
 
-            // Exponential smoothing of the level. `rate` of 6 ≈ 167 ms time
-            // constant — slow enough that loud-then-quiet bursts blend, fast
-            // enough that the orb still feels responsive. Critically, we
-            // smooth EVERY frame (not just on big jumps) so there's never a
-            // discrete pop — the user's #1 complaint about the v1 orb.
+            // Exponential smoothing — ~167 ms time constant. Slow enough
+            // that loud-then-quiet bursts blend, fast enough that the orb
+            // still feels responsive.
             let rate = 6.0
             let factor = min(1.0, dt * rate)
             smoothedLevel += (rawLevel - smoothedLevel) * factor
             smoothedLevel = max(0, min(1, smoothedLevel))
 
-            // Breathing — slow ambient sin for "alive" feel.
             let breath = breathingParams(for: state)
             pulsePhase += dt * (.pi * 2 / breath.period)
             let breathFrac = (sin(pulsePhase) + 1) / 2
             let breathPulse = 1.0 + breathFrac * (breath.peak - 1.0)
 
-            // Audio-reactive scale: gentler than v1 (was +85% peak; now +30%).
-            // Most of the voice cue is delivered by caustic-blob drift +
-            // halo brightening, not dramatic size pumping.
+            // Modest audio-reactive scale (+30% at full voice).
             let levelGrowth = smoothedLevel * 0.30
             let pulse = breathPulse + levelGrowth
 
             let haloBase: Double = (state == .recording || state == .speaking) ? 0.55 : 0.40
             let haloOpacity = haloBase + smoothedLevel * 0.25
 
-            // Blob drift — slow lissajous orbits at different rates + phases.
-            // The frequencies are deliberately incommensurate so the pattern
-            // never visually repeats (no perceived loop). Radius grows
-            // slightly with smoothedLevel so blobs sweep wider on louder
-            // voice — adds energy without snap.
-            let r = 20.0 + smoothedLevel * 12.0
+            // Lissajous orbits with incommensurate frequencies (no visible
+            // loop point). Orbit radius grows slightly with smoothedLevel
+            // so blobs sweep wider on louder voice.
+            let r = 22.0 + smoothedLevel * 14.0
             let aX = cos(t * 0.18) * r
             let aY = sin(t * 0.22 + 1.0) * r
             let bX = cos(t * 0.16 + 2.0) * r * 1.10
