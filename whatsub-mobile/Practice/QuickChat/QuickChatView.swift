@@ -29,7 +29,6 @@ struct QuickChatView: View {
     @State private var showTranscript: Bool = false
     @State private var showCloseConfirm: Bool = false
     @State private var translatePresented: TranslationTarget?
-    @State private var typingMode: Bool = false
     @State private var micPermissionDenied = false
 
     @AppStorage("quickchat.premium-voice-hint.shown") private var premiumHintShown: Bool = false
@@ -38,16 +37,13 @@ struct QuickChatView: View {
     // VAD state
     @StateObject private var vadCoordinator = VADCoordinator()
 
-    // Keyboard tracking — fully manual + opt-out of SwiftUI's auto avoidance
-    // (see .ignoresSafeArea(.keyboard) on the ZStack below). Builds 216-224
-    // were manual to work around a bug. Build 226 removed manual + relied on
-    // auto avoidance, which seemed to work — but the auto path is FLAKY in
-    // this layout (NavigationStack + Color.ignoresSafeArea() + safeAreaInset
-    // bottom + TextField axis:.vertical): some state transitions leave it
-    // off, and the keyboard then hides the input. Best to control everything
-    // ourselves — one source of truth = no race between manual and auto.
-    @State private var keyboardOffset: CGFloat = 0
-    @FocusState private var typingFieldFocused: Bool
+    // Push-to-talk state (builds 237+). Replaced the previous auto-VAD +
+    // typing-mode UI: typing is gone (user explicitly asked to force voice
+    // input — the keyboard handling was too brittle in this layout, and
+    // forcing voice doubles as a 强迫 mechanism for English practice).
+    // Recording is now gated on a long-press DragGesture on the orb.
+    @State private var isOrbPressed: Bool = false
+    private let pressHaptic = UIImpactFeedbackGenerator(style: .medium)
 
     init(phrases: [SessionPhrase], suggestedTag: String?, maxTurns: Int? = 5,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
@@ -77,7 +73,11 @@ struct QuickChatView: View {
                 VStack(spacing: 0) {
                     headerChips.padding(.top, 6)
                     Spacer(minLength: 0)
-                    VoiceOrbView(state: orbState, audioLevel: vadCoordinator.audioLevel)
+                    VoiceOrbView(state: orbState,
+                                 audioLevel: vadCoordinator.audioLevel,
+                                 isPressed: isOrbPressed)
+                        .contentShape(Circle())
+                        .gesture(orbPressGesture)
                     Spacer().frame(height: 18)
                     LyricTickerView(
                         onTranslate: { translatePresented = TranslationTarget(text: $0) },
@@ -108,48 +108,9 @@ struct QuickChatView: View {
                     .background(Color.whatsubBg.ignoresSafeArea())
                 }
             }
-            // Opt out of SwiftUI's automatic keyboard avoidance so it doesn't
-            // race with our manual padding below. With both active, builds
-            // 216-225 saw a 2× gap above the keyboard; with neither, builds
-            // 226-231 saw the keyboard hide the input. Manual-only is the
-            // reliable middle.
-            .ignoresSafeArea(.keyboard, edges: .bottom)
             .safeAreaInset(edge: .bottom) {
                 bottomControls
                     .background(Color.whatsubBg)
-                    .padding(.bottom, keyboardOffset)
-                    .animation(.easeOut(duration: 0.22), value: keyboardOffset)
-            }
-            // Keyboard dismissal policy:
-            // - Taps don't dismiss (avoids stealing focus on stray taps).
-            // - A downward swipe ≥ 30pt anywhere on the screen DOES dismiss
-            //   (mirrors iMessage). simultaneousGesture so the gesture fires
-            //   even when the touch lands on VStack children covering the bg.
-            // - Use UIResponder.resignFirstResponder directly (NOT a
-            //   @FocusState toggle) — the focus state can desync from the
-            //   actual keyboard state, leaving the swipe inert when the user
-            //   most needs it.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 30)
-                    .onEnded { v in
-                        if v.translation.height > 30 {
-                            UIApplication.shared.sendAction(
-                                #selector(UIResponder.resignFirstResponder),
-                                to: nil, from: nil, for: nil
-                            )
-                        }
-                    }
-            )
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-                guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-                let bottomInset = (UIApplication.shared.connectedScenes
-                    .compactMap { $0 as? UIWindowScene }
-                    .flatMap { $0.windows }
-                    .first { $0.isKeyWindow }?.safeAreaInsets.bottom) ?? 0
-                keyboardOffset = max(0, frame.height - bottomInset)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                keyboardOffset = 0
             }
             .navigationTitle("对话陪练")
             .navigationBarTitleDisplayMode(.inline)
@@ -236,10 +197,8 @@ struct QuickChatView: View {
         .onChange(of: showCompliance) { showing in
             if !showing, vm.turns.isEmpty { Task { await vm.start() } }
         }
-        // Watch VM phase transitions to drive the auto-listen loop.
-        .onChange(of: vm.phase) { newPhase in
-            handlePhaseChange(newPhase)
-        }
+        // (Auto-listen orchestration removed in builds 237+ — recording is
+        // now driven entirely by the orb's long-press gesture.)
         .onChange(of: scenePhase) { phase in
             if phase != .active {
                 vm.pause()
@@ -260,69 +219,63 @@ struct QuickChatView: View {
         .onDisappear { vadCoordinator.cancel() }
     }
 
-    // ---- auto-listen orchestration ----
+    // ---- push-to-talk orchestration (builds 237+) ----
 
-    /// Called whenever vm.phase changes. After AI finishes TTS (we detect by
-    /// transitioning from .speaking/.thinking to .idle with TTS not speaking
-    /// any more), enter listening mode.
-    private func handlePhaseChange(_ newPhase: QuickChatViewModel.Phase) {
-        guard !typingMode, !micPermissionDenied else { return }
-        guard newPhase == .idle else { return }
-        // The VM goes to .idle after a turn completes. Wait briefly for the TTS
-        // queue to drain, then enter listening.
-        Task {
-            // Poll until Speaker is done speaking the queued sentences.
-            for _ in 0..<150 {  // 150 × 100ms = 15s max wait
-                if !Speaker.isSpeaking { break }
-                try? await Task.sleep(nanoseconds: 100_000_000)
+    /// Long-press DragGesture on the orb. minimumDistance 0 so it fires
+    /// the instant the user touches the orb (no drag required); `.onChanged`
+    /// detects the touch-down on the first invocation and `.onEnded` the
+    /// release. We track our own `isOrbPressed` flag instead of relying on
+    /// gesture state because: (1) we need to ignore touches during AI's
+    /// reply (vm.phase != .idle); (2) the haptic + recorder start should
+    /// only fire on the TRANSITION from not-pressed to pressed, not every
+    /// poll.
+    private var orbPressGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+                guard !isOrbPressed,
+                      vm.phase == .idle,
+                      !vm.turns.isEmpty,
+                      !micPermissionDenied else { return }
+                isOrbPressed = true
+                pressHaptic.impactOccurred(intensity: 0.8)
+                startPushToTalk()
             }
-            // Small grace before opening mic — avoid catching the speaker tail.
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard vm.phase == .idle, !typingMode else { return }
-            vm.enterListening()
-            await startVAD()
-        }
+            .onEnded { _ in
+                guard isOrbPressed else { return }
+                isOrbPressed = false
+                endPushToTalk()
+            }
     }
 
-    private func startVAD() async {
+    private func startPushToTalk() {
         vadCoordinator.start(
-            onSpeechDetected: { /* orb auto-updates via orbState */ },
+            onSpeechDetected: { /* not used in push-to-talk mode */ },
             onSpeechEnded: { transcript, backupURL in
-                Task { await self.handleVADSpeechEnded(transcript: transcript, backupURL: backupURL) }
+                Task { await self.handlePushToTalkEnded(transcript: transcript, backupURL: backupURL) }
             },
-            onNoSpeechTimeout: {
-                Task {
-                    await vm.handleNoSpeechTimeout()
-                    if vm.phase != .done { vm.exitListening() }
-                }
-            }
+            onNoSpeechTimeout: { /* not used — caller controls timing */ }
         )
     }
 
-    /// VoiceActivityRecorder now ships the live ASR transcript along with the
-    /// end-of-turn signal (builds ≤ 232 re-recognized the recorded file after
-    /// the fact). The backup .caf URL is included for forensics — we always
-    /// delete it once we've decided what to do.
-    private func handleVADSpeechEnded(transcript: String, backupURL: URL?) async {
-        vm.exitListening()
-        vm.resetNoSpeechCounter()
-        if let backupURL { try? FileManager.default.removeItem(at: backupURL) }
+    private func endPushToTalk() {
+        vadCoordinator.endRecording()
+    }
 
+    private func handlePushToTalkEnded(transcript: String, backupURL: URL?) async {
+        if let backupURL { try? FileManager.default.removeItem(at: backupURL) }
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty {
-            await vm.submitUserInput(text)
-        } else {
-            // Empty transcript — treat as no-speech, restart VAD.
-            if vm.phase == .idle, !typingMode { vm.enterListening(); await startVAD() }
-        }
+        // Empty transcript: silently no-op (user released too fast, or mic
+        // captured no speech). Orb returns to idle + "push me" reappears.
+        guard !text.isEmpty else { return }
+        await vm.submitUserInput(text)
     }
 
     // ---- derived state ----
 
     private var orbState: VoiceOrbView.OrbState {
-        if vadCoordinator.speechActive { return .recording }
+        // In push-to-talk mode, the press gesture is the source of truth.
+        if isOrbPressed { return .recording }
         switch vm.phase {
-        case .listening: return .idle           // listening but no speech yet — gentle pulse
         case .thinking: return .thinking
         case .speaking: return .speaking
         case .recording: return .recording
@@ -331,16 +284,19 @@ struct QuickChatView: View {
     }
 
     private var statusText: String {
+        if isOrbPressed { return "正在听你说…" }
         switch vm.phase {
-        case .listening:
-            return vadCoordinator.speechActive ? "正在听你说…" : "请开始说话…"
         case .thinking: return "AI 正在想…"
         case .speaking: return "AI 正在说…"
         case .recording: return "正在听你说…"
         case .paused: return "已暂停"
         case .error(let msg): return msg
         case .summarizing, .done: return ""
-        case .idle: return vm.turns.isEmpty ? "准备开始…" : "稍等…"
+        case .listening: return ""
+        case .idle:
+            if vm.turns.isEmpty { return "准备开始…" }
+            if micPermissionDenied { return "未授权麦克风，去 设置 → whatSub 打开" }
+            return "按住球说话"
         }
     }
 
@@ -367,73 +323,28 @@ struct QuickChatView: View {
         .padding(.horizontal, 16).padding(.bottom, 4)
     }
 
-    // ---- bottom controls (no mic button anymore) ----
-    @ViewBuilder
+    // ---- bottom controls (voice-only, builds 237+) ----
+    //
+    // Typing mode + the keyboard icon were removed: the TextField +
+    // safeAreaInset + axis:.vertical combo had recurring keyboard-visibility
+    // bugs across builds 226-234, and forcing voice input doubles as
+    // English-practice pressure. Only the 结束 button remains down here;
+    // the actual "talk" UI is the orb's long-press gesture.
     private var bottomControls: some View {
-        if typingMode || micPermissionDenied {
-            HStack(alignment: .bottom, spacing: 8) {
-                // axis:.vertical + lineLimit(1...6) lets the field grow with
-                // multi-line input (up to ~6 lines). Beyond that, the inner
-                // text scrolls — the safeAreaInset above keeps the latest
-                // typed line visible above the keyboard. HStack alignment
-                // .bottom anchors the send buttons to the bottom of the
-                // (possibly tall) TextField, mirroring iMessage.
-                TextField("打字回应…", text: $vm.typedInput, axis: .vertical)
-                    .lineLimit(1...6)
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgElev))
-                    .focused($typingFieldFocused)
-                Button {
-                    let text = vm.typedInput
-                    vm.typedInput = ""
-                    Task { await vm.submitUserInput(text) }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2).foregroundStyle(.whatsubAccent)
-                }
-                .disabled(vm.typedInput.trimmingCharacters(in: .whitespaces).isEmpty || vm.phase != .idle)
-                if !micPermissionDenied {
-                    Button {
-                        typingMode = false
-                        // After leaving typing mode, immediately enter listening
-                        // for the user's next turn (don't wait for next AI reply).
-                        if vm.phase == .idle, !vm.turns.isEmpty {
-                            vm.enterListening()
-                            Task { await startVAD() }
-                        }
-                    } label: {
-                        Image(systemName: "mic.fill").foregroundStyle(.whatsubAccent)
-                    }
-                }
+        HStack(spacing: 12) {
+            Button {
+                vadCoordinator.cancel()
+                Task { await vm.endSession() }
+            } label: {
+                Text("结束")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.whatsubInk)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(Capsule().fill(Color.whatsubBgElev))
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .background(Color.whatsubBg)
-        } else {
-            HStack(spacing: 12) {
-                Button {
-                    vadCoordinator.cancel()
-                    Task { await vm.endSession() }
-                } label: {
-                    Text("结束")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.whatsubInk)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(Capsule().fill(Color.whatsubBgElev))
-                }
-                Spacer()
-                Button {
-                    typingMode = true
-                    vm.exitListening()
-                    vadCoordinator.cancel()
-                } label: {
-                    Image(systemName: "keyboard")
-                        .font(.title3).foregroundStyle(.whatsubAccent)
-                        .padding(10)
-                        .background(Circle().fill(Color.whatsubBgElev))
-                }
-            }
-            .padding(.horizontal, 20).padding(.bottom, 28).padding(.top, 12)
+            Spacer()
         }
+        .padding(.horizontal, 20).padding(.bottom, 28).padding(.top, 12)
     }
 
     // ---- transcript drawer (full history) ----
@@ -523,7 +434,11 @@ struct QuickChatView: View {
         let speech = await withCheckedContinuation { cont in
             SFSpeechRecognizer.requestAuthorization { st in cont.resume(returning: st == .authorized) }
         }
-        if !(mic && speech) { micPermissionDenied = true; typingMode = true }
+        // Without mic + speech permissions the orb's push-to-talk path can't
+        // function. Typing fallback was removed in builds 237+ (voice-only
+        // policy), so we just flag and surface a status. The orb tap then
+        // becomes a no-op (see orbPressGesture's micPermissionDenied guard).
+        if !(mic && speech) { micPermissionDenied = true }
     }
 
     // ---- youtube replay ----
@@ -597,5 +512,12 @@ final class VADCoordinator: ObservableObject {
         recorder.cancel()
         speechActive = false
         audioLevel = 0
+    }
+
+    /// Explicit end-of-turn signal for push-to-talk (builds 237+). Caller
+    /// releases the orb; we tell the recorder to finalize, which fires
+    /// onSpeechEnded with the live transcript.
+    func endRecording() {
+        recorder.endRecording()
     }
 }

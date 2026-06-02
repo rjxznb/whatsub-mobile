@@ -27,6 +27,10 @@ struct VoiceOrbView: View {
 
     let state: OrbState
     var audioLevel: Float = 0    // 0..1, smoothed further inside PhaseTracker
+    /// True while the user is holding the orb (push-to-talk gesture).
+    /// When true: (a) "push me" label hides; (b) halo rotation speeds up
+    /// to give immediate visual confirmation that the press registered.
+    var isPressed: Bool = false
 
     private let baseSize: CGFloat = 180
     /// Outer ZStack's reported layout size — kept moderate so the orb doesn't
@@ -47,7 +51,8 @@ struct VoiceOrbView: View {
             let frame = phase.advance(
                 to: timeline.date,
                 state: state,
-                rawLevel: Double(audioLevel)
+                rawLevel: Double(audioLevel),
+                isPressed: isPressed
             )
             // Continuous time for the Metal shader. We modulo to [0, 1000) s
             // before converting to Float — `timeIntervalSinceReferenceDate`
@@ -118,6 +123,20 @@ struct VoiceOrbView: View {
                 // halo handles all the glow now).
                 glassOrb
                     .scaleEffect(frame.pulse)
+
+                // (4) "push me" label — only visible when the user is NOT
+                // currently holding the orb. Glass-style text (frosted
+                // material foreground) with a brightness band that sweeps
+                // left → right on a 2.4 s loop, drawing the eye + signalling
+                // "tap-and-hold me". Hides during press so the user sees the
+                // pure orb visual while talking.
+                if !isPressed {
+                    pushMeLabel(time: timeline.date)
+                        .frame(width: baseSize, height: baseSize)
+                        .scaleEffect(frame.pulse)
+                        .transition(.opacity)
+                        .animation(.easeOut(duration: 0.18), value: isPressed)
+                }
             }
             .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
         }
@@ -225,6 +244,50 @@ struct VoiceOrbView: View {
                 )
             )
             .frame(width: shaderSize, height: shaderSize)
+    }
+
+    /// "push me" prompt — glass-style text + animated left→right highlight
+    /// sweep. The sweep is implemented as a 3-stop LinearGradient mask
+    /// overlay on top of a base muted version of the text; offset of the
+    /// mask is driven by `time` so the bright band travels horizontally
+    /// across the text every 2.4 s. Material foreground style gives the
+    /// text itself a frosted-glass appearance to match the orb body.
+    @ViewBuilder
+    private func pushMeLabel(time: Date) -> some View {
+        let text = "push me"
+        // 0..1 sweep phase, loop every 2.4 s.
+        let phase = time.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: 2.4) / 2.4
+        // Map phase to a horizontal offset that takes the bright band from
+        // off-left (-baseSize) to off-right (+baseSize) over one loop.
+        let offsetX = CGFloat(phase - 0.5) * baseSize * 1.6
+
+        // Base text: dim frosted-glass material. The brighter sweep then
+        // briefly lifts each character as it passes through.
+        ZStack {
+            Text(text)
+                .font(.custom("Caveat-Bold", size: 44))
+                .foregroundStyle(.regularMaterial.opacity(0.65))
+
+            // Highlight pass — same text, full-white, masked by a moving
+            // gradient band so only the slice currently under the band lights up.
+            Text(text)
+                .font(.custom("Caveat-Bold", size: 44))
+                .foregroundStyle(.white)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear,             location: 0.20),
+                            .init(color: .white.opacity(0.95), location: 0.50),
+                            .init(color: .clear,             location: 0.80),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: baseSize * 0.85)
+                    .offset(x: offsetX)
+                )
+        }
     }
 
     /// Soft bright pool just below the orb. Centered ~0.4 baseSize below
@@ -346,7 +409,7 @@ struct VoiceOrbView: View {
             let backdropRotation: Double
         }
 
-        func advance(to date: Date, state: OrbState, rawLevel: Double) -> Frame {
+        func advance(to date: Date, state: OrbState, rawLevel: Double, isPressed: Bool = false) -> Frame {
             let dt: Double = {
                 guard let last = lastDate else { return 0 }
                 return min(0.1, date.timeIntervalSince(last))
@@ -387,9 +450,12 @@ struct VoiceOrbView: View {
 
             // Backdrop rotation: base 4°/s + up to +6°/s on loud voice =
             // ~one full revolution every 90 s at rest, ~36 s at full voice.
-            // Always positive (CCW) so the direction doesn't flip when
-            // smoothedLevel oscillates.
-            let degPerSec = 4.0 + smoothedLevel * 6.0
+            // While the user is HOLDING the orb (push-to-talk) we multiply
+            // the rate by 4 — immediate visual feedback that the press
+            // landed even before audio levels move. Always positive (CCW)
+            // so the direction doesn't flip when smoothedLevel oscillates.
+            var degPerSec = 4.0 + smoothedLevel * 6.0
+            if isPressed { degPerSec *= 4.0 }
             backdropRotation += dt * degPerSec
             // Keep the value bounded so it doesn't drift toward floating-
             // point precision loss over a long session.

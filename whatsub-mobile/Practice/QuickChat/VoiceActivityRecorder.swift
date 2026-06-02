@@ -172,7 +172,20 @@ final class VoiceActivityRecorder {
         fileURL = nil
     }
 
-    // MARK: - VAD FSM (Method A: relative-dB)
+    // MARK: - Push-to-talk loop (builds 237+)
+    //
+    // No more onset/offset auto-detection. The caller (QuickChatView) drives
+    // start/stop explicitly via the orb's long-press gesture, so each buffer
+    // we just (a) report level for the orb's voice reactivity and (b) honor
+    // a hard cap so a stuck press can't record forever. The ASR partial
+    // stream + endpointer-stability logic is also gone — the user releases
+    // the orb to signal "I'm done", we don't need a heuristic for that.
+
+    @MainActor
+    func endRecording() {
+        guard !finished else { return }
+        endTurn(reason: .userRelease)
+    }
 
     @MainActor
     private func processBuffer(powerDB power: Float) {
@@ -182,61 +195,19 @@ final class VoiceActivityRecorder {
         let clamped = max(-50, min(-10, power))
         onLevelUpdate?((clamped + 50) / 40)
 
-        let now = Date()
-        let elapsedSec = now.timeIntervalSince(started)
-
-        if onsetAt == nil {
-            // Looking for onset.
-            if elapsedSec > noSpeechTimeoutSec {
-                teardown()
-                if let url = fileURL { try? FileManager.default.removeItem(at: url) }
-                fileURL = nil
-                onNoSpeechTimeout?()
-                return
-            }
-            if power > speechOnsetDB {
-                loudSinceMs += msPerBuffer
-                if loudSinceMs >= onsetHoldMs {
-                    onsetAt = now
-                    peakSinceOnset = power
-                    onSpeechDetected?()
-                }
-            } else {
-                loudSinceMs = 0
-            }
-            return
-        }
-
-        // After onset — hard cap.
-        if let onsetAt, now.timeIntervalSince(onsetAt) > maxAfterOnsetSec {
+        // Hard cap as a safety net against a stuck press (e.g. user puts
+        // phone face-down while still touching screen). 30 s matches the
+        // previous hardCapSec.
+        if Date().timeIntervalSince(started) > hardCapSec {
             endTurn(reason: .hardCap)
-            return
-        }
-
-        // Track peak voltage so the relative threshold can adapt.
-        if power > peakSinceOnset { peakSinceOnset = power }
-        let offsetThreshold = max(peakSinceOnset - relativeOffsetDB, absoluteOffsetFloor)
-
-        if power < offsetThreshold {
-            silentSinceMs += msPerBuffer
-            if silentSinceMs >= offsetHoldMs {
-                endTurn(reason: .silenceVAD)
-                return
-            }
-        } else {
-            silentSinceMs = 0
         }
     }
 
-    // MARK: - Method B: ASR partial stability
+    // MARK: - Live transcript capture (no endpointing — caller drives end)
 
     @MainActor
     private func handlePartialResult(_ text: String) {
-        guard !finished, onsetAt != nil else {
-            // Pre-onset partials are noise; ignore.
-            lastPartialText = text
-            return
-        }
+        guard !finished else { return }
         if text != lastPartialText {
             lastPartialText = text
             lastPartialChangedAt = Date()
@@ -251,7 +222,7 @@ final class VoiceActivityRecorder {
 
     // MARK: - Termination
 
-    private enum EndReason { case silenceVAD, asrStable, hardCap }
+    private enum EndReason { case userRelease, hardCap }
 
     @MainActor
     private func endTurn(reason: EndReason) {
