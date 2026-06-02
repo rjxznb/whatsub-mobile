@@ -58,6 +58,12 @@ final class VoiceActivityRecorder {
     /// 1.2 s matches what Siri/Google Assistant use empirically.
     private let partialStableSec: Double = 1.2
 
+    /// Safety cap for push-to-talk: even if the user keeps the finger on the
+    /// orb (or accidentally puts the phone face-down while pressing), end the
+    /// turn after this many seconds. 30 s is plenty of headroom for any
+    /// realistic English-practice utterance.
+    private let hardCapSec: Double = 30
+
     // MARK: - Runtime state
 
     private let engine = AVAudioEngine()
