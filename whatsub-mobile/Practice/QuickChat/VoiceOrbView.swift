@@ -29,6 +29,10 @@ struct VoiceOrbView: View {
     var audioLevel: Float = 0    // 0..1, smoothed further inside PhaseTracker
 
     private let baseSize: CGFloat = 180
+    /// Outer ZStack's reported layout size — kept moderate so the orb doesn't
+    /// shove sibling views around. Halo layers RENDER larger than this via
+    /// their own internal frames; SwiftUI .frame() doesn't clip, so the halo
+    /// visually extends past this bound while the layout slot stays compact.
     private let haloMultiplier: CGFloat = 1.85
     /// The caustic backdrop extends BEYOND the glass circle so that as blobs
     /// drift, the refracted color inside the glass keeps changing — if the
@@ -47,6 +51,13 @@ struct VoiceOrbView: View {
             )
 
             ZStack {
+                // Outer-outer halo: very wide, very soft. Fades from the
+                // colored inner halo into the black background WITHOUT a
+                // visible boundary. Renders much larger than the layout
+                // frame (SwiftUI .frame doesn't clip).
+                ambientFalloff(scale: frame.pulse, opacity: frame.haloOpacity)
+
+                // Inner halo: tighter colored glow around the orb edge.
                 outerHalo(scale: frame.pulse, opacity: frame.haloOpacity)
 
                 // (2) caustic backdrop — clipped slightly larger than the
@@ -79,11 +90,12 @@ struct VoiceOrbView: View {
         if #available(iOS 26.0, *) {
             // Native iOS 26 Liquid Glass. The Circle is clear — the material
             // does the entire job: refraction of the caustic backdrop, Fresnel
-            // edge, specular, the lot.
+            // edge, specular, the lot. A tiny white tint nudges the overall
+            // brightness up a notch without killing the transparency.
             Circle()
                 .fill(Color.clear)
                 .frame(width: baseSize, height: baseSize)
-                .glassEffect(in: Circle())
+                .glassEffect(.regular.tint(.white.opacity(0.08)), in: Circle())
         } else {
             // iOS 16-25 fallback — hand-built to land close to the real
             // material visually. ultraThinMaterial does the frosted blur,
@@ -143,8 +155,9 @@ struct VoiceOrbView: View {
             .blendMode(.plusLighter)
     }
 
-    // ---- Outer halo (back layer) ----
+    // ---- Halo layers (back of stack) ----
 
+    /// Inner halo: brighter colored glow hugging the orb edge.
     private func outerHalo(scale: CGFloat, opacity: Double) -> some View {
         Circle()
             .fill(
@@ -152,11 +165,36 @@ struct VoiceOrbView: View {
                     colors: [blueCaustic.opacity(opacity), pinkCaustic.opacity(opacity * 0.4), .clear],
                     center: .center,
                     startRadius: 5,
-                    endRadius: baseSize * 0.9
+                    endRadius: baseSize * 0.95
                 )
             )
-            .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
-            .blur(radius: 30)
+            .frame(width: baseSize * 2.0, height: baseSize * 2.0)
+            .blur(radius: 38)
+            .scaleEffect(scale)
+    }
+
+    /// Ambient falloff: a much wider, much softer glow underneath the inner
+    /// halo, fading the colored light into the black background. Three stops
+    /// (0.6 → 0.15 → 0) ensure NO visible boundary — the colored region
+    /// dissolves smoothly into the bg over ~150pt instead of hitting a hard
+    /// circular edge.
+    private func ambientFalloff(scale: CGFloat, opacity: Double) -> some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [
+                        blueCaustic.opacity(opacity * 0.50),
+                        violetCaustic.opacity(opacity * 0.25),
+                        pinkCaustic.opacity(opacity * 0.10),
+                        .clear,
+                    ],
+                    center: .center,
+                    startRadius: baseSize * 0.40,
+                    endRadius: baseSize * 1.7
+                )
+            )
+            .frame(width: baseSize * 3.4, height: baseSize * 3.4)
+            .blur(radius: 70)
             .scaleEffect(scale)
     }
 
