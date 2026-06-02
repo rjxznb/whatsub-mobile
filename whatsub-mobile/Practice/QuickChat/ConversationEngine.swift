@@ -62,11 +62,17 @@ final class ConversationEngine {
             // open in Chinese too.
             messages.append(ChatMessage(role: "user", content: "Please start the conversation now."))
         }
-        lastTurnRawText = ""
+        // PROBE: write a marker BEFORE the Task starts. If guard later shows
+        // this marker, the Task code below never ran (or threw before
+        // assignment). If guard shows ".../[after-chat]...", chat() returned.
+        // If guard shows "" (totally empty), the VM is reading a DIFFERENT
+        // engine instance — would indicate a wiring bug in EngineDriver.live.
+        lastTurnRawText = "[probe-A: runTurn called, msg.count=\(messages.count), userInput=\"\(userInput)\"]"
         let messagesSnapshot = messages
         let client = self.client
         return AsyncThrowingStream { continuation in
             let task = Task {
+                self.lastTurnRawText += " | [probe-B: Task started]"
                 var parser = VerdictParser()
                 var chunker = SentenceChunker()
                 var fullAssistantText = ""
@@ -74,8 +80,9 @@ final class ConversationEngine {
                     // Single non-streaming call. Capture full text BEFORE any
                     // parsing — guarantees lastTurnRawText is set even if the
                     // parser swallows everything or downstream throws.
+                    self.lastTurnRawText += " | [probe-C: about to call chat()]"
                     let full = try await client.chat(messagesSnapshot)
-                    self.lastTurnRawText = full
+                    self.lastTurnRawText = "[probe-D: chat() returned, len=\(full.count)] \(full)"
                     fullAssistantText = full
 
                     // Chunk locally (~3 chars per 20ms) so the UI gets the
@@ -118,11 +125,9 @@ final class ConversationEngine {
                     continuation.yield(.finished)
                     continuation.finish()
                 } catch {
-                    // Defensive: also stash the error in lastTurnRawText.
-                    // Builds 213-219 mysteriously had the throw swallowed
-                    // somewhere — if it happens again the guard will at least
-                    // show the LlmError detail (body + status code).
-                    self.lastTurnRawText = "[ENGINE caught error] \(error.localizedDescription)"
+                    // Defensive + probe: preserve any existing marker so we
+                    // can see WHERE in the flow the error landed.
+                    self.lastTurnRawText += " | [probe-E: catch fired] \(error.localizedDescription)"
                     continuation.finish(throwing: error)
                 }
             }
