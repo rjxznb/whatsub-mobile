@@ -59,12 +59,19 @@ struct VoiceOrbView: View {
 
                 // (2) caustic backdrop — clipped slightly larger than the
                 // orb so the glass refracts a continuously-shifting color
-                // pattern.
+                // pattern. The whole backdrop also rotates slowly (Frame
+                // .backdropRotation) so the refracted light has a "lava
+                // lamp slowly swirling" quality on top of the lissajous
+                // drift of individual blobs. Rotation speed increases
+                // gently with the smoothed audio level — louder voice =
+                // slightly more swirl, but the curve is flat enough that
+                // it never feels frenetic.
                 causticBackdrop(frame: frame)
                     .frame(
                         width: baseSize * backdropMultiplier,
                         height: baseSize * backdropMultiplier
                     )
+                    .rotationEffect(.degrees(frame.backdropRotation))
                     .clipShape(Circle())
                     .scaleEffect(frame.pulse)
 
@@ -230,6 +237,7 @@ struct VoiceOrbView: View {
         var pulsePhase: Double = 0
         var smoothedLevel: Double = 0
         var t: Double = 0
+        var backdropRotation: Double = 0   // accumulated degrees, mod 360 on the way out
         private var lastDate: Date? = nil
 
         struct Frame {
@@ -239,6 +247,9 @@ struct VoiceOrbView: View {
             let blobA: CGSize
             let blobB: CGSize
             let blobC: CGSize
+            /// Degrees applied to the caustic backdrop's parent transform.
+            /// Slowly accumulates so the swirl doesn't appear to snap.
+            let backdropRotation: Double
         }
 
         func advance(to date: Date, state: OrbState, rawLevel: Double) -> Frame {
@@ -280,13 +291,24 @@ struct VoiceOrbView: View {
             let cX = cos(t * 0.14 + 4.0) * r * 0.95
             let cY = sin(t * 0.18 + 5.0) * r * 1.10
 
+            // Backdrop rotation: base 4°/s + up to +6°/s on loud voice =
+            // ~one full revolution every 90 s at rest, ~36 s at full voice.
+            // Always positive (CCW) so the direction doesn't flip when
+            // smoothedLevel oscillates.
+            let degPerSec = 4.0 + smoothedLevel * 6.0
+            backdropRotation += dt * degPerSec
+            // Keep the value bounded so it doesn't drift toward floating-
+            // point precision loss over a long session.
+            if backdropRotation > 360 { backdropRotation -= 360 }
+
             return Frame(
                 pulse: CGFloat(pulse),
                 haloOpacity: haloOpacity,
                 smoothedLevel: smoothedLevel,
                 blobA: CGSize(width: aX, height: aY),
                 blobB: CGSize(width: bX, height: bY),
-                blobC: CGSize(width: cX, height: cY)
+                blobC: CGSize(width: cX, height: cY),
+                backdropRotation: backdropRotation
             )
         }
 
