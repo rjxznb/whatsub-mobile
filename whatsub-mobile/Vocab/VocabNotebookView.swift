@@ -78,6 +78,12 @@ struct VocabNotebookView: View {
                 QuickChatView(phrases: pick.phrases,
                               suggestedTag: pick.suggestedTag,
                               maxTurns: pendingTurnCap)
+                    // Same rationale as CorpusView's chat sheet: keep the
+                    // session alive across stray swipes; exit only via the
+                    // 关闭 button. Our own DragGesture is for keyboard
+                    // dismissal — without this, both fire and the sheet
+                    // wins.
+                    .interactiveDismissDisabled(true)
             }
         }
     }

@@ -57,31 +57,44 @@ struct VoiceOrbView: View {
                 // stops + heavy blur = no boundary).
                 softHalo(scale: frame.pulse, opacity: frame.haloOpacity)
 
-                // (2) caustic backdrop — clipped slightly larger than the
-                // orb so the glass refracts a continuously-shifting color
-                // pattern. The whole backdrop also rotates slowly (Frame
-                // .backdropRotation) so the refracted light has a "lava
-                // lamp slowly swirling" quality on top of the lissajous
-                // drift of individual blobs. Rotation speed increases
-                // gently with the smoothed audio level — louder voice =
-                // slightly more swirl, but the curve is flat enough that
-                // it never feels frenetic.
+                // (2) caustic backdrop — uses a SOFT radial mask instead of
+                // a hard Circle clip (build ≤ 233 had a visible boundary
+                // ring at the orb edge where the bright caustic abruptly
+                // stopped against the dimmer halo outside). The mask fades
+                // alpha from 1.0 at center → 0.0 just past the orb edge, so
+                // the caustic blends continuously into the halo. Whole
+                // backdrop also rotates slowly (Frame.backdropRotation) for
+                // the lava-lamp swirl. Rotation speed scales gently with
+                // smoothed audio level.
                 causticBackdrop(frame: frame)
                     .frame(
                         width: baseSize * backdropMultiplier,
                         height: baseSize * backdropMultiplier
                     )
                     .rotationEffect(.degrees(frame.backdropRotation))
-                    .clipShape(Circle())
+                    .mask(
+                        Circle()
+                            .fill(
+                                RadialGradient(
+                                    gradient: Gradient(stops: [
+                                        .init(color: .white,                location: 0.00),
+                                        .init(color: .white.opacity(0.85),  location: 0.55),
+                                        .init(color: .white.opacity(0.40),  location: 0.85),
+                                        .init(color: .clear,                location: 1.00),
+                                    ]),
+                                    center: .center,
+                                    startRadius: 0,
+                                    endRadius: baseSize * 0.65
+                                )
+                            )
+                    )
                     .scaleEffect(frame.pulse)
 
-                // (3) glass orb — the material itself.
+                // (3) glass orb — the material itself. NO colored shadow
+                // (was the second source of the visible boundary ring;
+                // halo handles all the glow now).
                 glassOrb
                     .scaleEffect(frame.pulse)
-                    .shadow(
-                        color: blueCaustic.opacity(0.35 + frame.smoothedLevel * 0.25),
-                        radius: 18 + CGFloat(frame.smoothedLevel * 8)
-                    )
             }
             .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
         }
@@ -94,12 +107,15 @@ struct VoiceOrbView: View {
         if #available(iOS 26.0, *) {
             // Native iOS 26 Liquid Glass. The Circle is clear — the material
             // does the entire job: refraction of the caustic backdrop, Fresnel
-            // edge, specular, the lot. A tiny white tint nudges the overall
-            // brightness up a notch without killing the transparency.
+            // edge, specular, the lot. Tint .04 (was .08 in build 233) so the
+            // caustic shows through more vividly — the React-Bits GlassSurface
+            // reference (2026-06-03) is high transparency + strong refraction.
+            // .interactive() adds press-warp + slight motion response.
             Circle()
                 .fill(Color.clear)
                 .frame(width: baseSize, height: baseSize)
-                .glassEffect(.regular.tint(.white.opacity(0.08)), in: Circle())
+                .glassEffect(.regular.tint(.white.opacity(0.04)).interactive(),
+                             in: Circle())
         } else {
             // iOS 16-25 fallback — hand-built to land close to the real
             // material visually. ultraThinMaterial does the frosted blur,
