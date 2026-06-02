@@ -85,57 +85,59 @@ constant float  noiseScale  = 0.65;
     float2 center = size * 0.5;
     float  minDim = min(size.x, size.y);
     float2 uv     = (position - center) / minDim * 2.0;
+    float  len    = length(uv);
 
-    // Outside the visible footprint we want pure transparent — short-circuit
-    // so the shader doesn't waste cycles + so the soft fade never goes
-    // negative which could darken neighboring pixels via premultiply.
-    float len = length(uv);
-    if (len > 1.10) return half4(0.0h);
+    // ---- Hard mask 1: inside the glass orb (uv 0..~0.52) → fully transparent.
+    //
+    // The Liquid Glass orb sits at uv 0.5 (its outer edge). Anything we
+    // draw inside that radius would (a) be refracted by the glass into a
+    // muddy double-image and (b) leak our halo color into the orb body,
+    // killing the clean glass + caustic interior the user just asked for.
+    // Output zero alpha here. The glass-orb layer + the caustic backdrop
+    // both handle pixels inside this radius.
+    if (len < 0.52) return half4(0.0h);
 
-    float ang    = atan2(uv.y, uv.x);
-    float invLen = len > 0.0 ? 1.0 / len : 0.0;
+    // ---- Hard mask 2: far outside (uv > 1.05) → transparent.
+    if (len > 1.05) return half4(0.0h);
 
-    // Noisy edge — animated radial perturbation.
-    float n0 = snoise3(float3(uv * noiseScale, time * 0.5)) * 0.5 + 0.5;
-    float r0 = mix(mix(innerRadius, 1.0, 0.4),
-                   mix(innerRadius, 1.0, 0.6),
-                   n0);
-    float d0 = distance(uv, (r0 * invLen) * uv);
-    float v0 = light1(1.0, 10.0, d0);
-    v0 *= smoothstep(r0 * 1.05, r0, len);
+    // ---- Soft donut envelope ----
+    //
+    // Build a smooth ring of intensity ONLY in the band 0.52..1.0, peaking
+    // around 0.75. No bright concentric ring + no orbiting hotspot (per
+    // the user's "只保留外面的那个环" feedback — those were the visible
+    // "inner ring" we just removed). Just a soft fade with a noisy outer
+    // edge so it doesn't look perfectly geometric.
+    float n0 = snoise3(float3(uv * noiseScale, time * 0.4)) * 0.5 + 0.5;
+    float innerEdge = smoothstep(0.52, 0.65, len);            // rises just outside the glass orb
+    float outerEdge = 1.0 - smoothstep(0.85 + n0 * 0.10, 1.05, len);  // noisy outer fade
+    float donut     = innerEdge * outerEdge;
 
-    float innerFade = smoothstep(r0 * 0.8, r0 * 0.95, len);
-    v0 *= innerFade;   // bgLuminance branch collapsed to 0
-
-    // Color cycle around the ring.
-    float cl = cos(ang + time * 2.0) * 0.5 + 0.5;
-
-    // Orbiting bright hotspot — rotates CCW at ~one revolution per 2π s
-    // (≈ 6.3 s). This is the "rotating glow" the user asked for.
-    float  a   = time * -1.0;
-    float2 pos = float2(cos(a), sin(a)) * r0;
-    float  d   = distance(uv, pos);
-    float  v1  = light2(1.5, 5.0, d);
-    v1 *= light1(1.0, 50.0, d0);
-
-    float v2 = smoothstep(1.0, mix(innerRadius, 1.0, n0 * 0.5), len);
-    float v3 = smoothstep(innerRadius, mix(innerRadius, 1.0, 0.5), len);
-
+    // ---- Angular color cycle (slow) ----
+    //
+    // Drift between violet and cyan-blue around the ring, completing one
+    // full angular cycle ~every 12 s. Slow enough to feel like ambient
+    // shimmer rather than a strobe.
+    float ang = atan2(uv.y, uv.x);
+    float cl  = cos(ang + time * 0.5) * 0.5 + 0.5;
     float3 colBase = mix(baseColor1, baseColor2, cl);
 
-    // bgLuminance == 0 → dark variant only.
-    // `boost` (0..1, smoothed audio level from the view model) brightens
-    // the ring + hotspot when the user / AI is speaking. Tuned conservative
-    // (×0.7) so loud voice doesn't blow out the visual.
-    float gain = 1.0 + boost * 0.7;
-    float3 darkCol = mix(baseColor3, colBase * gain, v0);
-    darkCol = (darkCol + v1 * gain) * v2 * v3;
-    darkCol = clamp(darkCol, 0.0, 1.0);
+    // ---- Vertical asymmetry: "light from below disperses through" ----
+    //
+    // SwiftUI's position coord system has y growing DOWN, so uv.y > 0 is
+    // the lower half. We make the lower half brighter so the orb reads as
+    // sitting on a soft pool of light that radiates UP through it. The
+    // factor goes 0.55 (top) → 1.00 (bottom).
+    float verticalLift = mix(0.55, 1.00, clamp(uv.y * 0.5 + 0.5, 0.0, 1.0));
+    float intensity    = donut * verticalLift;
 
-    // extractAlpha: alpha = max channel; unpremultiply rgb.
-    float aOut = max(max(darkCol.r, darkCol.g), darkCol.b);
-    float3 rgb = darkCol / (aOut + 1e-5);
+    // `boost` (0..1, smoothed audio level) lifts overall brightness when
+    // someone is talking. Conservative ×0.6 so loud voice doesn't blow
+    // the halo out.
+    float gain = 1.0 + boost * 0.6;
+    float3 outColor = colBase * intensity * gain;
+    outColor = clamp(outColor, 0.0, 1.0);
 
-    // SwiftUI compositor expects pre-multiplied alpha from .colorEffect.
-    return half4(half3(rgb) * half(aOut), half(aOut));
+    // Pre-multiplied alpha output (matches SwiftUI compositor expectations).
+    float aOut = max(max(outColor.r, outColor.g), outColor.b);
+    return half4(half3(outColor), half(aOut));
 }

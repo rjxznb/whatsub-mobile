@@ -72,6 +72,14 @@ struct VoiceOrbView: View {
                     softHalo(scale: frame.pulse, opacity: frame.haloOpacity)
                 }
 
+                // Under-light: a soft bright pool positioned at the bottom
+                // of the orb (partially behind it, partially below). The
+                // Liquid Glass orb refracts the part that overlaps, so the
+                // light visibly "disperses through" the glass — exactly
+                // matches the user's "下面再给出相应的光，透过它发散"
+                // request (2026-06-03). Intensity scales with smoothed voice.
+                underLight(level: frame.smoothedLevel)
+
                 // (2) caustic backdrop — uses a SOFT radial mask instead of
                 // a hard Circle clip (build ≤ 233 had a visible boundary
                 // ring at the orb edge where the bright caustic abruptly
@@ -217,6 +225,32 @@ struct VoiceOrbView: View {
                 )
             )
             .frame(width: shaderSize, height: shaderSize)
+    }
+
+    /// Soft bright pool just below the orb. Centered ~0.4 baseSize below
+    /// the orb center so its top edge overlaps with the orb's lower
+    /// hemisphere — the Liquid Glass layer above then refracts the
+    /// overlapping portion, making the light visibly "diffuse through" the
+    /// orb. Brightness lifts gently with smoothed audio level.
+    private func underLight(level: Double) -> some View {
+        let intensity = 0.55 + level * 0.35
+        return Ellipse()
+            .fill(
+                RadialGradient(
+                    colors: [
+                        Color(red: 0.45, green: 0.65, blue: 1.00).opacity(intensity),
+                        Color(red: 0.55, green: 0.40, blue: 0.95).opacity(intensity * 0.55),
+                        .clear,
+                    ],
+                    center: .center,
+                    startRadius: 4,
+                    endRadius: baseSize * 0.55
+                )
+            )
+            .frame(width: baseSize * 1.10, height: baseSize * 0.75)
+            .offset(y: baseSize * 0.40)
+            .blur(radius: 26)
+            .blendMode(.plusLighter)
     }
 
     // ---- Halo: legacy gradient fallback (iOS 16) ----
