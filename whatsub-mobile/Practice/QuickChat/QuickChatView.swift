@@ -71,21 +71,8 @@ struct QuickChatView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
-                // Keyboard dismissal policy (user feedback 2026-06-02):
-                // - Taps do NOT dismiss (would steal focus on stray taps / orb).
-                // - A downward swipe on the background DOES dismiss, mimicking
-                //   the standard iMessage "drag down to hide keyboard" gesture.
                 Color.whatsubBg
                     .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 24)
-                            .onChanged { v in
-                                if v.translation.height > 24 && typingFieldFocused {
-                                    typingFieldFocused = false
-                                }
-                            }
-                    )
                 VStack(spacing: 0) {
                     headerChips.padding(.top, 6)
                     Spacer(minLength: 0)
@@ -126,6 +113,21 @@ struct QuickChatView: View {
                     .padding(.bottom, keyboardOffset)
                     .animation(.easeOut(duration: 0.22), value: keyboardOffset)
             }
+            // Keyboard dismissal policy (user feedback 2026-06-02):
+            // - Taps don't dismiss (avoids stealing focus on stray taps).
+            // - A downward swipe ≥ 30pt anywhere on the screen DOES dismiss
+            //   (mirrors iMessage). simultaneousGesture so the gesture fires
+            //   even when the touch lands on the VStack content covering the
+            //   background Color (otherwise the bg's gesture never sees the
+            //   touch because VStack children claim the hit region).
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 30)
+                    .onEnded { v in
+                        if v.translation.height > 30 && typingFieldFocused {
+                            typingFieldFocused = false
+                        }
+                    }
+            )
             .navigationTitle("对话陪练")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

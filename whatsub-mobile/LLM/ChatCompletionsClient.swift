@@ -60,9 +60,13 @@ struct ChatCompletionsClient {
         // Some providers (DeepSeek v4-pro) put the answer in `reasoning_content`
         // alongside an empty `content`. Accept either.
         let content = (msg["content"] as? String) ?? (msg["reasoning_content"] as? String) ?? ""
-        if content.isEmpty {
+        // Whitespace-only counts as empty — DeepSeek occasionally returns
+        // "\n" / " " and our prior `.isEmpty` check missed it, letting the
+        // whitespace flow into the parser and silently disappear (guard
+        // showed "服务端返回空内容" with no diagnostic body).
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
-            throw LlmError.api(http.statusCode, "content 字段为空 · body=\(body)")
+            throw LlmError.api(http.statusCode, "content 字段为空或仅空白 · body=\(body)")
         }
         return content
     }
