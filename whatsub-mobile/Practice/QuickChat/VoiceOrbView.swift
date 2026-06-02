@@ -65,71 +65,27 @@ struct VoiceOrbView: View {
                 .truncatingRemainder(dividingBy: 1000))
 
             ZStack {
-                // Animated glow halo. iOS 17+: Metal shader (port of React-Bits
-                // Orb fragment shader, minus the hover-deformation per user's
-                // 2026-06-03 request) — gives a rotating bright hotspot + noisy
-                // ring that intensifies with voice level. iOS 16: static
-                // multi-stop soft halo (fallback path).
+                // The Metal shader IS the orb. Builds 235-240 stacked a
+                // Liquid Glass body + caustic backdrop + under-light on top
+                // of the shader — user feedback (2026-06-03, screenshot
+                // arrow pointing at the inner dark sphere) made it clear
+                // that the extra layers were just clutter on top of an
+                // already-complete React-Bits visual. Stripped to the
+                // shader + the press-me label.
                 if #available(iOS 17.0, *) {
-                    shaderGlow(time: t, level: frame.smoothedLevel)
+                    shaderGlow(time: t, level: frame.smoothedLevel, pressed: isPressed)
                         .scaleEffect(frame.pulse)
                 } else {
+                    // iOS 16 path — no Metal stitchables on this version.
+                    // Fall back to the previous multi-stop soft halo so
+                    // there's still SOMETHING to look at + the press gesture
+                    // still has a tap target.
                     softHalo(scale: frame.pulse, opacity: frame.haloOpacity)
                 }
 
-                // Under-light: a soft bright pool positioned at the bottom
-                // of the orb (partially behind it, partially below). The
-                // Liquid Glass orb refracts the part that overlaps, so the
-                // light visibly "disperses through" the glass — exactly
-                // matches the user's "下面再给出相应的光，透过它发散"
-                // request (2026-06-03). Intensity scales with smoothed voice.
-                underLight(level: frame.smoothedLevel)
-
-                // (2) caustic backdrop — uses a SOFT radial mask instead of
-                // a hard Circle clip (build ≤ 233 had a visible boundary
-                // ring at the orb edge where the bright caustic abruptly
-                // stopped against the dimmer halo outside). The mask fades
-                // alpha from 1.0 at center → 0.0 just past the orb edge, so
-                // the caustic blends continuously into the halo. Whole
-                // backdrop also rotates slowly (Frame.backdropRotation) for
-                // the lava-lamp swirl. Rotation speed scales gently with
-                // smoothed audio level.
-                causticBackdrop(frame: frame)
-                    .frame(
-                        width: baseSize * backdropMultiplier,
-                        height: baseSize * backdropMultiplier
-                    )
-                    .rotationEffect(.degrees(frame.backdropRotation))
-                    .mask(
-                        Circle()
-                            .fill(
-                                RadialGradient(
-                                    gradient: Gradient(stops: [
-                                        .init(color: .white,                location: 0.00),
-                                        .init(color: .white.opacity(0.85),  location: 0.55),
-                                        .init(color: .white.opacity(0.40),  location: 0.85),
-                                        .init(color: .clear,                location: 1.00),
-                                    ]),
-                                    center: .center,
-                                    startRadius: 0,
-                                    endRadius: baseSize * 0.65
-                                )
-                            )
-                    )
-                    .scaleEffect(frame.pulse)
-
-                // (3) glass orb — the material itself. NO colored shadow
-                // (was the second source of the visible boundary ring;
-                // halo handles all the glow now).
-                glassOrb
-                    .scaleEffect(frame.pulse)
-
-                // (4) "push me" label — only visible when the user is NOT
-                // currently holding the orb. Glass-style text (frosted
-                // material foreground) with a brightness band that sweeps
-                // left → right on a 2.4 s loop, drawing the eye + signalling
-                // "tap-and-hold me". Hides during press so the user sees the
-                // pure orb visual while talking.
+                // "press me" prompt — hides during press so the orb visual
+                // is uncluttered while talking. Sits in the shader's dark
+                // central region.
                 if !isPressed {
                     pushMeLabel(time: timeline.date)
                         .frame(width: baseSize, height: baseSize)
@@ -233,14 +189,15 @@ struct VoiceOrbView: View {
     /// the color with its own pre-multiplied output.
     @available(iOS 17.0, *)
     @ViewBuilder
-    private func shaderGlow(time: Float, level: Double) -> some View {
+    private func shaderGlow(time: Float, level: Double, pressed: Bool) -> some View {
         Rectangle()
             .fill(Color.white)
             .colorEffect(
                 ShaderLibrary.orbGlow(
                     .float2(CGSize(width: shaderSize, height: shaderSize)),
                     .float(time),
-                    .float(Float(level))
+                    .float(Float(level)),
+                    .float(pressed ? 1.0 : 0.0)
                 )
             )
             .frame(width: shaderSize, height: shaderSize)

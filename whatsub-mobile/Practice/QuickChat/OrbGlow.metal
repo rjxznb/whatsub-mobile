@@ -1,32 +1,30 @@
 // OrbGlow.metal
 //
-// Port of the React-Bits Orb fragment shader (https://reactbits.dev/orb)
-// to a SwiftUI `.colorEffect` stitchable function. Used by VoiceOrbView to
-// paint an animated glow/halo around the Liquid Glass orb.
+// 1:1 port of the React-Bits Orb fragment shader
+// (https://reactbits.dev/orb) to a SwiftUI `.colorEffect` stitchable
+// function. THIS is the orb visual — the shader's bright noisy ring at
+// r0≈0.6, dark inner area, and orbiting hotspot together make up the
+// entire orb. No Liquid Glass or caustic layer on top.
 //
-// Differences from the React-Bits source (deliberate):
-//   • No hover-distortion path (`uv.x += hover * hoverIntensity ...`) — the
-//     user explicitly asked for "周围发光动画 but no hover deformation"
-//     (2026-06-03). `hover` was effectively a touch-tracking uniform that
-//     we have no equivalent input for in a stitchable shader anyway.
-//   • No `rotateOnHover` accumulator — the orbiting hotspot uses `time`
-//     directly so the rotation is continuous (slow, ambient).
-//   • Background luminance is hard-coded to 0 (the QuickChat bg is pure
-//     black). Simplifies the dark/light branch in `draw()` to just the
-//     dark variant.
-//   • Pre-multiplied alpha output matches what SwiftUI's compositor
-//     expects from .colorEffect.
-//
-// Coordinate convention:
-//   `position` is in the view's POINT space (SwiftUI passes points, not
-//   pixels). We pass the view's bounds size as the `size` argument so we
-//   can compute the centered UV without depending on pixel scale.
+// Deltas from the upstream shader:
+//   • Hover distortion (`uv.x += hover * hoverIntensity * ...`) deleted
+//     per the user's "no hover" requirement. There's no equivalent
+//     touch-tracking input in a SwiftUI .colorEffect anyway.
+//   • Background luminance hard-coded to 0 (QuickChat bg is solid black)
+//     — collapses the light/dark branch in `draw()` to just the dark
+//     variant.
+//   • Two extra uniforms: `boost` (smoothed audio level — lifts the ring
+//     and hotspot when there's voice) and `pressed` (1.0 while the user
+//     is holding the orb — quadruples the hotspot orbit speed so the
+//     press lands as immediate visual feedback).
+//   • Pre-multiplied alpha output — what the SwiftUI compositor expects
+//     from .colorEffect.
 
 #include <metal_stdlib>
 #include <SwiftUI/SwiftUI_Metal.h>
 using namespace metal;
 
-// ---- noise helpers (ported 1:1 from the GLSL) ----
+// ---- noise helpers ----
 
 static inline float3 hash33(float3 p3) {
     p3 = fract(p3 * float3(0.1031, 0.11369, 0.13787));
@@ -68,7 +66,7 @@ static inline float light2(float intensity, float attenuation, float dist) {
     return intensity / (1.0 + dist * dist * attenuation);
 }
 
-// ---- palette (matches whatSub brand: blue + violet + deep navy) ----
+// ---- palette (whatSub brand: violet / cyan-blue / deep navy) ----
 
 constant float3 baseColor1 = float3(0.611765, 0.262745, 0.996078);  // violet
 constant float3 baseColor2 = float3(0.298039, 0.760784, 0.913725);  // cyan-blue
@@ -80,64 +78,64 @@ constant float  noiseScale  = 0.65;
                              half4   /*existingColor*/,
                              float2  size,
                              float   time,
-                             float   boost)
+                             float   boost,
+                             float   pressed)
 {
     float2 center = size * 0.5;
     float  minDim = min(size.x, size.y);
     float2 uv     = (position - center) / minDim * 2.0;
-    float  len    = length(uv);
 
-    // ---- Hard mask 1: inside the glass orb (uv 0..~0.52) → fully transparent.
+    float ang    = atan2(uv.y, uv.x);
+    float len    = length(uv);
+    float invLen = len > 0.0 ? 1.0 / len : 0.0;
+
+    // Outside the visible footprint → fully transparent.
+    if (len > 1.10) return half4(0.0h);
+
+    // ---- noisy bright ring (the orb's outer edge) ----
+    float n0 = snoise3(float3(uv * noiseScale, time * 0.5)) * 0.5 + 0.5;
+    float r0 = mix(mix(innerRadius, 1.0, 0.4),
+                   mix(innerRadius, 1.0, 0.6),
+                   n0);
+    float d0 = distance(uv, (r0 * invLen) * uv);
+    float v0 = light1(1.0, 10.0, d0);
+    v0 *= smoothstep(r0 * 1.05, r0, len);
+
+    // bgLuminance == 0 → use innerFade directly (no light-bg branch).
+    float innerFade = smoothstep(r0 * 0.8, r0 * 0.95, len);
+    v0 *= innerFade;
+
+    // ---- angular color cycle ----
+    float cl = cos(ang + time * 2.0) * 0.5 + 0.5;
+
+    // ---- orbiting hotspot ----
     //
-    // The Liquid Glass orb sits at uv 0.5 (its outer edge). Anything we
-    // draw inside that radius would (a) be refracted by the glass into a
-    // muddy double-image and (b) leak our halo color into the orb body,
-    // killing the clean glass + caustic interior the user just asked for.
-    // Output zero alpha here. The glass-orb layer + the caustic backdrop
-    // both handle pixels inside this radius.
-    if (len < 0.52) return half4(0.0h);
+    // Base rate is -1.0 rad/s (one full orbit every 2π ≈ 6.3 s, CCW). While
+    // the user is pressing the orb the rate scales 4× — instant visual
+    // confirmation that the press registered.
+    float rotRate = -1.0 * (1.0 + pressed * 3.0);
+    float a       = time * rotRate;
+    float2 pos    = float2(cos(a), sin(a)) * r0;
+    float  d      = distance(uv, pos);
+    float  v1     = light2(1.5, 5.0, d);
+    v1 *= light1(1.0, 50.0, d0);
 
-    // ---- Hard mask 2: far outside (uv > 1.05) → transparent.
-    if (len > 1.05) return half4(0.0h);
+    // ---- alpha-shaping smoothsteps ----
+    float v2 = smoothstep(1.0, mix(innerRadius, 1.0, n0 * 0.5), len);
+    float v3 = smoothstep(innerRadius, mix(innerRadius, 1.0, 0.5), len);
 
-    // ---- Soft donut envelope ----
-    //
-    // Build a smooth ring of intensity ONLY in the band 0.52..1.0, peaking
-    // around 0.75. No bright concentric ring + no orbiting hotspot (per
-    // the user's "只保留外面的那个环" feedback — those were the visible
-    // "inner ring" we just removed). Just a soft fade with a noisy outer
-    // edge so it doesn't look perfectly geometric.
-    float n0 = snoise3(float3(uv * noiseScale, time * 0.4)) * 0.5 + 0.5;
-    float innerEdge = smoothstep(0.52, 0.65, len);            // rises just outside the glass orb
-    float outerEdge = 1.0 - smoothstep(0.85 + n0 * 0.10, 1.05, len);  // noisy outer fade
-    float donut     = innerEdge * outerEdge;
-
-    // ---- Angular color cycle (slow) ----
-    //
-    // Drift between violet and cyan-blue around the ring, completing one
-    // full angular cycle ~every 12 s. Slow enough to feel like ambient
-    // shimmer rather than a strobe.
-    float ang = atan2(uv.y, uv.x);
-    float cl  = cos(ang + time * 0.5) * 0.5 + 0.5;
     float3 colBase = mix(baseColor1, baseColor2, cl);
 
-    // ---- Vertical asymmetry: "light from below disperses through" ----
-    //
-    // SwiftUI's position coord system has y growing DOWN, so uv.y > 0 is
-    // the lower half. We make the lower half brighter so the orb reads as
-    // sitting on a soft pool of light that radiates UP through it. The
-    // factor goes 0.55 (top) → 1.00 (bottom).
-    float verticalLift = mix(0.55, 1.00, clamp(uv.y * 0.5 + 0.5, 0.0, 1.0));
-    float intensity    = donut * verticalLift;
+    // bgLuminance == 0 → dark-variant final composite only.
+    // boost (0..1, smoothed voice level) lifts the ring + hotspot when
+    // there's speech. Conservative ×0.6 so loud voice doesn't blow out.
+    float gain    = 1.0 + boost * 0.6;
+    float3 darkCol = mix(baseColor3, colBase * gain, v0);
+    darkCol = (darkCol + v1 * gain) * v2 * v3;
+    darkCol = clamp(darkCol, 0.0, 1.0);
 
-    // `boost` (0..1, smoothed audio level) lifts overall brightness when
-    // someone is talking. Conservative ×0.6 so loud voice doesn't blow
-    // the halo out.
-    float gain = 1.0 + boost * 0.6;
-    float3 outColor = colBase * intensity * gain;
-    outColor = clamp(outColor, 0.0, 1.0);
-
-    // Pre-multiplied alpha output (matches SwiftUI compositor expectations).
-    float aOut = max(max(outColor.r, outColor.g), outColor.b);
-    return half4(half3(outColor), half(aOut));
+    // extractAlpha + premultiply.
+    float aOut = max(max(darkCol.r, darkCol.g), darkCol.b);
+    float3 rgb = darkCol / (aOut + 1e-5);
+    return half4(half3(rgb) * half(aOut), half(aOut));
 }
