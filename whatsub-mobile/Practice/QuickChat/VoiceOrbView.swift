@@ -1,31 +1,37 @@
 import SwiftUI
 
-/// Siri-style iridescent glow orb. Bright emissive body with cyan/pink/white
-/// gradients and a slowly rotating white "swoosh" wisp inside. Audio-reactive:
-/// the whole orb scales up dramatically with mic level (the size IS the
-/// listening signal — no color flip).
+/// Liquid-glass orb. Replaces the v1 Siri emissive orb with a translucent
+/// glass body that has slow-drifting caustic color blobs inside, a bright
+/// Fresnel-style rim, and a small specular highlight up top.
+///
+/// Audio reactivity is exponentially smoothed (~150 ms time constant) so the
+/// orb breathes/grows fluidly with voice — never a discrete jump. Scale
+/// response is also less aggressive than v1 (was +85% on full voice, now ~+30%)
+/// because the visual cue here is the caustic motion + rim brighten, not
+/// dramatic size pumping.
 ///
 /// Layers, back to front:
-/// 1. Soft outer glow — cyan halo, blurred, scales with size + pulse
-/// 2. Pink/lavender tint wisp — slow rotating elongated ellipse, very blurred,
-///    gives the orb its iridescent secondary hue at the edges
-/// 3. Cyan/white body — radial gradient from near-white center → bright cyan
-///    → soft cyan edge. This is the visible "orb"
-/// 4. White swoosh wisp — slowly rotating bright white ellipse (the Siri
-///    signature brushstroke); clipped to the orb circle, heavily blurred
-/// 5. Top highlight — small bright spot upper-right for the glass sheen
+/// 1. Soft outer halo — large blurred radial glow that grows with smoothed
+///    level. Tinted cyan/pink.
+/// 2. Caustic backdrop — three blurred colored discs (blue/pink/violet) drifting
+///    inside slow lissajous orbits, blended additively for the iridescent
+///    "liquid swirl" look. This is what shows THROUGH the glass.
+/// 3. Glass tint — thin white fog so the caustic doesn't read as raw color.
+/// 4. Inner rim shadow — soft dark vignette near the inside edge giving the
+///    "thick glass shell" depth cue.
+/// 5. Rim highlight — angular gradient stroke around the edge, bright at the
+///    upper-left, dim at the lower-right (light source convention).
+/// 6. Specular highlight — small bright spot upper-left for the gloss kiss.
 struct VoiceOrbView: View {
     enum OrbState: Equatable {
         case idle, thinking, speaking, recording, transcribing
     }
 
     let state: OrbState
-    var audioLevel: Float = 0    // 0..1, smoothed in VADCoordinator
+    var audioLevel: Float = 0    // 0..1, smoothed further inside PhaseTracker
 
-    /// Resting orb diameter. Grows up to (baseSize × ~1.85) on loud voice.
     private let baseSize: CGFloat = 180
-    private let haloMultiplier: CGFloat = 1.8
-    private let scaleBoost: Double = 0.85       // up to +85% at full voice
+    private let haloMultiplier: CGFloat = 1.85
 
     @State private var phase = PhaseTracker()
 
@@ -34,22 +40,64 @@ struct VoiceOrbView: View {
             let frame = phase.advance(
                 to: timeline.date,
                 state: state,
-                level: Double(audioLevel)
+                rawLevel: Double(audioLevel)
             )
 
             ZStack {
-                outerGlow(scale: frame.pulse, opacity: frame.haloOpacity)
+                outerHalo(scale: frame.pulse, opacity: frame.haloOpacity)
+
                 ZStack {
-                    pinkWisp(rotation: frame.wispRotationA)
-                    orbBody
-                    whiteSwoosh(rotation: frame.wispRotationB)
-                    topHighlight
+                    // (2) caustic backdrop
+                    causticBlob(color: blueCaustic, offset: frame.blobA, scale: 1.10)
+                    causticBlob(color: pinkCaustic, offset: frame.blobB, scale: 1.20)
+                    causticBlob(color: violetCaustic, offset: frame.blobC, scale: 1.00)
+
+                    // (3) glass tint — slight white wash so the caustic reads
+                    // as "fluid behind glass", not as raw color.
+                    Circle().fill(.white.opacity(0.06))
+
+                    // (4) inner rim shadow (thick-glass depth cue)
+                    Circle()
+                        .strokeBorder(
+                            RadialGradient(
+                                colors: [.clear, .black.opacity(0.0), .black.opacity(0.25)],
+                                center: .center,
+                                startRadius: baseSize * 0.30,
+                                endRadius: baseSize * 0.50
+                            ),
+                            lineWidth: 18
+                        )
+                        .blur(radius: 6)
+
+                    // (5) rim highlight (Fresnel-style)
+                    Circle()
+                        .stroke(
+                            AngularGradient(
+                                colors: [
+                                    .white.opacity(0.95),
+                                    .white.opacity(0.10),
+                                    .white.opacity(0.35),
+                                    .white.opacity(0.05),
+                                    .white.opacity(0.95),
+                                ],
+                                center: .center,
+                                angle: .degrees(-45)
+                            ),
+                            lineWidth: 2.0
+                        )
+                        .blur(radius: 0.6)
+
+                    // (6) specular highlight upper-left
+                    specularHighlight
                 }
                 .frame(width: baseSize, height: baseSize)
                 .clipShape(Circle())
                 .scaleEffect(frame.pulse)
-                .shadow(color: cyanGlow.opacity(0.5 + Double(audioLevel) * 0.3),
-                        radius: 18 + CGFloat(audioLevel * 12))
+                // Soft cyan ambient shadow underneath, brightens with voice.
+                .shadow(
+                    color: blueCaustic.opacity(0.35 + frame.smoothedLevel * 0.25),
+                    radius: 18 + CGFloat(frame.smoothedLevel * 8)
+                )
             }
             .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
         }
@@ -57,11 +105,11 @@ struct VoiceOrbView: View {
 
     // ---- Layers ----
 
-    private func outerGlow(scale: CGFloat, opacity: Double) -> some View {
+    private func outerHalo(scale: CGFloat, opacity: Double) -> some View {
         Circle()
             .fill(
                 RadialGradient(
-                    colors: [cyanGlow.opacity(opacity), pinkGlow.opacity(opacity * 0.5), .clear],
+                    colors: [blueCaustic.opacity(opacity), pinkCaustic.opacity(opacity * 0.4), .clear],
                     center: .center,
                     startRadius: 5,
                     endRadius: baseSize * 0.9
@@ -72,134 +120,133 @@ struct VoiceOrbView: View {
             .scaleEffect(scale)
     }
 
-    private func pinkWisp(rotation: Double) -> some View {
-        // Elongated pink-lavender shape; less blur (20→14) so the iridescent
-        // tint is clearly readable as a hue gradient sweeping across the orb.
-        Ellipse()
-            .fill(
-                LinearGradient(
-                    colors: [pinkGlow.opacity(0.0), pinkGlow.opacity(0.95), pinkGlow.opacity(0.0)],
-                    startPoint: .leading, endPoint: .trailing
-                )
-            )
-            .frame(width: baseSize * 1.18, height: baseSize * 0.55)
-            .rotationEffect(.degrees(rotation))
-            .blur(radius: 14)
-    }
-
-    /// The bright emissive core. White-cyan center fading to soft cyan edge.
-    private var orbBody: some View {
+    /// One drifting caustic disc — radial gradient with heavy blur.
+    private func causticBlob(color: Color, offset: CGSize, scale: CGFloat) -> some View {
         Circle()
             .fill(
                 RadialGradient(
-                    colors: [
-                        Color(red: 0.96, green: 0.99, blue: 1.0),                  // near white center
-                        Color(red: 0.55, green: 0.85, blue: 1.0),                  // bright sky cyan
-                        Color(red: 0.30, green: 0.65, blue: 0.95).opacity(0.85)    // softer cyan edge
-                    ],
-                    center: UnitPoint(x: 0.45, y: 0.40),
+                    colors: [color.opacity(0.95), color.opacity(0.45), .clear],
+                    center: .center,
                     startRadius: 0,
-                    endRadius: baseSize * 0.55
+                    endRadius: baseSize * 0.48
                 )
             )
-            .frame(width: baseSize, height: baseSize)
-    }
-
-    private func whiteSwoosh(rotation: Double) -> some View {
-        // Bright white brushstroke flowing through the orb. Less blur than v1
-        // (14 → 8) so the stroke is clearly visible as a moving shape, not just
-        // a diffuse glow. Slightly elongated so it looks like a curved sweep.
-        Ellipse()
-            .fill(
-                LinearGradient(
-                    colors: [.white.opacity(0.0), .white.opacity(1.0), .white.opacity(0.0)],
-                    startPoint: .leading, endPoint: .trailing
-                )
-            )
-            .frame(width: baseSize * 1.1, height: baseSize * 0.42)
-            .rotationEffect(.degrees(rotation))
-            .blur(radius: 8)
+            .frame(width: baseSize * scale, height: baseSize * scale)
+            .offset(offset)
+            .blur(radius: 20)
             .blendMode(.plusLighter)
     }
 
-    private var topHighlight: some View {
-        // Small concentrated bright spot upper-right (like Siri's gloss).
+    private var specularHighlight: some View {
         Circle()
             .fill(
                 RadialGradient(
-                    colors: [.white.opacity(0.75), .white.opacity(0.15), .clear],
-                    center: UnitPoint(x: 0.32, y: 0.27),
-                    startRadius: 1,
-                    endRadius: baseSize * 0.35
+                    colors: [.white.opacity(0.80), .white.opacity(0.10), .clear],
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: baseSize * 0.18
                 )
             )
-            .frame(width: baseSize, height: baseSize)
+            .frame(width: baseSize * 0.45, height: baseSize * 0.30)
+            .rotationEffect(.degrees(-35))
+            .offset(x: -baseSize * 0.18, y: -baseSize * 0.20)
+            .blur(radius: 4)
             .blendMode(.plusLighter)
     }
 
     // ---- palette ----
+    // Saturated jewel tones — caustic blobs are blended additively so the
+    // visible result is softer pastel where they overlap.
 
-    private var cyanGlow: Color {
+    private var blueCaustic: Color {
         switch state {
-        case .transcribing: return Color(red: 1.0, green: 0.85, blue: 0.45)   // warm shift only here
-        default:            return Color(red: 0.40, green: 0.75, blue: 1.0)   // sky cyan
+        case .transcribing: return Color(red: 1.00, green: 0.85, blue: 0.45)
+        default:            return Color(red: 0.30, green: 0.65, blue: 1.00)
+        }
+    }
+    private var pinkCaustic: Color {
+        switch state {
+        case .transcribing: return Color(red: 1.00, green: 0.55, blue: 0.20)
+        default:            return Color(red: 0.95, green: 0.45, blue: 0.85)
+        }
+    }
+    private var violetCaustic: Color {
+        switch state {
+        case .transcribing: return Color(red: 0.95, green: 0.65, blue: 0.30)
+        default:            return Color(red: 0.55, green: 0.40, blue: 0.95)
         }
     }
 
-    private var pinkGlow: Color {
-        switch state {
-        case .transcribing: return Color(red: 1.0, green: 0.65, blue: 0.25)
-        default:            return Color(red: 0.98, green: 0.62, blue: 0.85)  // soft pink-lavender
-        }
-    }
-
-    // ---- phase accumulator (preserves smoothness when speed changes) ----
+    // ---- phase tracker (level smoothing + lissajous drift) ----
 
     final class PhaseTracker {
         var pulsePhase: Double = 0
-        var wispA: Double = 0
-        var wispB: Double = .pi / 2     // start 90° apart
+        var smoothedLevel: Double = 0
+        var t: Double = 0
         private var lastDate: Date? = nil
 
         struct Frame {
             let pulse: CGFloat
             let haloOpacity: Double
-            let wispRotationA: Double
-            let wispRotationB: Double
+            let smoothedLevel: Double
+            let blobA: CGSize
+            let blobB: CGSize
+            let blobC: CGSize
         }
 
-        func advance(to date: Date, state: OrbState, level: Double) -> Frame {
+        func advance(to date: Date, state: OrbState, rawLevel: Double) -> Frame {
             let dt: Double = {
                 guard let last = lastDate else { return 0 }
                 return min(0.1, date.timeIntervalSince(last))
             }()
             lastDate = date
+            t += dt
 
+            // Exponential smoothing of the level. `rate` of 6 ≈ 167 ms time
+            // constant — slow enough that loud-then-quiet bursts blend, fast
+            // enough that the orb still feels responsive. Critically, we
+            // smooth EVERY frame (not just on big jumps) so there's never a
+            // discrete pop — the user's #1 complaint about the v1 orb.
+            let rate = 6.0
+            let factor = min(1.0, dt * rate)
+            smoothedLevel += (rawLevel - smoothedLevel) * factor
+            smoothedLevel = max(0, min(1, smoothedLevel))
+
+            // Breathing — slow ambient sin for "alive" feel.
             let breath = breathingParams(for: state)
-            let wispBase = wispBaseSpeed(for: state)
-            // Audio level accelerates wisps strongly (up to ~3.5× faster on loud voice)
-            // so the white swoosh visibly streaks across the orb when user speaks.
-            let wispSpeed = wispBase * (1.0 + level * 2.5)
-
             pulsePhase += dt * (.pi * 2 / breath.period)
-            wispA += dt * wispSpeed * 60         // 60 = scale to deg/sec
-            wispB += dt * wispSpeed * 60 * 1.4   // counter-rotating-ish (different rate)
-
-            let breathFrac = (sin(pulsePhase) + 1) / 2      // 0..1
+            let breathFrac = (sin(pulsePhase) + 1) / 2
             let breathPulse = 1.0 + breathFrac * (breath.peak - 1.0)
-            // Audio level adds dramatic growth: up to +85% scale on loud voice.
-            // Combined with breathing's ~+10% peak, max effective scale ≈ 1.85-2.0×.
-            let levelGrowth = level * 0.85
+
+            // Audio-reactive scale: gentler than v1 (was +85% peak; now +30%).
+            // Most of the voice cue is delivered by caustic-blob drift +
+            // halo brightening, not dramatic size pumping.
+            let levelGrowth = smoothedLevel * 0.30
             let pulse = breathPulse + levelGrowth
 
             let haloBase: Double = (state == .recording || state == .speaking) ? 0.55 : 0.40
-            let haloOpacity = haloBase + level * 0.30
+            let haloOpacity = haloBase + smoothedLevel * 0.25
+
+            // Blob drift — slow lissajous orbits at different rates + phases.
+            // The frequencies are deliberately incommensurate so the pattern
+            // never visually repeats (no perceived loop). Radius grows
+            // slightly with smoothedLevel so blobs sweep wider on louder
+            // voice — adds energy without snap.
+            let r = 20.0 + smoothedLevel * 12.0
+            let aX = cos(t * 0.18) * r
+            let aY = sin(t * 0.22 + 1.0) * r
+            let bX = cos(t * 0.16 + 2.0) * r * 1.10
+            let bY = sin(t * 0.20 + 3.0) * r * 0.90
+            let cX = cos(t * 0.14 + 4.0) * r * 0.95
+            let cY = sin(t * 0.18 + 5.0) * r * 1.10
 
             return Frame(
                 pulse: CGFloat(pulse),
                 haloOpacity: haloOpacity,
-                wispRotationA: wispA.truncatingRemainder(dividingBy: 360),
-                wispRotationB: wispB.truncatingRemainder(dividingBy: 360)
+                smoothedLevel: smoothedLevel,
+                blobA: CGSize(width: aX, height: aY),
+                blobB: CGSize(width: bX, height: bY),
+                blobC: CGSize(width: cX, height: cY)
             )
         }
 
@@ -209,20 +256,9 @@ struct VoiceOrbView: View {
             switch s {
             case .idle:         return BreathParams(period: 4.0, peak: 1.04)
             case .thinking:     return BreathParams(period: 2.6, peak: 1.05)
-            case .speaking:     return BreathParams(period: 1.4, peak: 1.10)
-            case .recording:    return BreathParams(period: 2.0, peak: 1.03)   // breath subtle; level boosts the rest
-            case .transcribing: return BreathParams(period: 0.7, peak: 1.08)
-            }
-        }
-
-        private func wispBaseSpeed(for s: OrbState) -> Double {
-            // rotation rate (1.0 = baseline)
-            switch s {
-            case .idle: return 0.3
-            case .thinking: return 0.45
-            case .speaking: return 0.6
-            case .recording: return 0.5
-            case .transcribing: return 0.85
+            case .speaking:     return BreathParams(period: 1.4, peak: 1.08)
+            case .recording:    return BreathParams(period: 2.4, peak: 1.03)
+            case .transcribing: return BreathParams(period: 0.7, peak: 1.07)
             }
         }
     }
