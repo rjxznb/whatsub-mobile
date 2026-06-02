@@ -246,7 +246,7 @@ struct VoiceOrbView: View {
             .frame(width: shaderSize, height: shaderSize)
     }
 
-    /// "push me" prompt — glass-style text + animated left→right highlight
+    /// "press me" prompt — glass-style text + animated left→right highlight
     /// sweep. The sweep is implemented as a 3-stop LinearGradient mask
     /// overlay on top of a base muted version of the text; offset of the
     /// mask is driven by `time` so the bright band travels horizontally
@@ -254,7 +254,7 @@ struct VoiceOrbView: View {
     /// text itself a frosted-glass appearance to match the orb body.
     @ViewBuilder
     private func pushMeLabel(time: Date) -> some View {
-        let text = "push me"
+        let text = "press me"
         // 0..1 sweep phase, loop every 2.4 s.
         let phase = time.timeIntervalSinceReferenceDate
             .truncatingRemainder(dividingBy: 2.4) / 2.4
