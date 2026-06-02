@@ -6,10 +6,10 @@ import UIKit
 
 /// Testable seam: production wraps ConversationEngine; tests inject canned turns.
 struct EngineDriver {
-    /// Runs one turn (user input → AsyncThrowingStream of events).
-    let runTurn: (String) -> AsyncThrowingStream<ConversationEngine.Event, Error>
-    /// Pre-parser raw stream content from the most recent turn — surfaces what
-    /// the LLM actually sent (incl. text VerdictParser routed away from dialog).
+    /// Runs one turn (user input → TurnResult). Throws on network/format errors.
+    let runTurn: (String) async throws -> ConversationEngine.TurnResult
+    /// Raw `chat()` response from the most recent turn — surfaces what the
+    /// LLM actually sent (incl. text VerdictParser routed away from dialog).
     /// Used by the VM's empty-response guard for a useful diagnostic.
     let lastRawText: () -> String
 
@@ -17,24 +17,19 @@ struct EngineDriver {
     @MainActor
     static func live(_ engine: ConversationEngine) -> EngineDriver {
         EngineDriver(
-            runTurn: { input in engine.runTurn(userInput: input) },
+            runTurn: { input in try await engine.runTurn(userInput: input) },
             lastRawText: { engine.lastTurnRawText }
         )
     }
 
-    /// Test stub: a pre-canned list of turns, each with a pre-canned event list.
-    struct StubTurn { let events: [ConversationEngine.Event] }
-    static func stub(turns: [StubTurn]) -> EngineDriver {
-        // Box the mutable list in a reference type so the closure can pop turns.
-        final class Cursor { var remaining: [StubTurn]; init(_ t: [StubTurn]) { remaining = t } }
+    /// Test stub: a pre-canned list of TurnResults, popped in order.
+    static func stub(turns: [ConversationEngine.TurnResult]) -> EngineDriver {
+        final class Cursor { var remaining: [ConversationEngine.TurnResult]; init(_ t: [ConversationEngine.TurnResult]) { remaining = t } }
         let cursor = Cursor(turns)
         return EngineDriver(
             runTurn: { _ in
-                let turn = cursor.remaining.isEmpty ? StubTurn(events: [.finished]) : cursor.remaining.removeFirst()
-                return AsyncThrowingStream { continuation in
-                    for e in turn.events { continuation.yield(e) }
-                    continuation.finish()
-                }
+                if cursor.remaining.isEmpty { return ConversationEngine.TurnResult(dialog: "", verdict: nil) }
+                return cursor.remaining.removeFirst()
             },
             lastRawText: { "" }
         )
@@ -178,37 +173,55 @@ final class QuickChatViewModel: ObservableObject {
         turns.append(bubble)
         let turnIdx = turns.count - 1
 
+        // Direct call. chat() either returns the full text or throws — no
+        // AsyncThrowingStream nesting (build 222 probes proved that path
+        // silently swallowed the await before it returned).
+        let result: ConversationEngine.TurnResult
         do {
-            for try await event in driver.runTurn(userInput) {
-                switch event {
-                case .dialogDelta(let s):
-                    turns[turnIdx].assistantText += s
-                    // Re-sanitize the full running buffer on each delta so that a
-                    // leading `<assistant>` tag arriving split across chunks is still
-                    // stripped once the full tag has accumulated. O(n) per delta but
-                    // n is small (a few hundred chars per turn).
-                    turns[turnIdx].assistantText = AssistantTextSanitizer.sanitize(turns[turnIdx].assistantText)
-                    if phase == .thinking { phase = .speaking }
-                case .sentence(let s):
-                    let clean = AssistantTextSanitizer.sanitize(s)
-                    // Skip TTS for sentences with no ASCII letters — Speaker uses
-                    // en-US voice which goes silent on pure Chinese content. The
-                    // dialogue should be all-English now (system prompt rule 3),
-                    // but defensive against LLM lapses.
+            result = try await driver.runTurn(userInput)
+        } catch {
+            phase = .error((error as? LocalizedError)?.errorDescription ?? "对话失败：\(error.localizedDescription)")
+            return
+        }
+
+        // Apply verdict immediately if the LLM included one — affects
+        // session checklist + completedPhrases set.
+        if let v = result.verdict {
+            turns[turnIdx].verdict = v
+            applyVerdict(v)
+        }
+
+        // Typewriter display + TTS — chunk the dialog locally for the
+        // streaming-display effect we used to get from the AsyncThrowingStream.
+        let dialog = result.dialog
+        if !dialog.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if phase == .thinking { phase = .speaking }
+            var displayed = ""
+            var sentenceChunker = SentenceChunker()
+            var idx = dialog.startIndex
+            while idx < dialog.endIndex {
+                let next = dialog.index(idx, offsetBy: 3, limitedBy: dialog.endIndex) ?? dialog.endIndex
+                let small = String(dialog[idx..<next])
+                displayed += small
+                turns[turnIdx].assistantText = AssistantTextSanitizer.sanitize(displayed)
+                for sentence in sentenceChunker.feed(small) {
+                    let clean = AssistantTextSanitizer.sanitize(sentence)
                     if clean.unicodeScalars.contains(where: { $0.isASCII && CharacterSet.letters.contains($0) }) {
                         Speaker.enqueue(clean, locale: "en-US",
                                         rate: AVSpeechUtteranceDefaultSpeechRate)
                     }
-                case .verdict(let v):
-                    turns[turnIdx].verdict = v
-                    applyVerdict(v)
-                case .finished:
-                    break
+                }
+                idx = next
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            // Flush any trailing partial sentence.
+            for sentence in sentenceChunker.flush() {
+                let clean = AssistantTextSanitizer.sanitize(sentence)
+                if clean.unicodeScalars.contains(where: { $0.isASCII && CharacterSet.letters.contains($0) }) {
+                    Speaker.enqueue(clean, locale: "en-US",
+                                    rate: AVSpeechUtteranceDefaultSpeechRate)
                 }
             }
-        } catch {
-            phase = .error((error as? LocalizedError)?.errorDescription ?? "对话失败：\(error.localizedDescription)")
-            return
         }
 
         // Empty-response guard: stream completed but no dialogue text arrived.
