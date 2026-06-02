@@ -195,10 +195,17 @@ struct QuickChatView: View {
         }
         .task {
             await requestPermissions()
-            if !showCompliance { await vm.start() }
+            // IMPORTANT: spawn vm.start() in a DETACHED Task — do NOT `await`
+            // it inside .task's body. SwiftUI's .task modifier cancels its
+            // own body when the view re-renders in certain ways (vm.phase
+            // change → @Published fires → view body recomputes → .task
+            // closure considered "new"). On build 223 this caused chat()'s
+            // URLSession.data() await to be cancelled mid-flight (~50ms in)
+            // and surface as "网络失败：已取消" before DeepSeek could reply.
+            // Detaching the work survives view re-renders.
+            if !showCompliance { Task { await vm.start() } }
             // One-time hint about premium voices.
             if !premiumHintShown && !Speaker.hasPremiumEnglishVoice {
-                // Delay slightly so it doesn't compete with compliance gate.
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 showPremiumHint = true
             }
