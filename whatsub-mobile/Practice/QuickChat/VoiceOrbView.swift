@@ -51,14 +51,11 @@ struct VoiceOrbView: View {
             )
 
             ZStack {
-                // Outer-outer halo: very wide, very soft. Fades from the
-                // colored inner halo into the black background WITHOUT a
-                // visible boundary. Renders much larger than the layout
-                // frame (SwiftUI .frame doesn't clip).
-                ambientFalloff(scale: frame.pulse, opacity: frame.haloOpacity)
-
-                // Inner halo: tighter colored glow around the orb edge.
-                outerHalo(scale: frame.pulse, opacity: frame.haloOpacity)
+                // Single soft halo (was two layers — outerHalo + ambientFalloff
+                // — but their boundaries didn't coincide, creating a visible
+                // darker ring at the discontinuity. One layer + many gradient
+                // stops + heavy blur = no boundary).
+                softHalo(scale: frame.pulse, opacity: frame.haloOpacity)
 
                 // (2) caustic backdrop — clipped slightly larger than the
                 // orb so the glass refracts a continuously-shifting color
@@ -155,47 +152,37 @@ struct VoiceOrbView: View {
             .blendMode(.plusLighter)
     }
 
-    // ---- Halo layers (back of stack) ----
+    // ---- Halo (back of stack) ----
 
-    /// Inner halo: brighter colored glow hugging the orb edge.
-    private func outerHalo(scale: CGFloat, opacity: Double) -> some View {
+    /// Single soft halo. Uses MANY gradient stops with monotonically-decreasing
+    /// alpha so the curve is essentially smooth (no visible inflection where
+    /// alpha drops). The frame is much larger than the gradient's endRadius
+    /// (4.5× vs ~2.0×) so the heavy blur has room to work past the gradient
+    /// boundary without hitting a frame edge. Result: light dissolves into
+    /// black with no perceptible ring. Does NOT scale with breath — keeping
+    /// the halo stable while the orb pulses prevents an animated boundary
+    /// from drawing the eye to its position.
+    private func softHalo(scale: CGFloat, opacity: Double) -> some View {
         Circle()
             .fill(
                 RadialGradient(
-                    colors: [blueCaustic.opacity(opacity), pinkCaustic.opacity(opacity * 0.4), .clear],
+                    gradient: Gradient(stops: [
+                        .init(color: blueCaustic.opacity(opacity * 1.00), location: 0.00),
+                        .init(color: blueCaustic.opacity(opacity * 0.75), location: 0.18),
+                        .init(color: violetCaustic.opacity(opacity * 0.50), location: 0.32),
+                        .init(color: violetCaustic.opacity(opacity * 0.30), location: 0.46),
+                        .init(color: pinkCaustic.opacity(opacity * 0.16), location: 0.60),
+                        .init(color: pinkCaustic.opacity(opacity * 0.07), location: 0.74),
+                        .init(color: pinkCaustic.opacity(opacity * 0.02), location: 0.88),
+                        .init(color: .clear, location: 1.00),
+                    ]),
                     center: .center,
-                    startRadius: 5,
-                    endRadius: baseSize * 0.95
+                    startRadius: 3,
+                    endRadius: baseSize * 2.0
                 )
             )
-            .frame(width: baseSize * 2.0, height: baseSize * 2.0)
-            .blur(radius: 38)
-            .scaleEffect(scale)
-    }
-
-    /// Ambient falloff: a much wider, much softer glow underneath the inner
-    /// halo, fading the colored light into the black background. Three stops
-    /// (0.6 → 0.15 → 0) ensure NO visible boundary — the colored region
-    /// dissolves smoothly into the bg over ~150pt instead of hitting a hard
-    /// circular edge.
-    private func ambientFalloff(scale: CGFloat, opacity: Double) -> some View {
-        Circle()
-            .fill(
-                RadialGradient(
-                    colors: [
-                        blueCaustic.opacity(opacity * 0.50),
-                        violetCaustic.opacity(opacity * 0.25),
-                        pinkCaustic.opacity(opacity * 0.10),
-                        .clear,
-                    ],
-                    center: .center,
-                    startRadius: baseSize * 0.40,
-                    endRadius: baseSize * 1.7
-                )
-            )
-            .frame(width: baseSize * 3.4, height: baseSize * 3.4)
-            .blur(radius: 70)
-            .scaleEffect(scale)
+            .frame(width: baseSize * 4.5, height: baseSize * 4.5)
+            .blur(radius: 60)
     }
 
     /// Fallback-only specular kiss for iOS 16-25.
