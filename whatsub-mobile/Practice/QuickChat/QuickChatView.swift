@@ -68,23 +68,28 @@ struct QuickChatView: View {
         _showCompliance = State(initialValue: !QuickChatComplianceGate.hasAcknowledged)
     }
 
-    private func dismissKeyboard() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                        to: nil, from: nil, for: nil)
-    }
-
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
+                // Keyboard dismissal policy (user feedback 2026-06-02):
+                // - Taps do NOT dismiss (would steal focus on stray taps / orb).
+                // - A downward swipe on the background DOES dismiss, mimicking
+                //   the standard iMessage "drag down to hide keyboard" gesture.
                 Color.whatsubBg
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
-                    .onTapGesture { dismissKeyboard() }
+                    .gesture(
+                        DragGesture(minimumDistance: 24)
+                            .onChanged { v in
+                                if v.translation.height > 24 && typingFieldFocused {
+                                    typingFieldFocused = false
+                                }
+                            }
+                    )
                 VStack(spacing: 0) {
                     headerChips.padding(.top, 6)
                     Spacer(minLength: 0)
                     VoiceOrbView(state: orbState, audioLevel: vadCoordinator.audioLevel)
-                        .onTapGesture { dismissKeyboard() }
                     Spacer().frame(height: 18)
                     LyricTickerView(
                         onTranslate: { translatePresented = TranslationTarget(text: $0) },
@@ -365,9 +370,15 @@ struct QuickChatView: View {
     @ViewBuilder
     private var bottomControls: some View {
         if typingMode || micPermissionDenied {
-            HStack(spacing: 8) {
+            HStack(alignment: .bottom, spacing: 8) {
+                // axis:.vertical + lineLimit(1...6) lets the field grow with
+                // multi-line input (up to ~6 lines). Beyond that, the inner
+                // text scrolls — the safeAreaInset above keeps the latest
+                // typed line visible above the keyboard. HStack alignment
+                // .bottom anchors the send buttons to the bottom of the
+                // (possibly tall) TextField, mirroring iMessage.
                 TextField("打字回应…", text: $vm.typedInput, axis: .vertical)
-                    .lineLimit(1...3)
+                    .lineLimit(1...6)
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgElev))
                     .focused($typingFieldFocused)

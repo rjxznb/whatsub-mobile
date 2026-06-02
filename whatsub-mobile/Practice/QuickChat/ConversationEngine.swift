@@ -57,7 +57,7 @@ final class ConversationEngine {
             // English (no Chinese) because system rule 3 forbids Chinese in
             // dialog body — a Chinese user message would tempt the model to
             // open in Chinese too.
-            messages.append(ChatMessage(role: "user", content: "(Begin the scene now per the system instructions.)"))
+            messages.append(ChatMessage(role: "user", content: "Please start the conversation now."))
         }
         lastTurnRawText = ""
         let stream = client.stream(messages)

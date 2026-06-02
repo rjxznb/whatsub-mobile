@@ -32,6 +32,10 @@ struct ChatCompletionsClient {
             "model": settings.model,
             "stream": false,
             "temperature": 0.3,
+            // Set explicitly — DeepSeek v4 reasoning models can otherwise burn
+            // the implicit token budget on internal reasoning and emit empty
+            // `content`. 4096 covers our longest expected dialog+verdict turn.
+            "max_tokens": 4096,
             "messages": messages.map { ["role": $0.role, "content": $0.content] },
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -43,11 +47,22 @@ struct ChatCompletionsClient {
         guard (200..<300).contains(http.statusCode) else {
             throw LlmError.api(http.statusCode, String(data: data, encoding: .utf8)?.prefix(200).description ?? "")
         }
+        // Surface the raw body in the error when shape doesn't match — DeepSeek
+        // ships occasional schema variants (reasoning_content alongside content,
+        // null content with finish_reason='content_filter', etc.) and chasing
+        // "LLM 返回格式异常" with no body was wasted iterations.
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = obj["choices"] as? [[String: Any]],
-              let msg = choices.first?["message"] as? [String: Any],
-              let content = msg["content"] as? String else {
-            throw LlmError.badResponse
+              let msg = choices.first?["message"] as? [String: Any] else {
+            let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
+            throw LlmError.api(http.statusCode, "返回结构异常 · body=\(body)")
+        }
+        // Some providers (DeepSeek v4-pro) put the answer in `reasoning_content`
+        // alongside an empty `content`. Accept either.
+        let content = (msg["content"] as? String) ?? (msg["reasoning_content"] as? String) ?? ""
+        if content.isEmpty {
+            let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
+            throw LlmError.api(http.statusCode, "content 字段为空 · body=\(body)")
         }
         return content
     }
@@ -70,13 +85,10 @@ struct ChatCompletionsClient {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    // chat() throws with raw body included when content is
+                    // empty / shape unexpected, so we don't need a separate
+                    // emptiness check here.
                     let full = try await chat(messages)
-                    // Empty content body still possible (provider returns 200
-                    // with an empty `content` string). Surface as a clear error
-                    // instead of completing silently.
-                    if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        throw LlmError.api(200, "LLM 返回内容为空（content 字段空字符串）")
-                    }
                     // Chunk into ~3-char pieces with a 20 ms delay so the UI
                     // sees the same incremental shape it would from real SSE.
                     // ~150 chars/s — fast enough to keep up with TTS, slow
