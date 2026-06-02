@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import Speech
 import UIKit
+import CoreHaptics
 
 /// Identifiable wrapper for sheet(item:) with String payload.
 private struct TranslationTarget: Identifiable {
@@ -43,7 +44,12 @@ struct QuickChatView: View {
     // forcing voice doubles as a 强迫 mechanism for English practice).
     // Recording is now gated on a long-press DragGesture on the orb.
     @State private var isOrbPressed: Bool = false
-    private let pressHaptic = UIImpactFeedbackGenerator(style: .medium)
+    /// Sharp "thunk" on press — .rigid is the closest UIImpactFeedback gives
+    /// to a key-down click. .light on release marks the release without
+    /// competing with the press.
+    private let pressHaptic = UIImpactFeedbackGenerator(style: .rigid)
+    private let releaseHaptic = UIImpactFeedbackGenerator(style: .light)
+    @State private var continuousHaptic = ContinuousHaptic()
 
     init(phrases: [SessionPhrase], suggestedTag: String?, maxTurns: Int? = 5,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
@@ -237,12 +243,15 @@ struct QuickChatView: View {
                       !vm.turns.isEmpty,
                       !micPermissionDenied else { return }
                 isOrbPressed = true
-                pressHaptic.impactOccurred(intensity: 0.8)
+                pressHaptic.impactOccurred(intensity: 1.0)        // sharp thunk
+                continuousHaptic.start()                          // sustained rumble
                 startPushToTalk()
             }
             .onEnded { _ in
                 guard isOrbPressed else { return }
                 isOrbPressed = false
+                releaseHaptic.impactOccurred(intensity: 0.55)     // gentle release
+                continuousHaptic.stop()
                 endPushToTalk()
             }
     }
@@ -519,5 +528,60 @@ final class VADCoordinator: ObservableObject {
     /// onSpeechEnded with the live transcript.
     func endRecording() {
         recorder.endRecording()
+    }
+}
+
+/// Sustained low-frequency rumble while the user holds the orb (push-to-talk).
+/// Uses CoreHaptics' advanced player so we can start/stop on demand without
+/// recreating a one-shot pattern each time. Falls back to silent no-ops on
+/// devices that don't support haptics (iPad, simulator) — the visual + audio
+/// feedback carries the press in those cases.
+final class ContinuousHaptic {
+    private var engine: CHHapticEngine?
+    private var player: CHHapticAdvancedPatternPlayer?
+    /// Cache supportsHaptics — the call is cheap but querying once is cleaner.
+    private let isSupported: Bool
+
+    init() {
+        isSupported = CHHapticEngine.capabilitiesForHardware().supportsHaptics
+    }
+
+    func start() {
+        guard isSupported else { return }
+        do {
+            if engine == nil {
+                let e = try CHHapticEngine()
+                e.isAutoShutdownEnabled = true
+                e.resetHandler = { [weak self] in
+                    // Engine reset (e.g. backgrounded). Drop our player so
+                    // the next start() rebuilds cleanly.
+                    self?.player = nil
+                }
+                engine = e
+            }
+            try engine?.start()
+            // Continuous event: moderate intensity, low sharpness = a soft
+            // hum that says "actively recording" without being intrusive.
+            // 30 s matches the recorder's hardCapSec — if the user holds
+            // past the cap, recording ends and we stop() the haptic anyway.
+            let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.55)
+            let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.25)
+            let event = CHHapticEvent(eventType: .hapticContinuous,
+                                       parameters: [intensity, sharpness],
+                                       relativeTime: 0,
+                                       duration: 30)
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            let p = try engine?.makeAdvancedPlayer(with: pattern)
+            try p?.start(atTime: 0)
+            player = p
+        } catch {
+            // Best-effort — never trip the UI on a haptic failure.
+        }
+    }
+
+    func stop() {
+        guard isSupported else { return }
+        try? player?.stop(atTime: 0)
+        player = nil
     }
 }

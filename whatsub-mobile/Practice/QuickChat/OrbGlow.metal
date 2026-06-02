@@ -125,13 +125,19 @@ constant float  noiseScale  = 0.65;
     float v3 = smoothstep(innerRadius, mix(innerRadius, 1.0, 0.5), len);
 
     float3 colBase = mix(baseColor1, baseColor2, cl);
+    // (B) Press hot-tint. When pressed, mix the palette toward white so the
+    // orb visibly brightens / desaturates — like a button being lit up.
+    // The hotspot is also amplified disproportionately so the moving spot
+    // pops into a near-pure highlight as long as the finger's down.
+    colBase = mix(colBase, float3(1.0, 1.0, 1.0), pressed * 0.30);
 
     // bgLuminance == 0 → dark-variant final composite only.
-    // boost (0..1, smoothed voice level) lifts the ring + hotspot when
-    // there's speech. Conservative ×0.6 so loud voice doesn't blow out.
-    float gain    = 1.0 + boost * 0.6;
+    // boost  (0..1, smoothed voice level)  lifts the ring + hotspot for speech.
+    // pressed (0|1)                        adds a chunky +0.8 lift while held.
+    float gain     = 1.0 + boost * 0.6 + pressed * 0.8;
+    float hotGain  = gain + pressed * 0.5;   // hotspot extra-loud when pressed
     float3 darkCol = mix(baseColor3, colBase * gain, v0);
-    darkCol = (darkCol + v1 * gain) * v2 * v3;
+    darkCol = (darkCol + v1 * hotGain) * v2 * v3;
     darkCol = clamp(darkCol, 0.0, 1.0);
 
     // extractAlpha + premultiply.

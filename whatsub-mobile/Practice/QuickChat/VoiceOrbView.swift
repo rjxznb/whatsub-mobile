@@ -95,6 +95,12 @@ struct VoiceOrbView: View {
                 }
             }
             .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
+            // (A) Press-pop. Spring scale ON TOP of the breath/voice pulse,
+            // gated only on isPressed. Snaps to 1.12 on press, springs back
+            // to 1.0 on release. Critically damped enough that the bounce
+            // reads as "yes, I felt that" without dancing.
+            .scaleEffect(isPressed ? 1.12 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isPressed)
         }
     }
 
