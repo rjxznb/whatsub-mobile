@@ -1,10 +1,22 @@
 import Foundation
 
 /// Drives one QuickChat session: holds the running message history, calls
-/// ChatCompletionsClient.stream for each turn, splits the assistant response
+/// ChatCompletionsClient.chat for each turn, splits the assistant response
 /// into dialog (→ TTS-friendly sentence stream + UI text) and verdict (→ parsed
 /// TurnVerdict). Pure orchestration around already-tested helpers —
-/// VerdictParser, SentenceChunker, ChatCompletionsClient.stream.
+/// VerdictParser, SentenceChunker, ChatCompletionsClient.chat.
+///
+/// History (the "why we now call chat() inline" story):
+///   Builds 213-219 went through ChatCompletionsClient.stream(_:) — a wrapper
+///   that called chat() then chunked the result. That added two layers of
+///   AsyncThrowingStream (wrapper's + engine's). When chat() threw on empty
+///   content, the throw should have propagated through both layers to the
+///   VM's catch. In practice the VM kept seeing the empty-response GUARD fire
+///   (raw text empty) instead of the catch — meaning the throw was being
+///   swallowed somewhere in the nested stream/Task plumbing. After 7 build
+///   iterations chasing it, the simplest fix was to delete the indirection:
+///   call chat() directly here, capture the raw response BEFORE chunking,
+///   then drive the parser/chunker in this same Task.
 @MainActor
 final class ConversationEngine {
     /// One event during a turn.
@@ -24,14 +36,9 @@ final class ConversationEngine {
 
     private let client: ChatCompletionsClient
     private(set) var messages: [ChatMessage]
-    /// Pre-parser raw stream content from the most recent runTurn(). Captures
-    /// EVERYTHING the LLM emitted, including content that VerdictParser routed
-    /// into the verdict buffer (which never reaches the VM's dialogDelta path).
-    /// Used by QuickChatViewModel's empty-response guard to surface what the
-    /// LLM actually returned — without this, "empty assistantText + nil verdict"
-    /// looks identical regardless of whether the LLM truly said nothing or said
-    /// "<<<VERDICT>>>..." without a closing "<<<END>>>" (parser stays stuck in
-    /// verdict phase, no dialog ever emitted).
+    /// Raw `chat()` response from the most recent turn — captured BEFORE the
+    /// parser/chunker see it, so the VM's empty-response guard can show what
+    /// the LLM actually returned even if the parser swallowed it.
     private(set) var lastTurnRawText: String = ""
 
     init(client: ChatCompletionsClient, systemPrompt: String) {
@@ -41,10 +48,6 @@ final class ConversationEngine {
 
     /// Run one turn. `userInput` is "" for the opening turn (LLM opens scene).
     /// Yields events as they happen; throws on network/format errors.
-    ///
-    /// Spec §6.5.1: per-turn idle-chunk timeout. If 30 s pass between chunks
-    /// we throw a `ChatCompletionsClient.LlmError.network("idle-chunk timeout")` so the view model
-    /// can surface it as "再说一次或换文字" instead of waiting forever.
     func runTurn(userInput: String) -> AsyncThrowingStream<Event, Error> {
         if !userInput.isEmpty {
             messages.append(ChatMessage(role: "user", content: userInput))
@@ -60,31 +63,28 @@ final class ConversationEngine {
             messages.append(ChatMessage(role: "user", content: "Please start the conversation now."))
         }
         lastTurnRawText = ""
-        let stream = client.stream(messages)
+        let messagesSnapshot = messages
+        let client = self.client
         return AsyncThrowingStream { continuation in
             let task = Task {
                 var parser = VerdictParser()
                 var chunker = SentenceChunker()
-                var fullAssistantText = ""   // including verdict block — we replay full into history
-                var lastChunkAt = Date()
-                let idleLimit: TimeInterval = 30
-                // Watchdog: cancels the iterator if no chunk arrives for idleLimit.
-                let watchdog = Task {
-                    while !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        if Date().timeIntervalSince(lastChunkAt) > idleLimit {
-                            continuation.finish(throwing: ChatCompletionsClient.LlmError.network("idle-chunk timeout"))
-                            return
-                        }
-                    }
-                }
-                defer { watchdog.cancel() }
+                var fullAssistantText = ""
                 do {
-                    for try await raw in stream {
-                        lastChunkAt = Date()
-                        fullAssistantText += raw
-                        self.lastTurnRawText = fullAssistantText
-                        let out = parser.feed(raw)
+                    // Single non-streaming call. Capture full text BEFORE any
+                    // parsing — guarantees lastTurnRawText is set even if the
+                    // parser swallows everything or downstream throws.
+                    let full = try await client.chat(messagesSnapshot)
+                    self.lastTurnRawText = full
+                    fullAssistantText = full
+
+                    // Chunk locally (~3 chars per 20ms) so the UI gets the
+                    // same incremental rendering it did when we had real SSE.
+                    var idx = full.startIndex
+                    while idx < full.endIndex {
+                        let next = full.index(idx, offsetBy: 3, limitedBy: full.endIndex) ?? full.endIndex
+                        let small = String(full[idx..<next])
+                        let out = parser.feed(small)
                         if !out.dialogChunk.isEmpty {
                             continuation.yield(.dialogDelta(out.dialogChunk))
                             for sentence in chunker.feed(out.dialogChunk) {
@@ -94,8 +94,12 @@ final class ConversationEngine {
                         if let v = out.completedVerdict {
                             continuation.yield(.verdict(v))
                         }
+                        idx = next
+                        try? await Task.sleep(nanoseconds: 20_000_000)
                     }
-                    // Stream done — drain any held buffers.
+
+                    // Drain held buffers (parser still in dialog phase /
+                    // chunker holding a partial sentence).
                     let tail = parser.finish()
                     if !tail.dialogChunk.isEmpty {
                         continuation.yield(.dialogDelta(tail.dialogChunk))
@@ -109,12 +113,16 @@ final class ConversationEngine {
                     if let v = tail.completedVerdict {
                         continuation.yield(.verdict(v))
                     }
-                    // Record the full assistant text (including verdict block) in
-                    // history so the next turn's LLM sees its own previous output.
-                    messages.append(ChatMessage(role: "assistant", content: fullAssistantText))
+
+                    self.messages.append(ChatMessage(role: "assistant", content: fullAssistantText))
                     continuation.yield(.finished)
                     continuation.finish()
                 } catch {
+                    // Defensive: also stash the error in lastTurnRawText.
+                    // Builds 213-219 mysteriously had the throw swallowed
+                    // somewhere — if it happens again the guard will at least
+                    // show the LlmError detail (body + status code).
+                    self.lastTurnRawText = "[ENGINE caught error] \(error.localizedDescription)"
                     continuation.finish(throwing: error)
                 }
             }
