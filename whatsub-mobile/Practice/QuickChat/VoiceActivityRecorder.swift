@@ -213,16 +213,14 @@ final class VoiceActivityRecorder {
 
     @MainActor
     private func handlePartialResult(_ text: String) {
+        // Push-to-talk: just stash the latest transcript. End-of-turn is
+        // user-driven via the orb release, NOT ASR-stability-driven (that
+        // logic was in builds 233-236 alongside the VAD endpointer; removed
+        // in 237+). We keep recording until endRecording() is called.
         guard !finished else { return }
         if text != lastPartialText {
             lastPartialText = text
             lastPartialChangedAt = Date()
-            return
-        }
-        // Same text as last partial — check if it's been stable long enough.
-        guard !text.isEmpty, let changed = lastPartialChangedAt else { return }
-        if Date().timeIntervalSince(changed) >= partialStableSec {
-            endTurn(reason: .asrStable)
         }
     }
 
