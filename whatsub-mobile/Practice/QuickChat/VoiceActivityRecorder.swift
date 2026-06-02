@@ -13,14 +13,21 @@ import AVFoundation
 /// .measurement mode + .defaultToSpeaker. They may need adjustment for AirPods.
 final class VoiceActivityRecorder {
 
-    // Tunable thresholds.
-    private let speechOnsetDB: Float = -30        // power above this for onsetHoldMs = onset
-    private let speechOffsetDB: Float = -40       // power below this for offsetHoldMs after onset = offset
+    // Tunable thresholds. Tuned 2026-06-02 after the user reported the orb
+    // staying in 'listening' indefinitely once they stopped talking — the
+    // old -40 dBFS offset was below the ambient noise floor in most real
+    // rooms (fans, AC, traffic), so silentSinceMs never accumulated.
+    private let speechOnsetDB: Float = -28        // power above this for onsetHoldMs = onset
+    private let speechOffsetDB: Float = -34       // bumped from -40: tolerant of ambient noise floor
     private let onsetHoldMs: Int = 200
-    private let offsetHoldMs: Int = 1500
+    private let offsetHoldMs: Int = 1000          // 1500 → 1000: snappier turn handoff
     private let pollIntervalMs: Int = 30
     private let noSpeechTimeoutSec: Double = 15
     private let hardCapSec: Double = 30           // even if speaking continuously, cap recording
+    /// Belt-and-suspenders fallback: even if speechOffsetDB never triggers
+    /// (e.g. heavy continuous background noise above -34 dB), force-end the
+    /// recording 12 s after speech onset so the user never gets stuck.
+    private let maxAfterOnsetSec: Double = 12
 
     private var recorder: AVAudioRecorder?
     private var url: URL?
@@ -136,6 +143,12 @@ final class VoiceActivityRecorder {
             }
         } else {
             // Looking for offset.
+            // Hard cap relative to speech ONSET — fallback in case the
+            // offset-dB threshold is masked by sustained background noise.
+            if let onsetAt, now.timeIntervalSince(onsetAt) > maxAfterOnsetSec {
+                finishWithRecording()
+                return
+            }
             if power < speechOffsetDB {
                 silentSinceMs += pollIntervalMs
                 if silentSinceMs >= offsetHoldMs {
