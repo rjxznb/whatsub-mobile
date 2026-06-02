@@ -38,14 +38,11 @@ struct QuickChatView: View {
     // VAD state
     @StateObject private var vadCoordinator = VADCoordinator()
 
-    /// Keyboard height above the home-indicator safe area. Driven by
-    /// UIResponder.keyboardWill{Show,Hide}Notification. iOS 16's automatic
-    /// `safeAreaInset(edge: .bottom)` keyboard-avoidance does NOT fire reliably
-    /// inside NavigationStack with a `TextField(axis: .vertical)` — the inset
-    /// content stays anchored to the home indicator and the field hides
-    /// behind the keyboard (see screenshot 2026-06-02). Manual padding makes
-    /// it ride correctly.
-    @State private var keyboardOffset: CGFloat = 0
+    // Keyboard tracking was manual (build 216-224) to work around an apparent
+    // `safeAreaInset(.bottom)` non-avoidance bug — but build 224's chat()
+    // cancellation fix (detaching vm.start from .task) restored normal SwiftUI
+    // lifecycle, and the auto-avoidance now fires correctly. The manual offset
+    // became a DOUBLE pad and showed up as a huge gap above the keyboard.
     @FocusState private var typingFieldFocused: Bool
 
     init(phrases: [SessionPhrase], suggestedTag: String?, maxTurns: Int? = 5,
@@ -110,8 +107,6 @@ struct QuickChatView: View {
             .safeAreaInset(edge: .bottom) {
                 bottomControls
                     .background(Color.whatsubBg)
-                    .padding(.bottom, keyboardOffset)
-                    .animation(.easeOut(duration: 0.22), value: keyboardOffset)
             }
             // Keyboard dismissal policy (user feedback 2026-06-02):
             // - Taps don't dismiss (avoids stealing focus on stray taps).
@@ -233,22 +228,6 @@ struct QuickChatView: View {
                 vm.pause()
                 vadCoordinator.cancel()
             }
-        }
-        // Keyboard tracking — manual because iOS 16 NavigationStack +
-        // safeAreaInset(.bottom) + TextField(axis:.vertical) doesn't auto-ride.
-        // We compute (keyboard frame height − bottom safe-area inset) so the
-        // padding accounts for the home indicator already covered by the safe
-        // area, avoiding a double-margin gap above the keyboard.
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-            guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-            let scenes = UIApplication.shared.connectedScenes
-            let bottomInset = (scenes.compactMap { $0 as? UIWindowScene }
-                .flatMap { $0.windows }
-                .first { $0.isKeyWindow }?.safeAreaInsets.bottom) ?? 0
-            keyboardOffset = max(0, frame.height - bottomInset)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardOffset = 0
         }
         .onDisappear { vadCoordinator.cancel() }
     }
