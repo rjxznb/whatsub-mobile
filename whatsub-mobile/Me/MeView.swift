@@ -11,9 +11,7 @@ struct MeView: View {
     @State private var showDeleteAccountConfirm = false
     @State private var deletingAccount = false
     @State private var deleteAccountError: String?
-    @State private var showStaging = false
     @State private var showSubscribe = false
-    @ObservedObject private var vocab = VocabStore.shared
 
     private var versionString: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -114,26 +112,12 @@ struct MeView: View {
                             Label("导入队列", systemImage: "tray.and.arrow.down")
                                 .foregroundStyle(.whatsubInk)
                         }
-                        Button {
-                            showStaging = true
-                        } label: {
-                            HStack {
-                                Label("词汇暂存区", systemImage: "tray.full")
-                                    .foregroundStyle(.whatsubInk)
-                                Spacer()
-                                let n = vocab.count(for: VocabStore.stagingKey)
-                                if n > 0 { Text("\(n)").foregroundStyle(.whatsubInkMuted) }
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.whatsubInkFaint)
-                            }
-                        }
-                        .buttonStyle(.plain)
                     }
                     .listRowBackground(Color.whatsubBgElev)
-                    // showStaging sheet moved to the root — see the showSubscribe
-                    // comment below. Same first-tap-dismiss bug: this Section's
-                    // 词汇暂存区 row reads `vocab.count(for:)`, so on first appear
-                    // the VocabStore @Published update tore down the sheet right
-                    // after it opened.
+                    // (Local 词汇暂存区 entry removed build 248 — the on-device
+                    // vocab notebook has been retired. Long-press a Library
+                    // subtitle now writes straight to the personal corpus,
+                    // which has its own quota line + grouped-by-video view.)
 
                     Section {
                         Button(role: .destructive) {
@@ -196,9 +180,6 @@ struct MeView: View {
             .sheet(isPresented: $showSubscribe) {
                 SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
                     .environmentObject(store)
-            }
-            .sheet(isPresented: $showStaging) {
-                VocabNotebookView(entryId: VocabStore.stagingKey, title: "暂存区", onJump: nil)
             }
         }
     }

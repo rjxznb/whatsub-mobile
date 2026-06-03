@@ -20,7 +20,7 @@ struct LibraryDetailView: View {
     /// rotation); `pinch` tracks the live magnification during a gesture.
     @State private var playerZoom: CGFloat = 1.0
     @GestureState private var pinch: CGFloat = 1.0
-    /// Long-pressed cue → contextMenu → 收藏卡; the per-video 词汇本 sheet toggle.
+    /// Long-pressed cue → contextMenu → 收藏卡 (now writes to corpus, build 247+).
     @State private var collectCue: Cue?
     /// Long-pressed cue → contextMenu → 跟读 (shadow) sheet.
     @State private var shadowCue: Cue?
@@ -28,8 +28,6 @@ struct LibraryDetailView: View {
     @State private var clozeCue: Cue?
     /// Single-tapped highlight phrase → its 释义 box (intercepts the seek).
     @State private var glossWord: WordGloss?
-    @State private var showNotebook = false
-    @ObservedObject private var vocab = VocabStore.shared
     /// 2026-06-03 Stage 5: portrait content tab switcher. Subtitle list is the
     /// existing default; .collections renders EntryCollectionsList scoped to
     /// this entry (corpus phrases tagged with libraryEntryId == entryId).
@@ -96,22 +94,9 @@ struct LibraryDetailView: View {
                 avPlayer = player
             }
         }
-        // 词汇本 entry (portrait only — landscape hides the nav bar). Long-press a
-        // cue collects; this button opens the per-video notebook.
-        .toolbar {
-            if !isLandscape {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showNotebook = true } label: {
-                        let n = vocab.count(for: entryId)
-                        HStack(spacing: 3) {
-                            Image(systemName: n > 0 ? "book.closed.fill" : "book.closed")
-                            if n > 0 { Text("\(n)").font(.caption2.weight(.bold)) }
-                        }
-                        .foregroundStyle(.whatsubAccent)
-                    }
-                }
-            }
-        }
+        // (词汇本 toolbar button removed build 248+ — local vocab notebook
+        // retired. Collections from this video are now in the [收藏] tab
+        // below the player; long-pressing a cue writes straight to corpus.)
         .sheet(item: $collectCue) { cue in
             // Pass youtubeId so the corpus contribution records a fallback
             // for when this Library entry is later deleted (the OSS object
@@ -156,15 +141,6 @@ struct LibraryDetailView: View {
                 audioURL: ossAudioURL,
                 videoURL: ossVideoURL
             )
-        }
-        .sheet(isPresented: $showNotebook) {
-            VocabNotebookView(entryId: entryId, title: vm.entry?.title ?? "词汇本") { idx in
-                if let entry = vm.entry,
-                   let c = entry.analysisJson.subtitles.first(where: { $0.index == idx }) {
-                    vm.seekTo(c)
-                }
-                showNotebook = false
-            }
         }
     }
 
