@@ -21,17 +21,25 @@ struct RoleplayScenarioClient {
         }
     }
 
+    /// Outcome of one derivation call. Custom enum (not `Result`) because
+    /// `Result<S, F>` requires `F: Error`; we want to keep the failure
+    /// channel a plain human-readable string for the UI banner.
+    enum DerivationOutcome {
+        case success([RoleplayScenario])
+        case failure(String)
+    }
+
     /// Derive scenarios from a Library entry. `corpusPhrases` are the user's
     /// own collected English phrases for THIS video (raw form, lowercased
     /// or not — the prompt normalizes them).
     ///
-    /// Returns an empty array on a hard failure (network, JSON parse).
-    /// Caller is expected to layer a stock fallback on top so the tab is
-    /// never empty.
+    /// Returns `.failure` on a hard failure (network, JSON parse). Caller
+    /// is expected to layer a stock fallback on top so the tab is never
+    /// empty.
     func deriveScenarios(
         entry: LibraryEntryDetail,
         corpusPhrases: [String]
-    ) async -> Result<[RoleplayScenario], String> {
+    ) async -> DerivationOutcome {
         let summary = Self.subtitleSummary(entry.analysisJson.subtitles)
         let messages = RoleplayPrompts.scenePrompt(
             videoTitle: entry.title,
@@ -45,7 +53,7 @@ struct RoleplayScenarioClient {
         } catch let e as ChatCompletionsClient.LlmError {
             return .failure(e.errorDescription ?? "LLM 调用失败")
         } catch {
-            return .failure("LLM 调用失败：\(error.localizedDescription)")
+            return .failure("LLM 调用失败:\(error.localizedDescription)")
         }
 
         // The LLM sometimes wraps the JSON in markdown fences despite our
