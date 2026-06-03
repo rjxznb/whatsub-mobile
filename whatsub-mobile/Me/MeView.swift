@@ -12,6 +12,8 @@ struct MeView: View {
     @State private var deletingAccount = false
     @State private var deleteAccountError: String?
     @State private var showSubscribe = false
+    @State private var showPendingPhrases = false
+    @ObservedObject private var pendingStore = PendingPhraseStore.shared
 
     private var versionString: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -112,12 +114,28 @@ struct MeView: View {
                             Label("导入队列", systemImage: "tray.and.arrow.down")
                                 .foregroundStyle(.whatsubInk)
                         }
+                        Button {
+                            showPendingPhrases = true
+                        } label: {
+                            HStack {
+                                Label("待同步暂存", systemImage: "tray.full")
+                                    .foregroundStyle(.whatsubInk)
+                                Spacer()
+                                let n = pendingStore.total
+                                if n > 0 { Text("\(n)").foregroundStyle(.whatsubInkMuted) }
+                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.whatsubInkFaint)
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
                     .listRowBackground(Color.whatsubBgElev)
                     // (Local 词汇暂存区 entry removed build 248 — the on-device
                     // vocab notebook has been retired. Long-press a Library
                     // subtitle now writes straight to the personal corpus,
                     // which has its own quota line + grouped-by-video view.)
+                    // Build 250+ added 待同步暂存 above — different store
+                    // (PendingPhraseStore) backing a different flow: collect
+                    // freely first, then sync the picked-ones to cloud corpus.
 
                     Section {
                         Button(role: .destructive) {
@@ -180,6 +198,9 @@ struct MeView: View {
             .sheet(isPresented: $showSubscribe) {
                 SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
                     .environmentObject(store)
+            }
+            .sheet(isPresented: $showPendingPhrases) {
+                PendingPhrasesView(filterEntryId: nil)
             }
         }
     }
