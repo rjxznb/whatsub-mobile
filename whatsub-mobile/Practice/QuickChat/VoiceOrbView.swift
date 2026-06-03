@@ -95,12 +95,13 @@ struct VoiceOrbView: View {
                 }
             }
             .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
-            // (A) Press-pop. Spring scale ON TOP of the breath/voice pulse,
-            // gated only on isPressed. Snaps to 1.12 on press, springs back
-            // to 1.0 on release. Critically damped enough that the bounce
-            // reads as "yes, I felt that" without dancing.
-            .scaleEffect(isPressed ? 1.12 : 1.0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isPressed)
+            // (A) Press-pop. Spring scale on top of the breath/voice pulse.
+            // User feedback 2026-06-03: previous values (1.12 scale, 250ms
+            // response, dampingFraction 0.6) felt too "shu-li" (over-windup)
+            // — too big, too long, too bouncy. Toned to a snappier 1.06 /
+            // 150ms / 0.85 damping: subtle confirm-only nudge, no theatrics.
+            .scaleEffect(isPressed ? 1.06 : 1.0)
+            .animation(.spring(response: 0.15, dampingFraction: 0.85), value: isPressed)
         }
     }
 
@@ -413,12 +414,10 @@ struct VoiceOrbView: View {
 
             // Backdrop rotation: base 4°/s + up to +6°/s on loud voice =
             // ~one full revolution every 90 s at rest, ~36 s at full voice.
-            // While the user is HOLDING the orb (push-to-talk) we multiply
-            // the rate by 4 — immediate visual feedback that the press
-            // landed even before audio levels move. Always positive (CCW)
-            // so the direction doesn't flip when smoothedLevel oscillates.
+            // Press multiplier toned 4× → 2× to match the rest of the
+            // press-reaction de-escalation (user feedback 2026-06-03).
             var degPerSec = 4.0 + smoothedLevel * 6.0
-            if isPressed { degPerSec *= 4.0 }
+            if isPressed { degPerSec *= 2.0 }
             backdropRotation += dt * degPerSec
             // Keep the value bounded so it doesn't drift toward floating-
             // point precision loss over a long session.

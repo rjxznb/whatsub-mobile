@@ -111,9 +111,9 @@ constant float  noiseScale  = 0.65;
     // ---- orbiting hotspot ----
     //
     // Base rate is -1.0 rad/s (one full orbit every 2π ≈ 6.3 s, CCW). While
-    // the user is pressing the orb the rate scales 4× — instant visual
-    // confirmation that the press registered.
-    float rotRate = -1.0 * (1.0 + pressed * 3.0);
+    // pressed the rate scales 2.5× — visible but no longer frantic (was 4×;
+    // user feedback 2026-06-03 said the press response was over-the-top).
+    float rotRate = -1.0 * (1.0 + pressed * 1.5);
     float a       = time * rotRate;
     float2 pos    = float2(cos(a), sin(a)) * r0;
     float  d      = distance(uv, pos);
@@ -125,17 +125,17 @@ constant float  noiseScale  = 0.65;
     float v3 = smoothstep(innerRadius, mix(innerRadius, 1.0, 0.5), len);
 
     float3 colBase = mix(baseColor1, baseColor2, cl);
-    // (B) Press hot-tint. When pressed, mix the palette toward white so the
-    // orb visibly brightens / desaturates — like a button being lit up.
-    // The hotspot is also amplified disproportionately so the moving spot
-    // pops into a near-pure highlight as long as the finger's down.
-    colBase = mix(colBase, float3(1.0, 1.0, 1.0), pressed * 0.30);
+    // (B) Press hot-tint. Tuned 2026-06-03 after the user said the prior
+    // values felt "too big a reaction". Halved across the board:
+    //   white-mix     30%  → 15%
+    //   gain lift    +0.8 → +0.4
+    //   hotspot lift +0.5 → +0.2
+    // Result is a noticeable but restrained "lit up" feel rather than a
+    // full glare.
+    colBase = mix(colBase, float3(1.0, 1.0, 1.0), pressed * 0.15);
 
-    // bgLuminance == 0 → dark-variant final composite only.
-    // boost  (0..1, smoothed voice level)  lifts the ring + hotspot for speech.
-    // pressed (0|1)                        adds a chunky +0.8 lift while held.
-    float gain     = 1.0 + boost * 0.6 + pressed * 0.8;
-    float hotGain  = gain + pressed * 0.5;   // hotspot extra-loud when pressed
+    float gain     = 1.0 + boost * 0.6 + pressed * 0.40;
+    float hotGain  = gain + pressed * 0.20;
     float3 darkCol = mix(baseColor3, colBase * gain, v0);
     darkCol = (darkCol + v1 * hotGain) * v2 * v3;
     darkCol = clamp(darkCol, 0.0, 1.0);
