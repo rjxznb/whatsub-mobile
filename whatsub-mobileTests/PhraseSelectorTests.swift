@@ -8,7 +8,8 @@ final class PhraseSelectorTests: XCTestCase {
     private func mine(_ key: String, tags: [String] = []) -> MineItem {
         MineItem(phraseNormalized: key, phraseRaw: key, meaningZh: nil,
                  usageNote: nil, contextSentence: "...",
-                 source: CorpusSource(kind: "webpage", url: "", title: nil, timestampSec: nil),
+                 source: CorpusSource(kind: "webpage", url: "", title: nil, timestampSec: nil,
+                                      libraryEntryId: nil, youtubeId: nil),
                  contributedAt: 0, tags: tags)
     }
 
