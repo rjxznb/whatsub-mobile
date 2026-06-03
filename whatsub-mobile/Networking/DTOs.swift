@@ -340,6 +340,12 @@ struct BrowseResponse: Decodable { let phrases: [BrowsePhrase]; let total: Int }
 
 /// /mine item — camelCase, instance-level (one row per save).
 struct MineItem: Codable, Identifiable {
+    /// Backend row id (corpus_contributions.id). Optional because builds
+    /// before 2026-06-04 didn't decode it (server has been emitting it all
+    /// along); a nil here means a phrase from before-the-decode reached the
+    /// view, in which case delete is disabled until the user pull-refreshes
+    /// to get an `id`-bearing payload. Backend route field name: `id`.
+    let contributionId: Int?
     let phraseNormalized: String
     let phraseRaw: String
     let meaningZh: String?
@@ -348,7 +354,17 @@ struct MineItem: Codable, Identifiable {
     let source: CorpusSource
     let contributedAt: Int64
     let tags: [String]
+    /// SwiftUI Identifiable id — composite of phrase + contributedAt because
+    /// the same phrase can be contributed multiple times with different
+    /// context, and we want each instance to render as its own row. NOT the
+    /// backend id (that's `contributionId`).
     var id: String { "\(phraseNormalized)#\(contributedAt)" }
+
+    enum CodingKeys: String, CodingKey {
+        case contributionId = "id"
+        case phraseNormalized, phraseRaw, meaningZh, usageNote, contextSentence
+        case source, contributedAt, tags
+    }
 }
 struct MineResponse: Decodable { let items: [MineItem]; let total: Int }
 

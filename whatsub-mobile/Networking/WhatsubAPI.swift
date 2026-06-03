@@ -178,6 +178,20 @@ actor WhatsubAPI {
         return try decode(BrowseResponse.self, from: data).phrases
     }
 
+    /// Deletes ONE of the caller's own corpus contributions by row id.
+    /// Backend rejects others' rows via session-derived contributor_id so
+    /// the id-by-itself can't be abused. Returns `true` on 200, `false`
+    /// on 404 (already-gone / never-existed — idempotent from the UI's POV),
+    /// throws on other errors.
+    func deleteContribution(id: Int, token: String) async throws -> Bool {
+        do {
+            _ = try await delete(Endpoints.corpus("contribute/\(id)"), bearer: token)
+            return true
+        } catch APIError.server(let code, _) where code == 404 {
+            return false
+        }
+    }
+
     func mineCorpus(tags: [String], token: String) async throws -> MineResponse {
         var path = "mine?pageSize=100"
         if !tags.isEmpty {

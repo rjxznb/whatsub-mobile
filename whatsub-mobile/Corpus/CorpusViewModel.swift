@@ -87,4 +87,44 @@ final class CorpusViewModel: ObservableObject {
         scope = s; selectedTags = []
         await reload(token: token)
     }
+
+    /// Delete one personal contribution from cloud + the local mine array
+    /// + the on-disk cache so the UI doesn't snap it back on next reload.
+    ///
+    /// Returns:
+    /// - `.ok` — deleted server-side, removed locally.
+    /// - `.gone` — 404 (already deleted somewhere else). Removed locally
+    ///   too since the row is gone either way.
+    /// - `.unsupported` — local row lacks a backend id (pre-id-decode data
+    ///   from an older build's cache). Caller should hint pull-to-refresh.
+    /// - `.failed(String)` — network / other error; row stays.
+    func delete(item: MineItem, token: String) async -> DeleteOutcome {
+        guard let id = item.contributionId else {
+            return .unsupported
+        }
+        do {
+            let ok = try await WhatsubAPI.shared.deleteContribution(id: id, token: token)
+            // Remove locally either way — `false` means already gone.
+            mine.removeAll { $0.id == item.id }
+            mineTotal = max(0, mineTotal - 1)
+            // Write through to the on-disk cache so the next cold start
+            // doesn't paint the deleted row. Keep tags untouched (deleting
+            // a phrase doesn't remove its tag from the chip list — server
+            // is authoritative on tag rollup, and the local tag list will
+            // self-correct on the next /tags call).
+            CorpusCache.shared.storeMine(items: mine, tags: tags, now: Date())
+            return ok ? .ok : .gone
+        } catch let e as APIError {
+            return .failed(e.chinese)
+        } catch {
+            return .failed("删除失败：\(error.localizedDescription)")
+        }
+    }
+
+    enum DeleteOutcome: Equatable {
+        case ok
+        case gone
+        case unsupported
+        case failed(String)
+    }
 }

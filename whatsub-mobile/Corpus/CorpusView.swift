@@ -21,6 +21,13 @@ struct CorpusView: View {
     @State private var quickChatColdStart: Bool = false
     @State private var showQuickChatLauncher: Bool = false
     @State private var pendingTurnCap: Int? = 5    // set by the launcher, consumed when sheet opens
+    /// Pending delete confirmation — set when the user swipes-to-delete a
+    /// flat row OR long-presses → Delete in the grouped view. The alert
+    /// is bound to this presence; tapping 删除 calls vm.delete.
+    @State private var pendingDelete: MineItem?
+    /// One-shot 警示 text — surfaces "(此条无 id, 请下拉刷新)" when the user
+    /// tries to delete a row that pre-dated the id decode patch.
+    @State private var deleteWarning: String?
 
     var body: some View {
         NavigationStack {
@@ -122,6 +129,46 @@ struct CorpusView: View {
             } message: {
                 Text("先用插件划词收藏 3 个以上短语就可以开练。")
             }
+            .alert(
+                "从云端删除？",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: { if !$0 { pendingDelete = nil } }
+                ),
+                presenting: pendingDelete
+            ) { item in
+                Button("删除", role: .destructive) {
+                    if let tok = token {
+                        let target = item
+                        Task {
+                            let outcome = await vm.delete(item: target, token: tok)
+                            await MainActor.run {
+                                if case .unsupported = outcome {
+                                    deleteWarning = "这条短语来自旧版缓存，下拉刷新一次再试"
+                                } else if case .failed(let msg) = outcome {
+                                    deleteWarning = msg
+                                }
+                            }
+                        }
+                    }
+                    pendingDelete = nil
+                }
+                Button("取消", role: .cancel) { pendingDelete = nil }
+            } message: { item in
+                Text("「\(item.phraseRaw)」将从云端语料库移除。其他端在下次刷新后也会同步消失。")
+            }
+            .alert(
+                "删除失败",
+                isPresented: Binding(
+                    get: { deleteWarning != nil },
+                    set: { if !$0 { deleteWarning = nil } }
+                ),
+                presenting: deleteWarning
+            ) { _ in
+                Button("好", role: .cancel) { deleteWarning = nil }
+            } message: { msg in
+                Text(msg)
+            }
         }
     }
 
@@ -217,10 +264,20 @@ struct CorpusView: View {
                     List(vm.mine) { m in
                         NavigationLink(value: m.phraseNormalized) {
                             PhraseRow(raw: m.phraseRaw, meaning: m.meaningZh, sub: m.contextSentence, tags: m.tags)
-                        }.listRowBackground(Color.whatsubBgElev)
+                        }
+                        .listRowBackground(Color.whatsubBgElev)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) {
+                                pendingDelete = m
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
                     }.scrollContentBackground(.hidden)
                 case .byVideo:
-                    GroupedMineView(items: vm.mine)
+                    GroupedMineView(items: vm.mine) { item in
+                        pendingDelete = item
+                    }
                 }
             }
         }

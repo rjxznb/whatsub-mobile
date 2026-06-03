@@ -6,7 +6,8 @@ final class PhraseSelectorTests: XCTestCase {
 
     /// Helper: build a MineItem with just the fields the selector cares about.
     private func mine(_ key: String, tags: [String] = []) -> MineItem {
-        MineItem(phraseNormalized: key, phraseRaw: key, meaningZh: nil,
+        MineItem(contributionId: nil,
+                 phraseNormalized: key, phraseRaw: key, meaningZh: nil,
                  usageNote: nil, contextSentence: "...",
                  source: CorpusSource(kind: "webpage", url: "", title: nil, timestampSec: nil,
                                       libraryEntryId: nil, youtubeId: nil),

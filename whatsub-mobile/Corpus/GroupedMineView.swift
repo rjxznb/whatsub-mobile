@@ -20,6 +20,11 @@ import SwiftUI
 /// the OSS videoUrl) is in flight at any moment. Tap a phrase row to seek.
 struct GroupedMineView: View {
     let items: [MineItem]
+    /// Tapped via long-press → Delete in the row context menu. Parent
+    /// (CorpusView) handles the actual deletion + confirmation alert so
+    /// the alert anchor stays at the tab-level safe area, not inside the
+    /// scroll view (which would clip on iPad).
+    var onDelete: ((MineItem) -> Void)? = nil
 
     @State private var expandedGroupId: String? = nil
 
@@ -58,7 +63,8 @@ struct GroupedMineView: View {
                                 withAnimation(.easeOut(duration: 0.18)) {
                                     expandedGroupId = expandedGroupId == g.id ? nil : g.id
                                 }
-                            }
+                            },
+                            onDelete: onDelete
                         )
                     }
                 }
@@ -125,6 +131,7 @@ private struct GroupCard: View {
     let group: GroupedMineView.Group
     let isExpanded: Bool
     let onToggle: () -> Void
+    let onDelete: ((MineItem) -> Void)?
     @State private var seekTo: Double? = nil
     @State private var safariURL: URL? = nil
 
@@ -226,40 +233,53 @@ private struct GroupCard: View {
         // Two shapes:
         //   playable (library/youtube + has timestamp): tap → seek
         //   informational (anything else): plain row, no tap action
-        if hasPlayer, let ts = item.source.timestampSec {
-            let isActive = (seekTo != nil) && (seekTo == ts)
-            Button {
-                // nil → same timestamp doesn't trigger seek; toggling via a
-                // small dance ensures the binding fires even when re-tapping
-                // the same row.
-                seekTo = nil
-                DispatchQueue.main.async { seekTo = ts }
-            } label: {
+        // Both share a contextMenu for delete (LazyVStack doesn't support
+        // .swipeActions — only List does — so we use long-press menu instead).
+        Group {
+            if hasPlayer, let ts = item.source.timestampSec {
+                let isActive = (seekTo != nil) && (seekTo == ts)
+                Button {
+                    // nil → same timestamp doesn't trigger seek; toggling via a
+                    // small dance ensures the binding fires even when re-tapping
+                    // the same row.
+                    seekTo = nil
+                    DispatchQueue.main.async { seekTo = ts }
+                } label: {
+                    HStack(spacing: 10) {
+                        Text(mmss(ts))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(isActive ? .whatsubAccent : .whatsubInkMuted)
+                            .frame(width: 50, alignment: .leading)
+                        phraseBody(item)
+                        Spacer(minLength: 4)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(
+                        isActive ? Color.whatsubAccent.opacity(0.10) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+                }
+                .buttonStyle(.plain)
+            } else {
                 HStack(spacing: 10) {
-                    Text(mmss(ts))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(isActive ? .whatsubAccent : .whatsubInkMuted)
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 5))
+                        .foregroundStyle(.whatsubInkFaint)
                         .frame(width: 50, alignment: .leading)
                     phraseBody(item)
                     Spacer(minLength: 4)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(
-                    isActive ? Color.whatsubAccent.opacity(0.10) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 8)
-                )
             }
-            .buttonStyle(.plain)
-        } else {
-            HStack(spacing: 10) {
-                Image(systemName: "circle.fill")
-                    .font(.system(size: 5))
-                    .foregroundStyle(.whatsubInkFaint)
-                    .frame(width: 50, alignment: .leading)
-                phraseBody(item)
-                Spacer(minLength: 4)
+        }
+        .contextMenu {
+            if let onDelete {
+                Button(role: .destructive) {
+                    onDelete(item)
+                } label: {
+                    Label("删除", systemImage: "trash")
+                }
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
         }
     }
 
