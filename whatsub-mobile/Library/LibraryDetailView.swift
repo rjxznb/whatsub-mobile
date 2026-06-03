@@ -30,6 +30,11 @@ struct LibraryDetailView: View {
     @State private var glossWord: WordGloss?
     @State private var showNotebook = false
     @ObservedObject private var vocab = VocabStore.shared
+    /// 2026-06-03 Stage 5: portrait content tab switcher. Subtitle list is the
+    /// existing default; .collections renders EntryCollectionsList scoped to
+    /// this entry (corpus phrases tagged with libraryEntryId == entryId).
+    @State private var contentTab: ContentTab = .subtitles
+    enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections }
 
     private var isLandscape: Bool { vSize == .compact }
 
@@ -297,7 +302,29 @@ struct LibraryDetailView: View {
                                 }
                             }
                     )
+                contentArea(entry)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func contentArea(_ entry: LibraryEntryDetail) -> some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $contentTab) {
+                Text("字幕").tag(ContentTab.subtitles)
+                Text("收藏").tag(ContentTab.collections)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+
+            switch contentTab {
+            case .subtitles:
                 subtitleList(entry)
+            case .collections:
+                EntryCollectionsList(entryId: entryId) { sec in
+                    vm.seekTo(seconds: sec)
+                }
             }
         }
     }

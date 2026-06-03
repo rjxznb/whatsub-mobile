@@ -50,6 +50,12 @@ final class LibraryDetailViewModel: ObservableObject {
         seek = SeekRequest(seconds: cue.time, nonce: UUID())
     }
 
+    /// Seek by raw second (used by EntryCollectionsList — corpus phrases
+    /// store timestampSec, not full Cue references).
+    func seekTo(seconds: Double) {
+        seek = SeekRequest(seconds: seconds, nonce: UUID())
+    }
+
     func showHighlight(word: String, note: String?, translation: String?) {
         popupWord = word; popupNote = note; popupTranslation = translation; showPopup = true
     }
