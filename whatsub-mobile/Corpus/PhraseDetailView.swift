@@ -66,21 +66,20 @@ struct PhraseDetailView: View {
             if let t = c.source.title, !t.isEmpty {
                 Text(t).font(.caption).foregroundStyle(.whatsubInkMuted).lineLimit(1)
             }
-            // YouTube source with a timestamp → inline embed seeked to it.
-            // (Stage-1 of the corpus refactor 2026-06-03 made CorpusSource.url
-            // optional. extractYouTubeID nil-coalesces to "".)
-            if c.source.kind == "youtube",
-               let vid = extractYouTubeID(c.source.url ?? "") {
+            // Source-aware player routing (Stage 2 of the corpus refactor,
+            // 2026-06-03). Library kind → OSS AVPlayer with YT-embed fallback;
+            // youtube kind → YT embed; webpage/manual → Safari link.
+            //
+            // Click-to-load: only instantiate the player when the user taps
+            // "▶ 播放". WKWebView for YouTube alone is 40-80 MB, and a corpus
+            // detail page can list 10+ instances — eager-loading all of them
+            // is a memory disaster. (Was also true before this change but
+            // worse now since OSS AVPlayer needs a backend round-trip.)
+            if c.source.kind == "library" || c.source.kind == "youtube" {
                 if playing?.id == c.id {
-                    YouTubeEmbedView(
-                        videoId: vid,
-                        seek: nil,
-                        onReady: {},
-                        onTime: { _ in },
-                        startSeconds: c.source.timestampSec
-                    )
-                    .aspectRatio(16.0/9.0, contentMode: .fit)
-                    .background(Color.black)
+                    PhrasePlayerView(source: c.source)
+                        .aspectRatio(16.0/9.0, contentMode: .fit)
+                        .background(Color.black)
                 } else {
                     sourceButton(icon: "play.circle.fill",
                                  label: c.source.timestampSec.map { "▶ 在 \(mmss($0)) 播放" } ?? "▶ 播放") {
