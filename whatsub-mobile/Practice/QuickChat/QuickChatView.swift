@@ -103,6 +103,20 @@ struct QuickChatView: View {
                     }
                     Spacer(minLength: 0)
                 }
+                // First-turn loading overlay (2026-06-03): the opening AI
+                // turn typically takes 2-5 s for the DeepSeek round-trip
+                // before TTS starts. Without this overlay the user sees a
+                // silent orb showing nothing (orb's .thinking visual is
+                // subtle), can't press it (gesture is guarded on
+                // vm.phase == .idle), and concludes the app is broken.
+                // Show an explicit loading screen until the first dialog
+                // text arrives.
+                if vm.turns.isEmpty || (vm.turns.first?.assistantText.isEmpty == true) {
+                    firstTurnLoadingOverlay
+                        .transition(.opacity)
+                        .animation(.easeOut(duration: 0.2),
+                                   value: vm.turns.first?.assistantText.isEmpty)
+                }
                 if vm.phase == .done {
                     QuickChatSummaryView(
                         phrases: phrases,
@@ -280,6 +294,30 @@ struct QuickChatView: View {
     }
 
     // ---- derived state ----
+
+    /// Full-screen overlay shown while we wait for the first AI turn (the
+    /// opening scene). Sits on top of the orb area so the user can't try to
+    /// press the not-yet-ready orb. Auto-dismisses the moment the first
+    /// dialogue chunk arrives (turns[0].assistantText becomes non-empty).
+    private var firstTurnLoadingOverlay: some View {
+        ZStack {
+            Color.whatsubBg.ignoresSafeArea()
+            VStack(spacing: 22) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.whatsubAccent)
+                    .scaleEffect(1.6)
+                Text("AI 正在准备开场…")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.whatsubInk)
+                Text("第一次进入需要 2-5 秒，准备好就开始对话")
+                    .font(.footnote)
+                    .foregroundStyle(.whatsubInkMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+        }
+    }
 
     private var orbState: VoiceOrbView.OrbState {
         // In push-to-talk mode, the press gesture is the source of truth.

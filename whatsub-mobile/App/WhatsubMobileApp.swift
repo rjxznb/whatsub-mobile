@@ -72,6 +72,14 @@ struct ContentView: View {
                 AuthGateView()
             }
         }
+        // (2026-06-03) Don't BLOCK app entry on a network refresh — without
+        // internet, the URLSession.data(for:) call inside refreshMe() hangs
+        // for ~60 s until it times out, and the splash stays up the entire
+        // time. The standard pattern for offline-aware apps: have a session
+        // → enter UI immediately, refresh in the background, fall back to
+        // cached `currentUser` if the network call fails. App Review tests
+        // offline launch behavior + would flag the 60s freeze as a 4.0
+        // ("Apps may not freeze on launch") rejection.
         .task(id: appState.isAuthenticated) {
             guard appState.isAuthenticated else { gateReady = false; return }
             store.reportVerifiedJWS = { jws in
@@ -80,8 +88,13 @@ struct ContentView: View {
                 await appState.refreshMe()
             }
             store.start()
-            await appState.refreshMe()
+            // Enter UI right away. The detached Task refreshes /me in the
+            // background — UI shows mainTabs with the cached `currentUser`
+            // (last known entitlements) while it runs, and the @Published
+            // currentUser update from a successful refresh trickles into
+            // dependent views on its own.
             gateReady = true
+            Task { await appState.refreshMe() }
         }
     }
 

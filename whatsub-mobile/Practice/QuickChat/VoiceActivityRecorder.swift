@@ -80,6 +80,14 @@ final class VoiceActivityRecorder {
     private var silentSinceMs: Int = 0
     private var peakSinceOnset: Float = -100
     private var lastPartialText: String = ""
+    /// Segments SFSpeechRecognizer has finalized so far (it auto-finalizes
+    /// after long silences, treating the next utterance as a fresh segment
+    /// — each segment's `bestTranscription.formattedString` only covers
+    /// its own audio, NOT a cumulative full transcript). We accumulate
+    /// finalized segments here so a pause-then-resume doesn't lose the
+    /// earlier half of what the user said. Caller sees the concatenation
+    /// of finalizedSegments + lastPartialText.
+    private var finalizedSegments: [String] = []
     private var lastPartialChangedAt: Date?
     private var finished: Bool = false
 
@@ -125,9 +133,13 @@ final class VoiceActivityRecorder {
 
         // ASR (live, partial-stream). Force on-device when supported so we
         // don't ship audio to Apple's servers + so it works without VPN.
+        // taskHint .dictation reduces the recognizer's eagerness to
+        // auto-segment on natural pauses (it's the right hint for long-form
+        // free speech; .search and .confirmation cut more aggressively).
         recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        request.taskHint = .dictation
         if recognizer?.supportsOnDeviceRecognition == true {
             request.requiresOnDeviceRecognition = true
         }
@@ -136,9 +148,10 @@ final class VoiceActivityRecorder {
             // Tap callbacks land on a non-MainActor queue. Hop to MainActor
             // for the partial-stability update so the VAD state is single-
             // threaded with the audio-buffer processing.
-            let text = result?.bestTranscription.formattedString ?? ""
+            let text    = result?.bestTranscription.formattedString ?? ""
+            let isFinal = result?.isFinal ?? false
             Task { @MainActor in
-                self?.handlePartialResult(text)
+                self?.handlePartialResult(text, isFinal: isFinal)
             }
         }
 
@@ -166,6 +179,7 @@ final class VoiceActivityRecorder {
         peakSinceOnset = -100
         lastPartialText = ""
         lastPartialChangedAt = nil
+        finalizedSegments = []
         finished = false
     }
 
@@ -212,16 +226,39 @@ final class VoiceActivityRecorder {
     // MARK: - Live transcript capture (no endpointing — caller drives end)
 
     @MainActor
-    private func handlePartialResult(_ text: String) {
-        // Push-to-talk: just stash the latest transcript. End-of-turn is
-        // user-driven via the orb release, NOT ASR-stability-driven (that
-        // logic was in builds 233-236 alongside the VAD endpointer; removed
-        // in 237+). We keep recording until endRecording() is called.
+    private func handlePartialResult(_ text: String, isFinal: Bool) {
+        // Push-to-talk: end-of-turn is user-driven via the orb release.
+        // We stash partial results AND watch for SFSpeechRecognizer's
+        // own internal segment finalization (it auto-finalizes on long
+        // silences within the same task — each `result` after that point
+        // covers a NEW segment of audio, not the cumulative recording).
+        // To prevent pause-then-resume from clobbering the earlier half
+        // of what the user said, we drain finalized segments into
+        // `finalizedSegments` and reset the partial buffer.
         guard !finished else { return }
+
+        if isFinal {
+            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty { finalizedSegments.append(cleaned) }
+            lastPartialText = ""
+            lastPartialChangedAt = Date()
+            return
+        }
+
         if text != lastPartialText {
             lastPartialText = text
             lastPartialChangedAt = Date()
         }
+    }
+
+    /// Caller-visible transcript = all finalized segments joined + the
+    /// running partial. We never lose the early half of the utterance
+    /// even if the recognizer auto-segmented on a mid-sentence pause.
+    private var accumulatedTranscript: String {
+        var parts = finalizedSegments
+        let trimmedPartial = lastPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPartial.isEmpty { parts.append(trimmedPartial) }
+        return parts.joined(separator: " ")
     }
 
     // MARK: - Termination
@@ -232,7 +269,7 @@ final class VoiceActivityRecorder {
     private func endTurn(reason: EndReason) {
         guard !finished else { return }
         finished = true
-        let transcript = lastPartialText
+        let transcript = accumulatedTranscript
         let url = fileURL
         teardown()
         onSpeechEnded?(transcript, url)
@@ -247,6 +284,25 @@ final class VoiceActivityRecorder {
         recognitionRequest = nil
         recognitionTask = nil
         audioFile = nil
+
+        // (2026-06-03) Hand the audio session BACK to playback. While we were
+        // recording we set `.playAndRecord` + `.measurement` mode — measurement
+        // mode disables iOS's playback signal processing (it's the right pick
+        // for honest dBFS reads during recording), and crucially keeps the
+        // OUTPUT routed through the earpiece-friendly low-volume path. If we
+        // leave the session in that state when AVSpeechSynthesizer takes over
+        // for the AI reply, the TTS plays back noticeably quieter. Switching
+        // to `.playback` + `.spokenAudio` after each recording restores
+        // normal-loud playback for the AI turn.
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playback, mode: .spokenAudio, options: [.duckOthers]
+            )
+            try AVAudioSession.sharedInstance().setActive(true, options: [])
+        } catch {
+            // Best-effort. If this fails the user can still hear the AI,
+            // just at the muted measurement-mode level.
+        }
     }
 
     // MARK: - Helpers
