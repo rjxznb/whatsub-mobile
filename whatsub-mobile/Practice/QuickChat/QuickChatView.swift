@@ -90,12 +90,28 @@ struct QuickChatView: View {
                         onReport: { ReportMessageSheet.openMailReport(message: $0) }
                     )
                     Spacer().frame(height: 12)
-                    Text(statusText)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.whatsubInkMuted)
-                        .frame(minHeight: 22)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
+                    // Live ASR transcript: while the user is holding the orb
+                    // and there's already partial text, show that in place of
+                    // the status hint so the user can verify their words are
+                    // being captured in real time. The transcript text auto-
+                    // wraps with growing height — keeps the layout clean and
+                    // gives the user a clear signal "I'm hearing you say X".
+                    if isOrbPressed && !vadCoordinator.liveTranscript.isEmpty {
+                        Text(vadCoordinator.liveTranscript)
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.whatsubInk)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                            .frame(minHeight: 22)
+                            .transition(.opacity)
+                    } else {
+                        Text(statusText)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.whatsubInkMuted)
+                            .frame(minHeight: 22)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
                     if case .error(let msg) = vm.phase {
                         errorBanner(msg)
                             .padding(.top, 8)
@@ -348,26 +364,34 @@ struct QuickChatView: View {
     }
 
     // ---- chips ----
+    // Builds 237+ wrap the row in a horizontal ScrollView and drop the
+    // truncation marker. Long phrases (e.g. "speak louder so that it can
+    // hear you better") used to render as "speak louder s…" with no way
+    // to see the rest; user can now swipe to see the full chip text in
+    // one swipe. Tap-to-open-detail-card is still wired below.
     private var headerChips: some View {
-        HStack(spacing: 8) {
-            ForEach(phrases) { p in
-                Button { stuckPhrase = p } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: vm.completedPhrases.contains(p.phraseNormalized) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(vm.completedPhrases.contains(p.phraseNormalized) ? .green : .whatsubInkFaint)
-                        Text(p.phraseRaw)
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1).truncationMode(.tail)
-                            .foregroundStyle(.whatsubInk)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(phrases) { p in
+                    Button { stuckPhrase = p } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: vm.completedPhrases.contains(p.phraseNormalized) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(vm.completedPhrases.contains(p.phraseNormalized) ? .green : .whatsubInkFaint)
+                            Text(p.phraseRaw)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .foregroundStyle(.whatsubInk)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Capsule().fill(Color.whatsubBgElev))
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(Capsule().fill(Color.whatsubBgElev))
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, 16)
         }
-        .padding(.horizontal, 16).padding(.bottom, 4)
+        .padding(.bottom, 4)
     }
 
     // ---- bottom controls (voice-only, builds 237+) ----
@@ -508,6 +532,9 @@ final class VADCoordinator: ObservableObject {
     @Published var speechActive: Bool = false
     /// Smoothed 0..1 audio level for the orb's real-time pulse.
     @Published var audioLevel: Float = 0
+    /// Live partial transcript while the user is talking — used by the view
+    /// to render "what you're saying" in real time. Cleared on start().
+    @Published var liveTranscript: String = ""
     private let recorder = VoiceActivityRecorder()
     /// Fast attack — when voice rises, EMA snaps up in 1-2 frames (~30-60ms).
     /// User feedback wanted dramatic + immediate response when they start speaking.
@@ -520,6 +547,7 @@ final class VADCoordinator: ObservableObject {
                onSpeechEnded: @escaping (_ transcript: String, _ backupURL: URL?) -> Void,
                onNoSpeechTimeout: @escaping () -> Void) {
         speechActive = false
+        liveTranscript = ""
         recorder.onSpeechDetected = { [weak self] in
             Task { @MainActor in
                 self?.speechActive = true
@@ -530,6 +558,7 @@ final class VADCoordinator: ObservableObject {
             Task { @MainActor in
                 self?.speechActive = false
                 self?.audioLevel = 0
+                self?.liveTranscript = ""
                 onSpeechEnded(transcript, backupURL)
             }
         }
@@ -537,6 +566,7 @@ final class VADCoordinator: ObservableObject {
             Task { @MainActor in
                 self?.speechActive = false
                 self?.audioLevel = 0
+                self?.liveTranscript = ""
                 onNoSpeechTimeout()
             }
         }
@@ -546,6 +576,11 @@ final class VADCoordinator: ObservableObject {
                 // Asymmetric envelope: fast on rise (dramatic), slow on fall (smooth).
                 let alpha = raw > self.audioLevel ? self.attackAlpha : self.releaseAlpha
                 self.audioLevel = (1 - alpha) * self.audioLevel + alpha * raw
+            }
+        }
+        recorder.onPartialTranscript = { [weak self] text in
+            Task { @MainActor in
+                self?.liveTranscript = text
             }
         }
         do {

@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// Pre-session launcher. Lets the user (1) pick phrases — auto-3 by default,
-/// or manually select up to maxManualPicks of their own — and (2) set the
-/// conversation turn cap (3, 5, 10, or unlimited). Tap 开始对话 to construct
-/// a `Plan` and hand off to QuickChatView.
+/// Pre-session launcher. Builds 237+ dropped the manual phrase-pick mode
+/// (user feedback 2026-06-03: the segmented control + checkbox list was
+/// noise; smart auto-pick is the right default for spaced-repetition
+/// practice). What remains: an explanatory "what this is + how it works"
+/// hero that doubles as onboarding, the turn-cap picker, the start button.
 struct QuickChatLauncherView: View {
     let mine: [MineItem]
     /// Called when user taps 「开始对话」 with the final pick + turn cap.
@@ -12,13 +13,8 @@ struct QuickChatLauncherView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    enum Mode: String, CaseIterable { case auto, manual }
-
-    @State private var mode: Mode = .auto
     @State private var turnChoice: TurnChoice = .five
-    @State private var selectedKeys: Set<String> = []
     @AppStorage("quickchat.last-turn-choice") private var savedTurnChoice: String = TurnChoice.five.rawValue
-    @State private var showIntro: Bool = false
     @State private var startFailureMessage: String? = nil
 
     enum TurnChoice: String, CaseIterable, Identifiable {
@@ -38,17 +34,13 @@ struct QuickChatLauncherView: View {
         }
     }
 
-    /// Manual mode cap on selections.
-    private let maxManualPicks = 5
-    /// Manual mode minimum.
-    private let minManualPicks = 2
-
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    modeSection
-                    if mode == .manual { manualSection }
+                    heroExplainer
+                    workflowSteps
+                    selectorRules
                     turnsSection
                     Color.clear.frame(height: 80)   // room above the floating start button
                 }
@@ -61,16 +53,6 @@ struct QuickChatLauncherView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button { showIntro = true } label: {
-                        Image(systemName: "questionmark.circle")
-                            .foregroundStyle(.whatsubAccent)
-                    }
-                    .accessibilityLabel("使用教程")
-                }
-            }
-            .sheet(isPresented: $showIntro) {
-                QuickChatIntroView()
             }
             .overlay(alignment: .bottom) { startButton }
             .alert("无法开始", isPresented: Binding(
@@ -85,95 +67,112 @@ struct QuickChatLauncherView: View {
                 if let saved = TurnChoice(rawValue: savedTurnChoice) {
                     turnChoice = saved
                 }
-                if !QuickChatIntroView.hasAcknowledged {
-                    showIntro = true
-                }
             }
         }
     }
 
-    // ---- mode segmented control ----
-    private var modeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("选词").font(.caption).foregroundStyle(.whatsubInkFaint)
-            Picker("", selection: $mode) {
-                Text("随机抽 3 个").tag(Mode.auto)
-                Text("自选").tag(Mode.manual)
-            }
-            .pickerStyle(.segmented)
-            if mode == .auto {
-                Text("系统挑「认得了但还没说会」的 3 个短语，配一个能容下它们的小情景。")
-                    .font(.caption).foregroundStyle(.whatsubInkMuted)
+    // MARK: - Hero ("what is this")
+
+    private var heroExplainer: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(.whatsubAccent)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("AI 英语口语陪练")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.whatsubInk)
+                Text("用你「认得了但还没说会」的 3 个短语跟 AI 演一段小情景对话，把被动认知变成主动开口。")
+                    .font(.footnote)
+                    .foregroundStyle(.whatsubInkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.whatsubBgElev))
     }
 
-    // ---- manual phrase list ----
-    private var manualSection: some View {
+    // MARK: - Workflow (4 steps)
+
+    private var workflowSteps: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("选 \(minManualPicks)–\(maxManualPicks) 个短语")
-                    .font(.caption).foregroundStyle(.whatsubInkFaint)
-                Spacer()
-                Text("\(selectedKeys.count) / \(maxManualPicks)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(selectedKeys.count >= minManualPicks ? .whatsubAccent : .whatsubInkMuted)
-            }
-            if mine.isEmpty {
-                Text("个人语料库还没有短语，先用插件划词收藏几个。")
-                    .font(.footnote).foregroundStyle(.whatsubInkMuted)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgElev))
-            } else {
-                VStack(spacing: 6) {
-                    ForEach(mine) { item in phraseRow(item) }
-                }
+            Text("怎么用").font(.caption).foregroundStyle(.whatsubInkFaint)
+            VStack(alignment: .leading, spacing: 12) {
+                workflowRow(
+                    number: 1,
+                    title: "AI 起情景",
+                    detail: "系统挑 3 个短语，AI 编一个能自然装下它们的小场景，先用英文开个头。"
+                )
+                workflowRow(
+                    number: 2,
+                    title: "长按球说话",
+                    detail: "按住中间的圆球用英语回应，松开发送。语音实时识别，不用打字。"
+                )
+                workflowRow(
+                    number: 3,
+                    title: "AI 听完接话",
+                    detail: "AI 顺着情景接对白，并实时记录每个目标短语「试了没 / 对没」。"
+                )
+                workflowRow(
+                    number: 4,
+                    title: "更新掌握度",
+                    detail: "全部说对或对话结束后自动收尾，把成功使用的短语标记为「会说了」并进入复习间隔。"
+                )
             }
         }
     }
 
-    private func phraseRow(_ item: MineItem) -> some View {
-        let isSelected = selectedKeys.contains(item.phraseNormalized)
-        let isAtCap = !isSelected && selectedKeys.count >= maxManualPicks
-        return Button {
-            togglePick(item.phraseNormalized)
-        } label: {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? Color.whatsubAccent : Color.whatsubInkFaint)
-                    .font(.title3)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.phraseRaw)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.whatsubInk)
-                    if let meaning = item.meaningZh, !meaning.isEmpty {
-                        Text(meaning)
-                            .font(.caption)
-                            .foregroundStyle(.whatsubInkMuted)
-                            .lineLimit(1).truncationMode(.tail)
-                    }
-                }
-                Spacer(minLength: 0)
+    private func workflowRow(number: Int, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(number)")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.black)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color.whatsubAccent))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.whatsubInk)
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.whatsubInkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: - Selector rules ("how phrases are chosen")
+
+    private var selectorRules: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("怎么选短语").font(.caption).foregroundStyle(.whatsubInkFaint)
+            VStack(alignment: .leading, spacing: 6) {
+                bullet("优先「认得了但还没说会」（单词卡测验通过、口语未掌握）")
+                bullet("其次「该复习的」（之前会说，但到了间隔复习窗口）")
+                bullet("最后「还不认得的」（同场景能顺便练上）")
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgElev))
-            .opacity(isAtCap ? 0.4 : 1)
-        }
-        .buttonStyle(.plain)
-        .disabled(isAtCap)
-    }
-
-    private func togglePick(_ key: String) {
-        if selectedKeys.contains(key) {
-            selectedKeys.remove(key)
-        } else if selectedKeys.count < maxManualPicks {
-            selectedKeys.insert(key)
         }
     }
 
-    // ---- turn picker ----
+    private func bullet(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("•")
+                .font(.footnote)
+                .foregroundStyle(.whatsubAccent)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.whatsubInkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Turn picker
+
     private var turnsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("对话轮数").font(.caption).foregroundStyle(.whatsubInkFaint)
@@ -190,7 +189,8 @@ struct QuickChatLauncherView: View {
         }
     }
 
-    // ---- start button (floating at bottom) ----
+    // MARK: - Start button (floating)
+
     @ViewBuilder
     private var startButton: some View {
         Button { handleStart() } label: {
@@ -212,65 +212,35 @@ struct QuickChatLauncherView: View {
     }
 
     private var canStart: Bool {
-        switch mode {
-        case .auto: return mine.count >= 3   // need ≥3 for auto-pick to succeed
-        case .manual: return selectedKeys.count >= minManualPicks
-        }
+        mine.count >= 3   // need ≥3 in corpus for auto-pick to succeed
     }
 
-    // ---- handler ----
+    // MARK: - Start handler
+
     private func handleStart() {
         savedTurnChoice = turnChoice.rawValue
+
+        let prodStore = ProductionProgressStore()
+        let quizStore = QuizProgressStore()
+        let smart = PhraseSelector.pick(
+            from: mine,
+            isRecognized: { quizStore.progress(for: $0).isMastered },
+            productionMastered: { prodStore.progress(for: $0)?.masteredAt != nil },
+            isDueForRepetition: { prodStore.isDueForRepetition(phrase: $0, now: Date().timeIntervalSince1970) },
+            now: Date().timeIntervalSince1970
+        )
+
+        // Smart selector can return nil when the user's corpus is mostly
+        // recently mastered (spaced-repetition window still open → all
+        // candidates filtered as .excluded → fewer than 3 left). Fall
+        // back to a literal random pick — keeps the launcher honest
+        // ("随机选 3 个" is what the user sees).
         let pick: PhraseSelector.Pick?
-        switch mode {
-        case .auto:
-            let prodStore = ProductionProgressStore()
-            let quizStore = QuizProgressStore()
-            let smart = PhraseSelector.pick(
-                from: mine,
-                isRecognized: { quizStore.progress(for: $0).isMastered },
-                productionMastered: { prodStore.progress(for: $0)?.masteredAt != nil },
-                isDueForRepetition: { prodStore.isDueForRepetition(phrase: $0, now: Date().timeIntervalSince1970) },
-                now: Date().timeIntervalSince1970
-            )
-            // Smart selector can return nil when the user's corpus is mostly
-            // recently mastered (spaced-repetition window still open → all
-            // candidates filtered as .excluded → fewer than 3 left). The
-            // button label says "随机抽 3 个" so falling back to a literal
-            // random pick is on-brand AND prevents the silent-no-op bug the
-            // user reported (2026-06-02). canStart already guarantees
-            // mine.count >= 3 so the prefix(3) is safe.
-            if let smart {
-                pick = smart
-            } else if mine.count >= 3 {
-                let shuffled = Array(mine.shuffled().prefix(3))
-                let sessionPhrases = shuffled.map { m in
-                    SessionPhrase(
-                        phraseNormalized: m.phraseNormalized,
-                        phraseRaw: m.phraseRaw,
-                        meaningZh: m.meaningZh,
-                        usageNote: m.usageNote,
-                        contextSentence: m.contextSentence,
-                        sourceKind: m.source.kind,
-                        sourceURL: m.source.url,
-                        sourceTimestampSec: m.source.timestampSec,
-                        tags: m.tags
-                    )
-                }
-                var tagCounts: [String: Int] = [:]
-                for p in shuffled { for t in p.tags { tagCounts[t, default: 0] += 1 } }
-                let majority = (shuffled.count / 2) + 1
-                let dominant = tagCounts.filter { $0.value >= majority }.max(by: { $0.value < $1.value })?.key
-                pick = PhraseSelector.Pick(phrases: sessionPhrases, suggestedTag: dominant)
-            } else {
-                pick = nil
-            }
-        case .manual:
-            // Build a Pick directly from the user's picks. suggestedTag = the
-            // most common tag among picks (if any 2+ share one) so the LLM
-            // gets a scene hint; otherwise nil = LLM invents.
-            let picked = mine.filter { selectedKeys.contains($0.phraseNormalized) }
-            let sessionPhrases = picked.map { m in
+        if let smart {
+            pick = smart
+        } else if mine.count >= 3 {
+            let shuffled = Array(mine.shuffled().prefix(3))
+            let sessionPhrases = shuffled.map { m in
                 SessionPhrase(
                     phraseNormalized: m.phraseNormalized,
                     phraseRaw: m.phraseRaw,
@@ -283,21 +253,23 @@ struct QuickChatLauncherView: View {
                     tags: m.tags
                 )
             }
-            // Find a dominant tag (>= half of picks share it).
             var tagCounts: [String: Int] = [:]
-            for p in picked { for t in p.tags { tagCounts[t, default: 0] += 1 } }
-            let majority = (picked.count / 2) + 1
+            for p in shuffled { for t in p.tags { tagCounts[t, default: 0] += 1 } }
+            let majority = (shuffled.count / 2) + 1
             let dominant = tagCounts.filter { $0.value >= majority }.max(by: { $0.value < $1.value })?.key
             pick = PhraseSelector.Pick(phrases: sessionPhrases, suggestedTag: dominant)
+        } else {
+            pick = nil
         }
+
         guard let pick else {
             startFailureMessage = "至少需要 3 个个人语料库短语才能开启对话陪练。先去「语料库」收藏一些再回来试试。"
             return
         }
         dismiss()
-        // Defer onStart slightly so the launcher sheet fully dismisses before the
-        // QuickChatView sheet presents — SwiftUI gets confused when two sheets
-        // try to swap simultaneously.
+        // Defer onStart slightly so the launcher sheet fully dismisses before
+        // QuickChatView's sheet presents — SwiftUI gets confused when two
+        // sheets try to swap simultaneously.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             onStart(pick, turnChoice.cap)
         }

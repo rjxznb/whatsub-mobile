@@ -116,6 +116,11 @@ final class VoiceActivityRecorder {
     /// Fires every audio buffer (~60 ms) with a normalized 0..1 amplitude.
     /// Drives real-time orb reactivity in the view.
     var onLevelUpdate: ((Float) -> Void)?
+    /// Fires whenever the live ASR partial transcript changes (or a
+    /// finalized segment lands). The transcript is the FULL accumulated
+    /// utterance so far (finalized segments + current partial joined).
+    /// Used by the view to render a real-time "what you're saying" line.
+    var onPartialTranscript: ((String) -> Void)?
 
     // MARK: - Lifecycle
 
@@ -274,12 +279,14 @@ final class VoiceActivityRecorder {
             if !cleaned.isEmpty { finalizedSegments.append(cleaned) }
             lastPartialText = ""
             lastPartialChangedAt = Date()
+            onPartialTranscript?(accumulatedTranscript)
             return
         }
 
         if text != lastPartialText {
             lastPartialText = text
             lastPartialChangedAt = Date()
+            onPartialTranscript?(accumulatedTranscript)
         }
     }
 
