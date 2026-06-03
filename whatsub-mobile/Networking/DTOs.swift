@@ -210,6 +210,63 @@ struct CorpusQuota: Decodable {
     let limit: Int
 }
 
+/// Structured `source` for POST /api/corpus/contribute. Backend stores this
+/// as JSONB and never validates the shape — any keys we add here just flow
+/// through. Wire shape per kind:
+///
+///   kind="library"  — phrase came from a Library video's subtitle reader
+///     libraryEntryId: required; primary play path (resolves to OSS AVPlayer
+///                     via GET /library/entry/:id).
+///     youtubeId: optional; written when the Library video originated from
+///                YouTube so the display layer can fall back to YT embed if
+///                the Library entry is later deleted.
+///     timestampSec: subtitle cue start time.
+///     url: optional canonical original (youtu.be/<id> or web URL).
+///     title: video title for display headers.
+///
+///   kind="youtube" — phrase came from a raw YouTube URL (e.g. desktop import
+///                    that wasn't synced into Library).
+///     url: youtube URL.
+///     youtubeId: optional convenience extracted from url.
+///     timestampSec: optional.
+///     title: optional.
+///
+///   kind="webpage" — manual entry pasting a non-video URL.
+///     url, title.
+///
+///   kind="manual"  — typed phrase without any source context.
+///     (all optional)
+///
+struct PhraseSource: Encodable {
+    let kind: String
+    let url: String?
+    let title: String?
+    let timestampSec: Double?
+    let libraryEntryId: String?
+    let youtubeId: String?
+
+    /// Convenience: build a Library-video source from a CollectSheet context.
+    static func library(entryId: String,
+                        videoTitle: String,
+                        youtubeId: String?,
+                        timestampSec: Double?) -> PhraseSource {
+        PhraseSource(
+            kind: "library",
+            url: youtubeId.map { "https://youtu.be/\($0)" },
+            title: videoTitle,
+            timestampSec: timestampSec,
+            libraryEntryId: entryId,
+            youtubeId: youtubeId
+        )
+    }
+
+    /// Convenience: manual entry (current AddCorpusPhraseView default).
+    static func webpage(url: String) -> PhraseSource {
+        PhraseSource(kind: "webpage", url: url, title: nil, timestampSec: nil,
+                     libraryEntryId: nil, youtubeId: nil)
+    }
+}
+
 struct LibraryEntryDetail: Decodable {
     let id: String
     let youtubeId: String
@@ -246,10 +303,21 @@ struct CorpusTagsResponse: Decodable { let tags: [CorpusTag] }
 /// A contribution's source. JSONB written by the plugin — camelCase on the wire
 /// in BOTH /mine and /lookup. Only `youtube` carries `timestampSec`.
 struct CorpusSource: Codable {
-    let kind: String   // youtube | webpage | pdf | curator
-    let url: String
+    let kind: String   // library | youtube | webpage | pdf | curator | manual
+    /// Canonical URL of the original source. Optional because Library
+    /// (post-builds-247) phrases may not have one if the OSS entry was
+    /// from a non-YouTube origin (e.g. Bilibili import) — those rely on
+    /// `libraryEntryId` for primary playback, no URL fallback.
+    let url: String?
     let title: String?
     let timestampSec: Double?
+    /// Library entry id when kind == "library". Resolves to OSS AVPlayer
+    /// via GET /api/library/entry/:id. Absent for legacy phrases (decoded as nil).
+    let libraryEntryId: String?
+    /// YouTube id — present when kind == "youtube" OR when kind == "library"
+    /// AND the underlying entry originated from YouTube (fallback if the
+    /// Library entry is later deleted).
+    let youtubeId: String?
 }
 
 /// /browse phrase — snake_case, phrase-level (no per-instance source).

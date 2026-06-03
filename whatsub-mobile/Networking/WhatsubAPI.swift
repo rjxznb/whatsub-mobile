@@ -195,12 +195,14 @@ actor WhatsubAPI {
 
     /// POSTs a new phrase to /api/corpus/contribute. Returns the new contribution id.
     /// Throws APIError on quota/rate-limit/blocklist/network errors.
+    ///
+    /// `source` is a structured PhraseSource — see DTOs.swift for the per-kind
+    /// shape. Backend stores it as JSONB so any optional fields we don't set
+    /// just don't appear on the wire (handled by JSONEncoder default omission).
     func contributePhrase(
         phraseRaw: String,
         contextSentence: String,
-        sourceKind: String,
-        sourceURL: String,
-        sourceTitle: String?,
+        source: PhraseSource,
         meaningZh: String?,
         usageNote: String?,
         tags: [String],
@@ -213,13 +215,15 @@ actor WhatsubAPI {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 30
 
-        var source: [String: Any] = ["kind": sourceKind, "url": sourceURL]
-        if let title = sourceTitle, !title.isEmpty { source["title"] = title }
+        // Encode source via the Encodable shape so unset Optionals just drop
+        // (avoids the [String:Any] casting dance of earlier builds).
+        let sourceData = try JSONEncoder().encode(source)
+        let sourceObj = (try? JSONSerialization.jsonObject(with: sourceData) as? [String: Any]) ?? [:]
 
         var body: [String: Any] = [
             "phraseRaw": phraseRaw,
             "contextSentence": contextSentence,
-            "source": source,
+            "source": sourceObj,
             "tags": tags,
         ]
         if let m = meaningZh, !m.isEmpty { body["meaningZh"] = m }

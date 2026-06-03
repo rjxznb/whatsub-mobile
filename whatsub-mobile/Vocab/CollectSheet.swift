@@ -10,18 +10,28 @@ struct CollectSheet: View {
     let cue: Cue
     let entryId: String
     let videoTitle: String
+    /// The Library entry's YouTube origin id, if any. Recorded into source as
+    /// `youtubeId` so the display layer can fall back to a YT embed if the
+    /// Library entry is later deleted (the OSS object is gone, but the
+    /// original YouTube video usually still exists). Pass nil for non-YT
+    /// Library origins (e.g. Bilibili imports) — fallback won't be available.
+    let youtubeId: String?
 
+    @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     private let tokens: [String]
     @State private var selected: Set<Int> = []
     @State private var note = ""
     @State private var aiLoading = false
     @State private var aiError: String?
+    @State private var submitting: Bool = false
+    @State private var saveError: String? = nil
 
-    init(cue: Cue, entryId: String, videoTitle: String) {
+    init(cue: Cue, entryId: String, videoTitle: String, youtubeId: String?) {
         self.cue = cue
         self.entryId = entryId
         self.videoTitle = videoTitle
+        self.youtubeId = youtubeId
         self.tokens = cue.text.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
     }
 
@@ -62,17 +72,27 @@ struct CollectSheet: View {
             }
             .scrollDismissesKeyboard(.immediately)   // scrolling hides the keyboard
             .background(Color.whatsubBg.ignoresSafeArea())
-            .navigationTitle("收藏到词汇本")
+            .navigationTitle("收藏到语料库")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(submitting) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(hasSelection ? "加入" : "加入整句") { save() }.fontWeight(.semibold)
+                    Button(submitting ? "加入中…" : (hasSelection ? "加入" : "加入整句")) { save() }
+                        .fontWeight(.semibold)
+                        .disabled(submitting)
                 }
                 ToolbarItemGroup(placement: .keyboard) {   // explicit dismiss above the keyboard
                     Spacer()
                     Button("完成") { hideKeyboard() }
                 }
+            }
+            .alert("保存失败", isPresented: Binding(
+                get: { saveError != nil },
+                set: { if !$0 { saveError = nil } }
+            )) {
+                Button("好的", role: .cancel) { saveError = nil }
+            } message: {
+                Text(saveError ?? "")
             }
         }
     }
@@ -224,16 +244,50 @@ struct CollectSheet: View {
     }
 
     private func save() {
-        let item = VocabItem(
-            phrase: phraseToSave,
-            sentenceEn: cue.text,
-            translationZh: cue.translation,
-            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
-            cueIndex: cue.index,
-            sourceTitle: videoTitle
+        guard let token = appState.session?.sessionToken else {
+            saveError = "请先登录"
+            return
+        }
+        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let phrase = phraseToSave
+        let context = cue.text
+        let translation = cue.translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source: PhraseSource = .library(
+            entryId: entryId,
+            videoTitle: videoTitle,
+            youtubeId: youtubeId,
+            timestampSec: cue.time
         )
-        VocabStore.shared.add(item, to: entryId)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        dismiss()
+
+        submitting = true
+        saveError = nil
+        Task {
+            do {
+                _ = try await WhatsubAPI.shared.contributePhrase(
+                    phraseRaw: phrase,
+                    contextSentence: context,
+                    source: source,
+                    meaningZh: translation.isEmpty ? nil : translation,
+                    usageNote: trimmedNote.isEmpty ? nil : trimmedNote,
+                    tags: [],
+                    token: token
+                )
+                await MainActor.run {
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    submitting = false
+                    dismiss()
+                }
+            } catch let e as APIError {
+                await MainActor.run {
+                    saveError = e.chinese
+                    submitting = false
+                }
+            } catch {
+                await MainActor.run {
+                    saveError = "保存失败：\(error.localizedDescription)"
+                    submitting = false
+                }
+            }
+        }
     }
 }

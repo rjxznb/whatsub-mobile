@@ -67,8 +67,10 @@ struct PhraseDetailView: View {
                 Text(t).font(.caption).foregroundStyle(.whatsubInkMuted).lineLimit(1)
             }
             // YouTube source with a timestamp → inline embed seeked to it.
+            // (Stage-1 of the corpus refactor 2026-06-03 made CorpusSource.url
+            // optional. extractYouTubeID nil-coalesces to "".)
             if c.source.kind == "youtube",
-               let vid = extractYouTubeID(c.source.url) {
+               let vid = extractYouTubeID(c.source.url ?? "") {
                 if playing?.id == c.id {
                     YouTubeEmbedView(
                         videoId: vid,
@@ -88,7 +90,9 @@ struct PhraseDetailView: View {
             } else {
                 // webpage / pdf / curator → open the source URL in Safari.
                 sourceButton(icon: "safari", label: "打开来源") {
-                    if let u = URL(string: c.source.url) { safariURL = IdentifiedURL(url: u) }
+                    if let raw = c.source.url, let u = URL(string: raw) {
+                        safariURL = IdentifiedURL(url: u)
+                    }
                 }
             }
         }

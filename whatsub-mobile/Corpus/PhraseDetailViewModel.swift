@@ -19,7 +19,7 @@ final class PhraseDetailViewModel: ObservableObject {
         let combined = r.personalContributions + r.publicContributions
         var seen = Set<String>()
         return combined.filter { c in
-            let key = "\(c.contextSentence)|\(c.source.url)|\(c.contributedAt)"
+            let key = "\(c.contextSentence)|\(c.source.url ?? "")|\(c.contributedAt)"
             return seen.insert(key).inserted
         }
     }

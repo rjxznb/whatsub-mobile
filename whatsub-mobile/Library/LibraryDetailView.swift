@@ -108,7 +108,19 @@ struct LibraryDetailView: View {
             }
         }
         .sheet(item: $collectCue) { cue in
-            CollectSheet(cue: cue, entryId: entryId, videoTitle: vm.entry?.title ?? "")
+            // Pass youtubeId so the corpus contribution records a fallback
+            // for when this Library entry is later deleted (the OSS object
+            // goes away but the original YouTube video usually stays up).
+            // Non-YouTube Library entries (Bilibili imports) will still have
+            // a non-empty youtubeId field on the LibraryEntryDetail DTO; if
+            // that's actually a YT id we can fall back, otherwise the player
+            // just shows "video unavailable".
+            CollectSheet(
+                cue: cue,
+                entryId: entryId,
+                videoTitle: vm.entry?.title ?? "",
+                youtubeId: vm.entry?.youtubeId
+            )
         }
         .sheet(item: $glossWord) { g in
             GlossSheet(gloss: g)

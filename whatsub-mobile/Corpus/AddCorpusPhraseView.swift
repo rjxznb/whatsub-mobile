@@ -153,9 +153,7 @@ struct AddCorpusPhraseView: View {
             _ = try await WhatsubAPI.shared.contributePhrase(
                 phraseRaw: phraseRaw.trimmingCharacters(in: .whitespacesAndNewlines),
                 contextSentence: contextSentence.trimmingCharacters(in: .whitespacesAndNewlines),
-                sourceKind: "webpage",
-                sourceURL: url,
-                sourceTitle: nil,
+                source: .webpage(url: url),
                 meaningZh: meaningZh.trimmingCharacters(in: .whitespacesAndNewlines),
                 usageNote: usageNote.trimmingCharacters(in: .whitespacesAndNewlines),
                 tags: Array(selectedTags),

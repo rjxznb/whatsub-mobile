@@ -248,7 +248,7 @@ struct QuickChatLauncherView: View {
                     usageNote: m.usageNote,
                     contextSentence: m.contextSentence,
                     sourceKind: m.source.kind,
-                    sourceURL: m.source.url,
+                    sourceURL: m.source.url ?? "",
                     sourceTimestampSec: m.source.timestampSec,
                     tags: m.tags
                 )
