@@ -31,6 +31,10 @@ final class CorpusDecodeTests: XCTestCase {
         XCTAssertEqual(c.id, 7)
         XCTAssertEqual(c.source.kind, "youtube")
         XCTAssertEqual(c.source.timestampSec, 42)
-        XCTAssertEqual(extractYouTubeID(c.source.url), "abc12345678")
+        // source.url became Optional in the Stage 2 refactor (Library
+        // phrases may legitimately have no URL). The fixture under test
+        // is a YouTube phrase that DOES carry a url, so force-unwrap is
+        // safe + makes the failure mode obvious if the fixture regresses.
+        XCTAssertEqual(extractYouTubeID(c.source.url!), "abc12345678")
     }
 }
