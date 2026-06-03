@@ -550,8 +550,19 @@ final class VADCoordinator: ObservableObject {
         }
         do {
             try recorder.start()
+        } catch VoiceActivityError.audioHardwareNotReady {
+            // Hardware still settling from a category swap. Reset visible
+            // state — the user can press again in a moment. Silent fail
+            // here is correct: a banner would be jarring on a quick
+            // double-tap.
+            speechActive = false
+            audioLevel = 0
         } catch {
-            // Mic failed — silently abort; view will eventually time out / user will tap keyboard.
+            // Other startup failures (rare): also silent. The orb will go
+            // back to idle on the next gesture release and the user will
+            // see the "press me" label again.
+            speechActive = false
+            audioLevel = 0
         }
     }
 

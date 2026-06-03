@@ -28,6 +28,16 @@ import Speech
 /// Returns the recognized transcript directly via `onSpeechEnded` — the
 /// post-recording SFSpeechRecognizer call the view model used to do is no
 /// longer needed.
+/// Recoverable errors from `VoiceActivityRecorder.start()`. The caller can
+/// catch + surface a UI hint instead of crashing the whole app.
+enum VoiceActivityError: Error {
+    /// Mic input format came back with sampleRate ≤ 0 (typical right after
+    /// a session category swap from .playback back to .playAndRecord — the
+    /// hardware hasn't finished transitioning). Caller can retry after a
+    /// short delay or fall back to typing.
+    case audioHardwareNotReady(String)
+}
+
 final class VoiceActivityRecorder {
 
     // MARK: - Tunable thresholds (A + B parameters)
@@ -126,7 +136,29 @@ final class VoiceActivityRecorder {
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        msPerBuffer = max(20, Int((Double(1024) / format.sampleRate) * 1000))
+
+        // **CRASH GUARD** — observed in two production crash reports
+        // (2026-06-03 054921 + 123537): when the audio session transitions
+        // from .playback back to .playAndRecord, the inputNode's outputFormat
+        // can return a temporarily-invalid format with sampleRate == 0. The
+        // old code did `Int((1024.0 / 0.0) * 1000)` → +inf → Int conversion
+        // trap → SIGTRAP on the main thread inside the gesture callback.
+        // Reject cleanly so the caller can surface a "mic not ready" hint
+        // rather than the whole app dying.
+        guard format.sampleRate > 0,
+              format.sampleRate.isFinite,
+              format.channelCount > 0 else {
+            throw VoiceActivityError.audioHardwareNotReady(
+                "input format invalid (sampleRate=\(format.sampleRate), channels=\(format.channelCount))"
+            )
+        }
+
+        let perBufferSec = 1024.0 / format.sampleRate
+        let perBufferMs  = perBufferSec * 1000.0
+        // Cap the conversion to keep Int() from ever seeing an out-of-range
+        // value (belt + suspenders even after the format guard above).
+        msPerBuffer = max(20, min(2000, Int(perBufferMs.rounded())))
+
         audioFile = try AVAudioFile(forWriting: url, settings: format.settings,
                                     commonFormat: format.commonFormat,
                                     interleaved: format.isInterleaved)
@@ -285,20 +317,23 @@ final class VoiceActivityRecorder {
         recognitionTask = nil
         audioFile = nil
 
-        // (2026-06-03) Hand the audio session BACK to playback. While we were
-        // recording we set `.playAndRecord` + `.measurement` mode — measurement
-        // mode disables iOS's playback signal processing (it's the right pick
-        // for honest dBFS reads during recording), and crucially keeps the
-        // OUTPUT routed through the earpiece-friendly low-volume path. If we
-        // leave the session in that state when AVSpeechSynthesizer takes over
-        // for the AI reply, the TTS plays back noticeably quieter. Switching
-        // to `.playback` + `.spokenAudio` after each recording restores
-        // normal-loud playback for the AI turn.
+        // (2026-06-03, revised) Restore playback-friendly MODE only — DO NOT
+        // change the category. Earlier code swapped category from
+        // .playAndRecord → .playback after each recording to lift the TTS
+        // volume, but the next press needed to swap back to .playAndRecord
+        // and the hardware took a few ms to settle; meanwhile
+        // inputNode.outputFormat returned sampleRate=0 and start() trapped
+        // on Int(1024.0 / 0). Two production crashes confirmed it.
+        //
+        // Staying in .playAndRecord across both record and playback means:
+        //   • input hardware stays initialised → no sampleRate=0 race
+        //   • mode swap (measurement ↔ spokenAudio) is cheap (no hardware
+        //     reset), still restores playback-loud volume
         do {
             try AVAudioSession.sharedInstance().setCategory(
-                .playback, mode: .spokenAudio, options: [.duckOthers]
+                .playAndRecord, mode: .spokenAudio,
+                options: [.defaultToSpeaker, .allowBluetooth, .duckOthers]
             )
-            try AVAudioSession.sharedInstance().setActive(true, options: [])
         } catch {
             // Best-effort. If this fails the user can still hear the AI,
             // just at the muted measurement-mode level.
