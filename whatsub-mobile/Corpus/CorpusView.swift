@@ -275,9 +275,11 @@ struct CorpusView: View {
                         }
                     }.scrollContentBackground(.hidden)
                 case .byVideo:
-                    GroupedMineView(items: vm.mine) { item in
-                        pendingDelete = item
-                    }
+                    GroupedMineView(
+                        items: vm.mine,
+                        libraryThumbnails: vm.libraryThumbnails,
+                        onDelete: { item in pendingDelete = item }
+                    )
                 }
             }
         }

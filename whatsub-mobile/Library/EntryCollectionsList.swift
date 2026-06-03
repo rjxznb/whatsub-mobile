@@ -65,7 +65,7 @@ struct EntryCollectionsList: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 6) {
+                        LazyVStack(spacing: 8) {
                             ForEach(items) { item in
                                 phraseRow(item)
                             }
@@ -80,34 +80,42 @@ struct EntryCollectionsList: View {
     }
 
     private func phraseRow(_ item: MineItem) -> some View {
+        // Geometry mirrors CueRow (字幕卡 above) — same font sizes, paddings,
+        // corner radius — so the 收藏 tab feels like a continuation of the
+        // subtitle reading surface rather than a denser secondary list.
+        // Timestamp moved to top-left of the card (a small label above the
+        // phrase) instead of a 50pt-wide left gutter, so the phrase body
+        // gets the full content width.
         Button {
             if let ts = item.source.timestampSec {
                 onTapPhrase(ts)
             }
         } label: {
-            HStack(spacing: 10) {
-                Text(item.source.timestampSec.map { mmss($0) } ?? "—:—")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.whatsubAccent)
-                    .frame(width: 50, alignment: .leading)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.phraseRaw)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.whatsubInk)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    if let m = item.meaningZh, !m.isEmpty {
-                        Text(m)
-                            .font(.caption)
-                            .foregroundStyle(.whatsubInkMuted)
-                            .lineLimit(1)
-                    }
+            VStack(alignment: .leading, spacing: 6) {
+                if let ts = item.source.timestampSec {
+                    Text(mmss(ts))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.whatsubAccent)
                 }
-                Spacer(minLength: 4)
+                Text(item.phraseRaw)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.whatsubInk)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let m = item.meaningZh, !m.isEmpty {
+                    Text(m)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.whatsubInkMuted)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 8))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .disabled(item.source.timestampSec == nil)

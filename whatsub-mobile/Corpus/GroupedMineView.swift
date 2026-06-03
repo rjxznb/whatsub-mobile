@@ -20,6 +20,12 @@ import SwiftUI
 /// the OSS videoUrl) is in flight at any moment. Tap a phrase row to seek.
 struct GroupedMineView: View {
     let items: [MineItem]
+    /// Library entry id → thumbnail URL. When a group's representative
+    /// source is `kind == "library"` AND its libraryEntryId resolves here,
+    /// the card header swaps the generic tv icon for the real cover.
+    /// Empty when CorpusViewModel.listLibrary failed (offline, etc) or
+    /// when the user has no Library entries; UI falls back to the icon.
+    var libraryThumbnails: [String: String] = [:]
     /// Tapped via long-press → Delete in the row context menu. Parent
     /// (CorpusView) handles the actual deletion + confirmation alert so
     /// the alert anchor stays at the tab-level safe area, not inside the
@@ -58,6 +64,7 @@ struct GroupedMineView: View {
                     ForEach(groups) { g in
                         GroupCard(
                             group: g,
+                            thumbnailUrl: thumbnailUrl(for: g),
                             isExpanded: expandedGroupId == g.id,
                             onToggle: {
                                 withAnimation(.easeOut(duration: 0.18)) {
@@ -105,6 +112,17 @@ struct GroupedMineView: View {
         }
     }
 
+    /// For library-source groups: look up the entry's thumbnail. For
+    /// non-video kinds (webpage / pdf / manual): return nil so the card
+    /// keeps its generic icon — user explicitly asked not to surface
+    /// covers there (they'd be misleading; webpage corpus rows don't
+    /// have a "video" the cover would represent).
+    private func thumbnailUrl(for group: Group) -> String? {
+        guard group.kind == "library" else { return nil }
+        guard let entryId = group.representativeSource.libraryEntryId else { return nil }
+        return libraryThumbnails[entryId]
+    }
+
     private static func groupKey(_ s: CorpusSource) -> String {
         if let id = s.libraryEntryId, !id.isEmpty { return "lib:\(id)" }
         if let id = s.youtubeId, !id.isEmpty       { return "yt:\(id)" }
@@ -129,6 +147,10 @@ struct GroupedMineView: View {
 
 private struct GroupCard: View {
     let group: GroupedMineView.Group
+    /// nil → render the generic icon (webpage / pdf / manual groups, OR
+    /// library groups whose entry isn't in the user's Library map — e.g.
+    /// deleted, or never synced from the device that collected the phrase).
+    let thumbnailUrl: String?
     let isExpanded: Bool
     let onToggle: () -> Void
     let onDelete: ((MineItem) -> Void)?
@@ -154,10 +176,7 @@ private struct GroupCard: View {
             // Header
             Button(action: onToggle) {
                 HStack(spacing: 12) {
-                    Image(systemName: iconForKind(group.kind))
-                        .font(.title3)
-                        .foregroundStyle(.whatsubAccent)
-                        .frame(width: 28)
+                    leadingArt
                     VStack(alignment: .leading, spacing: 2) {
                         Text(group.title)
                             .font(.subheadline.weight(.semibold))
@@ -296,6 +315,41 @@ private struct GroupCard: View {
                     .lineLimit(1)
             }
         }
+    }
+
+    /// Header left-of-title art: 16:9 cover thumb for library-kind groups
+    /// (when we have one), generic icon for everything else. Same width
+    /// (~64pt) in both cases so the title column lines up regardless.
+    @ViewBuilder
+    private var leadingArt: some View {
+        if let raw = thumbnailUrl, let url = URL(string: raw) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFill()
+                default:
+                    // OSS thumb fetch in flight or failed — show the icon
+                    // in the same footprint so the row doesn't jump.
+                    iconPlaceholder
+                }
+            }
+            .frame(width: 64, height: 36)        // 16:9
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        } else {
+            iconPlaceholder
+                .frame(width: 64, height: 36)
+        }
+    }
+
+    @ViewBuilder
+    private var iconPlaceholder: some View {
+        ZStack {
+            Color.whatsubBg.opacity(0.6)
+            Image(systemName: iconForKind(group.kind))
+                .font(.title3)
+                .foregroundStyle(.whatsubAccent)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private func iconForKind(_ kind: String) -> String {

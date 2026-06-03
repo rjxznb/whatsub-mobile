@@ -17,6 +17,12 @@ final class CorpusViewModel: ObservableObject {
     /// Server-authoritative personal-corpus quota (used/limit). nil until fetched
     /// or on failure → CorpusView falls back to the local count + iosSubActive guess.
     @Published var corpusQuota: CorpusQuota?
+    /// Library entry id → thumbnail URL map. Populated lazily on first
+    /// `reload` from `WhatsubAPI.listLibrary` so GroupedMineView can show
+    /// real video covers in the per-video group header (instead of a
+    /// generic tv icon). Empty when no token / load failure — UI falls back
+    /// to the icon. Best-effort: failure is silent.
+    @Published var libraryThumbnails: [String: String] = [:]
     @Published var loading = false
     @Published var errorMessage: String?
     @Published var licenseLocked = false
@@ -46,6 +52,20 @@ final class CorpusViewModel: ObservableObject {
             // so it reflects cross-platform (Alipay) subscriptions, not just iosSubActive.
             if scope == .mine {
                 corpusQuota = try? await WhatsubAPI.shared.corpusQuota(token: token)
+            }
+            // Library thumbnail map for GroupedMineView covers. Only
+            // refreshed in 我的 scope (the only place that needs them)
+            // and only when the cache is bare — Library list is
+            // ~kilobytes per row but we don't want to refetch on every
+            // tag toggle / reload. Best-effort + parallel-friendly.
+            if scope == .mine, libraryThumbnails.isEmpty {
+                if let entries = try? await WhatsubAPI.shared.listLibrary(token: token) {
+                    var map: [String: String] = [:]
+                    for e in entries {
+                        if let t = e.thumbUrl, !t.isEmpty { map[e.id] = t }
+                    }
+                    libraryThumbnails = map
+                }
             }
             // 3. Refetch only if stale.
             let stale = usingTags
