@@ -138,8 +138,7 @@ struct QuickChatView: View {
                         phrases: phrases,
                         completed: vm.completedPhrases,
                         notes: vm.perPhraseLastNote,
-                        onPlayAgain: { dismiss() },
-                        onClose: { dismiss() }
+                        onPlayAgain: { dismiss() }
                     )
                     .background(Color.whatsubBg.ignoresSafeArea())
                 }
@@ -396,26 +395,13 @@ struct QuickChatView: View {
 
     // ---- bottom controls (voice-only, builds 237+) ----
     //
-    // Typing mode + the keyboard icon were removed: the TextField +
-    // safeAreaInset + axis:.vertical combo had recurring keyboard-visibility
-    // bugs across builds 226-234, and forcing voice input doubles as
-    // English-practice pressure. Only the 结束 button remains down here;
-    // the actual "talk" UI is the orb's long-press gesture.
+    // 2026-06-03: removed the lone 结束 button. The top-left 关闭 toolbar
+    // button already covers "exit this session" — having a second one
+    // at the bottom-left was visual noise. Layout slot stays so the
+    // safeAreaInset reserves room for the home-indicator + the orb
+    // doesn't extend into a place tap targets would conflict with.
     private var bottomControls: some View {
-        HStack(spacing: 12) {
-            Button {
-                vadCoordinator.cancel()
-                Task { await vm.endSession() }
-            } label: {
-                Text("结束")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.whatsubInk)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(Capsule().fill(Color.whatsubBgElev))
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 20).padding(.bottom, 28).padding(.top, 12)
+        Color.clear.frame(height: 24)
     }
 
     // ---- transcript drawer (full history) ----

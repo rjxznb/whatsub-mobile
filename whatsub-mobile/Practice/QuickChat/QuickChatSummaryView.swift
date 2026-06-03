@@ -6,7 +6,6 @@ struct QuickChatSummaryView: View {
     let completed: Set<String>
     let notes: [String: String]   // phraseNormalized → most recent error note
     let onPlayAgain: () -> Void
-    let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 20) {
@@ -20,14 +19,14 @@ struct QuickChatSummaryView: View {
             }
             .padding(.horizontal, 16)
             Spacer()
-            HStack(spacing: 12) {
-                Button(action: onClose) {
-                    Text("关闭").fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 12)
-                }.buttonStyle(.bordered).tint(.whatsubAccent)
-                Button(action: onPlayAgain) {
-                    Text("再来一局").fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 12)
-                }.buttonStyle(.borderedProminent).tint(.whatsubAccent)
-            }
+            // 2026-06-03: dropped the 关闭 button from the summary footer.
+            // The top-left toolbar 关闭 already covers exiting; having two
+            // exit affordances on a finish screen invited mis-taps. Only
+            // 再来一局 stays — it's the only forward action that makes
+            // sense from the summary.
+            Button(action: onPlayAgain) {
+                Text("再来一局").fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 12)
+            }.buttonStyle(.borderedProminent).tint(.whatsubAccent)
             .padding(20)
         }
         .padding(.top, 32)
