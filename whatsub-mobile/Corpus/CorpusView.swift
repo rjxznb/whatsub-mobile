@@ -9,6 +9,14 @@ struct CorpusView: View {
     @State private var showQuiz = false
     @State private var showAddPhrase: Bool = false
     @State private var showSubscribe = false
+    /// 2026-06-03 Stage 4: persisted choice between flat (each phrase a row) and
+    /// grouped (each video a card with its phrases nested). UserDefaults so it
+    /// survives app launches.
+    @AppStorage("corpus.mine.layout") private var mineLayoutRaw: String = MineLayout.flat.rawValue
+    private var mineLayout: MineLayout {
+        get { MineLayout(rawValue: mineLayoutRaw) ?? .flat }
+    }
+    enum MineLayout: String { case flat, byVideo }
     @State private var quickChatPick: PhraseSelector.Pick?
     @State private var quickChatColdStart: Bool = false
     @State private var showQuickChatLauncher: Bool = false
@@ -182,20 +190,38 @@ struct CorpusView: View {
             if vm.mine.isEmpty {
                 centered(icon: "bookmark", title: "还没有收藏的短语", sub: "用 whatSub 插件在网页/视频里保存短语，\n这里就能看到")
             } else {
-                // Server-authoritative when available (covers Alipay subs); falls back
-                // to the local count + iosSubActive guess if /corpus/quota hasn't loaded.
                 let used = vm.corpusQuota?.used ?? vm.mineTotal
                 let limit = vm.corpusQuota?.limit ?? ((appState.currentUser?.iosSubActive == true) ? 1000 : 50)
-                Text("个人语料 \(used)/\(limit)")
-                    .font(.caption)
-                    .foregroundStyle(.whatsubInkMuted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16).padding(.bottom, 4)
-                List(vm.mine) { m in
-                    NavigationLink(value: m.phraseNormalized) {
-                        PhraseRow(raw: m.phraseRaw, meaning: m.meaningZh, sub: m.contextSentence, tags: m.tags)
-                    }.listRowBackground(Color.whatsubBgElev)
-                }.scrollContentBackground(.hidden)
+                HStack {
+                    Text("个人语料 \(used)/\(limit)")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                    Spacer()
+                    // Layout toggle: list view (each phrase a row) vs. grouped
+                    // by source video. Compact icon picker — wider segmented
+                    // text labels would crowd the quota line on iPhone SE.
+                    Picker("", selection: Binding(
+                        get: { mineLayout },
+                        set: { mineLayoutRaw = $0.rawValue }
+                    )) {
+                        Image(systemName: "list.bullet").tag(MineLayout.flat)
+                        Image(systemName: "rectangle.stack").tag(MineLayout.byVideo)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 80)
+                }
+                .padding(.horizontal, 16).padding(.bottom, 4)
+
+                switch mineLayout {
+                case .flat:
+                    List(vm.mine) { m in
+                        NavigationLink(value: m.phraseNormalized) {
+                            PhraseRow(raw: m.phraseRaw, meaning: m.meaningZh, sub: m.contextSentence, tags: m.tags)
+                        }.listRowBackground(Color.whatsubBgElev)
+                    }.scrollContentBackground(.hidden)
+                case .byVideo:
+                    GroupedMineView(items: vm.mine)
+                }
             }
         }
     }
