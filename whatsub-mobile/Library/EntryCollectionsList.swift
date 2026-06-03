@@ -14,7 +14,7 @@ struct EntryCollectionsList: View {
     @EnvironmentObject private var appState: AppState
     @State private var phase: Phase = .loading
 
-    enum Phase: Equatable {
+    enum Phase {
         case loading
         case ready([MineItem])
         case error(String)
