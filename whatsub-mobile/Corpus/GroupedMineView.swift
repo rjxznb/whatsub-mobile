@@ -126,6 +126,21 @@ private struct GroupCard: View {
     let isExpanded: Bool
     let onToggle: () -> Void
     @State private var seekTo: Double? = nil
+    @State private var safariURL: URL? = nil
+
+    /// True for source kinds that have a playable video. Other kinds
+    /// (webpage / pdf / manual) show a "打开来源" link instead of a player
+    /// (build 247 showed "非视频来源" placeholder which was useless).
+    private var hasPlayer: Bool {
+        group.kind == "library" || group.kind == "youtube"
+    }
+
+    /// Best-effort URL for "打开来源" on non-video groups.
+    private var sourceURL: URL? {
+        if let u = group.representativeSource.url,
+           let url = URL(string: u) { return url }
+        return nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -155,13 +170,34 @@ private struct GroupCard: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                // Shared player — created here ONCE per expanded card. Tap on
-                // a phrase row below sets `seekTo`, PhrasePlayerView observes
-                // it (Stage-2 binding) and seeks the AVPlayer in place.
-                PhrasePlayerView(source: group.representativeSource, seekTo: seekTo)
-                    .aspectRatio(16.0/9.0, contentMode: .fit)
-                    .background(Color.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                if hasPlayer {
+                    // Shared player — created here ONCE per expanded card.
+                    // Tap on a phrase row below sets `seekTo`, PhrasePlayerView
+                    // observes it (Stage-2 binding) and seeks the AVPlayer in place.
+                    PhrasePlayerView(source: group.representativeSource, seekTo: seekTo)
+                        .aspectRatio(16.0/9.0, contentMode: .fit)
+                        .background(Color.black)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else if let url = sourceURL {
+                    // Non-video group (webpage / pdf / manual) → quick "打开来源"
+                    // affordance in place of the fake player. Tapping opens
+                    // Safari with the original page.
+                    Button {
+                        safariURL = url
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "safari")
+                            Text("打开来源页面")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.whatsubBg.opacity(0.5),
+                                    in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(.whatsubAccent)
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 VStack(spacing: 4) {
                     ForEach(group.items) { item in
@@ -172,46 +208,74 @@ private struct GroupCard: View {
         }
         .padding(14)
         .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 14))
+        .sheet(item: Binding(
+            get: { safariURL.map(IdentifiedURL.init) },
+            set: { safariURL = $0?.url }
+        )) { wrapper in
+            SafariView(url: wrapper.url)
+        }
     }
 
+    private struct IdentifiedURL: Identifiable {
+        var id: String { url.absoluteString }
+        let url: URL
+    }
+
+    @ViewBuilder
     private func phraseRow(_ item: MineItem) -> some View {
-        let isActive = (seekTo != nil) && (seekTo == item.source.timestampSec)
-        return Button {
-            // nil → same timestamp doesn't trigger seek; toggling via small
-            // dance ensures the binding fires even when re-tapping the same row.
-            seekTo = nil
-            DispatchQueue.main.async {
-                seekTo = item.source.timestampSec
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Text(item.source.timestampSec.map { mmss($0) } ?? "—:—")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(isActive ? .whatsubAccent : .whatsubInkMuted)
-                    .frame(width: 50, alignment: .leading)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.phraseRaw)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.whatsubInk)
-                        .lineLimit(1)
-                    if let m = item.meaningZh, !m.isEmpty {
-                        Text(m)
-                            .font(.caption)
-                            .foregroundStyle(.whatsubInkMuted)
-                            .lineLimit(1)
-                    }
+        // Two shapes:
+        //   playable (library/youtube + has timestamp): tap → seek
+        //   informational (anything else): plain row, no tap action
+        if hasPlayer, let ts = item.source.timestampSec {
+            let isActive = (seekTo != nil) && (seekTo == ts)
+            Button {
+                // nil → same timestamp doesn't trigger seek; toggling via a
+                // small dance ensures the binding fires even when re-tapping
+                // the same row.
+                seekTo = nil
+                DispatchQueue.main.async { seekTo = ts }
+            } label: {
+                HStack(spacing: 10) {
+                    Text(mmss(ts))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(isActive ? .whatsubAccent : .whatsubInkMuted)
+                        .frame(width: 50, alignment: .leading)
+                    phraseBody(item)
+                    Spacer(minLength: 4)
                 }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(
+                    isActive ? Color.whatsubAccent.opacity(0.10) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+            }
+            .buttonStyle(.plain)
+        } else {
+            HStack(spacing: 10) {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 5))
+                    .foregroundStyle(.whatsubInkFaint)
+                    .frame(width: 50, alignment: .leading)
+                phraseBody(item)
                 Spacer(minLength: 4)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                isActive ? Color.whatsubAccent.opacity(0.10) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 8)
-            )
+            .padding(.horizontal, 10).padding(.vertical, 8)
         }
-        .buttonStyle(.plain)
-        .disabled(item.source.timestampSec == nil)
+    }
+
+    private func phraseBody(_ item: MineItem) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(item.phraseRaw)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.whatsubInk)
+                .lineLimit(1)
+            if let m = item.meaningZh, !m.isEmpty {
+                Text(m)
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkMuted)
+                    .lineLimit(1)
+            }
+        }
     }
 
     private func iconForKind(_ kind: String) -> String {
