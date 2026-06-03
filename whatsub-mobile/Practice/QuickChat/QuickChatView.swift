@@ -71,6 +71,31 @@ struct QuickChatView: View {
         _showCompliance = State(initialValue: !QuickChatComplianceGate.hasAcknowledged)
     }
 
+    /// Roleplay-mode init (added build 248): the caller supplies the system
+    /// prompt + phrases directly. Used by `RoleplaySessionView` — same orb /
+    /// VAD / mastery-store wiring, but the prompt is `RoleplayPrompts.turnSystemPrompt`
+    /// (stay-in-character roleplay) rather than `QuickChatPrompts.systemPrompt`
+    /// (phrase-drill). `suggestedTag` becomes the scenario title so it shows in
+    /// the header chip strip with the vocab hints below it.
+    init(roleplayScenarioTitle: String,
+         vocabPhrases: [SessionPhrase],
+         systemPrompt: String,
+         maxTurns: Int? = 8,
+         progressStore: ProductionProgressStore = ProductionProgressStore(),
+         settings: LlmSettings = LlmSettingsStore.load()) {
+        self.phrases = vocabPhrases
+        self.suggestedTag = roleplayScenarioTitle
+        let client = ChatCompletionsClient(settings: settings)
+        let engine = ConversationEngine(client: client, systemPrompt: systemPrompt)
+        _vm = StateObject(wrappedValue: QuickChatViewModel(
+            phrases: vocabPhrases, suggestedTag: roleplayScenarioTitle,
+            progressStore: progressStore,
+            engineDriver: .live(engine),
+            maxTurns: maxTurns
+        ))
+        _showCompliance = State(initialValue: !QuickChatComplianceGate.hasAcknowledged)
+    }
+
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {

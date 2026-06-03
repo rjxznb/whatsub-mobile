@@ -32,7 +32,7 @@ struct LibraryDetailView: View {
     /// existing default; .collections renders EntryCollectionsList scoped to
     /// this entry (corpus phrases tagged with libraryEntryId == entryId).
     @State private var contentTab: ContentTab = .subtitles
-    enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections }
+    enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
 
     private var isLandscape: Bool { vSize == .compact }
 
@@ -289,6 +289,7 @@ struct LibraryDetailView: View {
             Picker("", selection: $contentTab) {
                 Text("字幕").tag(ContentTab.subtitles)
                 Text("收藏").tag(ContentTab.collections)
+                Text("角色扮演").tag(ContentTab.roleplay)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 12)
@@ -301,6 +302,8 @@ struct LibraryDetailView: View {
                 EntryCollectionsList(entryId: entryId) { sec in
                     vm.seekTo(seconds: sec)
                 }
+            case .roleplay:
+                RoleplayTabView(entry: entry)
             }
         }
     }
