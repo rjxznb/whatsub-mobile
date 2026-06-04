@@ -77,8 +77,6 @@ final class VoiceActivityRecorder {
     // MARK: - Runtime state
 
     private let engine = AVAudioEngine()
-    private var fileURL: URL?
-    private var audioFile: AVAudioFile?
 
     private var recognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -109,8 +107,10 @@ final class VoiceActivityRecorder {
 
     var onSpeechDetected: (() -> Void)?
     /// Called with the live ASR transcript (may be empty if user was just
-    /// silent / VAD timed out the post-onset cap with no words). The optional
-    /// URL is the backup .caf file if the caller wants to re-recognize.
+    /// silent / VAD timed out the post-onset cap with no words). The second
+    /// param was historically a backup .caf URL for re-recognition, but the
+    /// only caller deleted it immediately without ever reading it, so we no
+    /// longer record one — it is always nil now (signature kept for callers).
     var onSpeechEnded: ((_ transcript: String, _ backupAudioURL: URL?) -> Void)?
     var onNoSpeechTimeout: (() -> Void)?
     /// Fires every audio buffer (~60 ms) with a normalized 0..1 amplitude.
@@ -132,12 +132,6 @@ final class VoiceActivityRecorder {
         try session.setCategory(.playAndRecord, mode: .measurement,
                                 options: [.defaultToSpeaker, .allowBluetooth])
         try session.setActive(true, options: [])
-
-        // Backup file (PCM .caf — no codec drama, can be re-recognized later
-        // if a caller decides the live transcript needs verification).
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("qc-vad-\(UUID().uuidString).caf")
-        fileURL = url
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -163,10 +157,6 @@ final class VoiceActivityRecorder {
         // Cap the conversion to keep Int() from ever seeing an out-of-range
         // value (belt + suspenders even after the format guard above).
         msPerBuffer = max(20, min(2000, Int(perBufferMs.rounded())))
-
-        audioFile = try AVAudioFile(forWriting: url, settings: format.settings,
-                                    commonFormat: format.commonFormat,
-                                    interleaved: format.isInterleaved)
 
         // ASR (live, partial-stream). Force on-device when supported so we
         // don't ship audio to Apple's servers + so it works without VPN.
@@ -198,7 +188,6 @@ final class VoiceActivityRecorder {
         input.removeTap(onBus: 0)   // belt-and-suspenders if a previous start failed mid-init
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            try? self.audioFile?.write(from: buffer)
             self.recognitionRequest?.append(buffer)
             let power = Self.dB(of: buffer)
             Task { @MainActor in
@@ -207,7 +196,15 @@ final class VoiceActivityRecorder {
         }
 
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            // The recognition task + audio tap are already installed at this
+            // point; tear them down before rethrowing so a failed start
+            // doesn't leak the recognizer/tap/active audio session.
+            teardown()
+            throw error
+        }
 
         startedAt = Date()
         onsetAt = nil
@@ -223,10 +220,6 @@ final class VoiceActivityRecorder {
     @MainActor
     func cancel() {
         teardown()
-        if let url = fileURL, FileManager.default.fileExists(atPath: url.path) {
-            try? FileManager.default.removeItem(at: url)
-        }
-        fileURL = nil
     }
 
     // MARK: - Push-to-talk loop (builds 237+)
@@ -344,9 +337,8 @@ final class VoiceActivityRecorder {
         guard !finished else { return }
         finished = true
         let transcript = accumulatedTranscript
-        let url = fileURL
         teardown()
-        onSpeechEnded?(transcript, url)
+        onSpeechEnded?(transcript, nil)
     }
 
     @MainActor
@@ -357,7 +349,6 @@ final class VoiceActivityRecorder {
         recognitionTask?.finish()
         recognitionRequest = nil
         recognitionTask = nil
-        audioFile = nil
 
         // (2026-06-03, revised) Restore playback-friendly MODE only — DO NOT
         // change the category. Earlier code swapped category from

@@ -397,11 +397,17 @@ struct MineItem: Codable, Identifiable {
     let source: CorpusSource
     let contributedAt: Int64
     let tags: [String]
-    /// SwiftUI Identifiable id — composite of phrase + contributedAt because
-    /// the same phrase can be contributed multiple times with different
-    /// context, and we want each instance to render as its own row. NOT the
-    /// backend id (that's `contributionId`).
-    var id: String { "\(phraseNormalized)#\(contributedAt)" }
+    /// SwiftUI Identifiable id. Prefer the backend row id (`contributionId`)
+    /// because it is globally unique — the composite `phrase#contributedAt`
+    /// can COLLIDE when the same phrase is saved twice in the same millisecond
+    /// (batch sync, dual-write), and a collision makes `delete`'s
+    /// `removeAll { $0.id == item.id }` drop BOTH rows and confuses ForEach
+    /// diffing. Fall back to the composite only for pre-2026-06-04 cached
+    /// payloads that decoded without an `id`.
+    var id: String {
+        if let cid = contributionId { return "c\(cid)" }
+        return "\(phraseNormalized)#\(contributedAt)"
+    }
 
     enum CodingKeys: String, CodingKey {
         case contributionId = "id"

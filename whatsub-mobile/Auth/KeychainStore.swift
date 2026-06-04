@@ -3,7 +3,10 @@ import Security
 
 /// Stores the Session as a single JSON blob in the iOS Keychain under one
 /// generic-password item. Accessible after first unlock (so a backgrounded
-/// app can still read it, but it's not in an always-accessible class).
+/// app can still read it, but it's not in an always-accessible class) AND
+/// `ThisDeviceOnly` so the bearer token never leaves the device via iCloud
+/// Keychain or an encrypted backup — a token restored onto another device
+/// would otherwise stay valid until `expiresAt`.
 enum KeychainStore {
     private static let service = "cc.eversay.whatsub.mobile.session"
     private static let account = "session"
@@ -21,7 +24,7 @@ enum KeychainStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData as String: data,
         ]
         let status = SecItemAdd(addQuery as CFDictionary, nil)

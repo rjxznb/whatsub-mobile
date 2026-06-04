@@ -73,7 +73,16 @@ struct YouTubeEmbedView: UIViewRepresentable {
         }
     }
 
-    private static func html(videoId: String, startSeconds: Double?) -> String {
+    private static func html(videoId rawVideoId: String, startSeconds: Double?) -> String {
+        // Defense-in-depth: only a real YouTube id shape ([A-Za-z0-9_-]{11})
+        // may be interpolated into the inline <script>. A hostile/malformed id
+        // (e.g. one containing a quote or `</script>`) would otherwise break
+        // out of the JS string literal and run arbitrary script in this
+        // youtube-nocookie.com-origin webview, which also exposes the
+        // `iosBridge` message handler. Anything that isn't a clean id collapses
+        // to empty so the player just no-ops instead of executing it. The
+        // backend independently sanitizes `source.youtubeId` on /contribute.
+        let videoId = VideoSource.isLikelyYouTubeId(rawVideoId) ? rawVideoId : ""
         let startVar = startSeconds.map { ", start: \(Int($0))" } ?? ""
         return """
         <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">

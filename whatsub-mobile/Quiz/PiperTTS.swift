@@ -67,9 +67,8 @@ final class PiperTTS {
     func speak(_ text: String, interrupt: Bool = false) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if interrupt {
-            currentPlayer?.stop()
-            currentPlayer = nil
-            playbackQueue.removeAll()
+            // All playback state lives on the main thread; marshal there.
+            DispatchQueue.main.async { self.clearPlayback() }
         }
         // Inference on background queue.
         inferQueue.async { [weak self] in
@@ -89,8 +88,17 @@ final class PiperTTS {
         }
     }
 
-    /// Stop all playback + clear queue.
+    /// Stop all playback + clear queue. Safe to call from any thread — the
+    /// actual teardown is marshalled onto the main thread, the single owner of
+    /// the playback state.
     func stop() {
+        DispatchQueue.main.async { self.clearPlayback() }
+    }
+
+    /// MUST run on the main thread. Stops the current player and empties the
+    /// queue. Sole mutator of currentPlayer/playbackQueue alongside
+    /// enqueueFile/playFile/playNextInQueue/playerDidFinish.
+    private func clearPlayback() {
         currentPlayer?.stop()
         currentPlayer = nil
         for entry in playbackQueue {
@@ -100,12 +108,18 @@ final class PiperTTS {
         Task { @MainActor in LyricTicker.shared.reset() }
     }
 
-    /// True if anything is currently playing or queued.
+    /// True if anything is currently playing or queued. Reads the main-confined
+    /// playback state safely from any caller thread.
     var isSpeaking: Bool {
-        currentPlayer?.isPlaying == true || !playbackQueue.isEmpty
+        if Thread.isMainThread {
+            return currentPlayer?.isPlaying == true || !playbackQueue.isEmpty
+        }
+        return DispatchQueue.main.sync {
+            currentPlayer?.isPlaying == true || !playbackQueue.isEmpty
+        }
     }
 
-    // ---- internals ----
+    // ---- internals (all run on the main thread) ----
 
     private func enqueueFile(_ url: URL, text: String) {
         if currentPlayer == nil || currentPlayer?.isPlaying == false {
@@ -113,6 +127,13 @@ final class PiperTTS {
         } else {
             playbackQueue.append((url: url, text: text))
         }
+    }
+
+    /// Pop the next queued clip and play it. No-op when the queue is empty.
+    private func playNextInQueue() {
+        guard !playbackQueue.isEmpty else { return }
+        let next = playbackQueue.removeFirst()
+        playFile(next.url, text: next.text)
     }
 
     private func playFile(_ url: URL, text: String) {
@@ -134,16 +155,19 @@ final class PiperTTS {
             currentPlayer = p
         } catch {
             try? FileManager.default.removeItem(at: url)
+            // Don't strand the rest of the queue on one bad clip — advance.
+            currentPlayer = nil
+            playNextInQueue()
         }
     }
 
     fileprivate func playerDidFinish(_ player: AVAudioPlayer) {
-        // Clean up this WAV file and play the next, if any.
-        if let path = player.url { try? FileManager.default.removeItem(at: path) }
-        currentPlayer = nil
-        if let next = playbackQueue.first {
-            playbackQueue.removeFirst()
-            playFile(next.url, text: next.text)
+        // Delegate fires on the audio thread; hop to main where the playback
+        // state lives, then clean up this WAV file and play the next, if any.
+        DispatchQueue.main.async {
+            if let path = player.url { try? FileManager.default.removeItem(at: path) }
+            self.currentPlayer = nil
+            self.playNextInQueue()
         }
     }
 
