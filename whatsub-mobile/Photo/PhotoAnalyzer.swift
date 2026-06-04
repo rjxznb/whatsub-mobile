@@ -26,10 +26,19 @@ struct PhotoAnalyzer {
         }
     }
 
+    /// Outcome of one analyze call. Custom enum (not Swift's `Result`)
+    /// because `Result<S, F>` requires `F: Error`; we want a plain
+    /// Chinese string for the UI banner without inventing a one-case
+    /// error type. Same shape used by `RoleplayScenarioClient`.
+    enum AnalysisOutcome {
+        case success(PhotoAnalysisResult)
+        case failure(String)
+    }
+
     /// `ocrText` is the joined OCR output (newline-separated lines).
     /// Returns `.success` with the parsed bundle or `.failure(zh msg)`
     /// when anything from network down to JSON shape goes wrong.
-    func analyze(ocrText: String) async -> Result<PhotoAnalysisResult, String> {
+    func analyze(ocrText: String) async -> AnalysisOutcome {
         let trimmed = ocrText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return .failure("OCR 文本为空,先拍一张含英文的清楚图片")
@@ -52,7 +61,7 @@ struct PhotoAnalyzer {
 
     /// Strip markdown fences + decode the JSON envelope. Same lenient
     /// pattern proven on `RoleplayScenarioClient`.
-    func parse(_ raw: String) -> Result<PhotoAnalysisResult, String> {
+    func parse(_ raw: String) -> AnalysisOutcome {
         let body = Self.stripFences(raw)
         guard let data = body.data(using: .utf8) else {
             return .failure("LLM 返回无法解码")
