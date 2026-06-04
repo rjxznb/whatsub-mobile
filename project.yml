@@ -85,6 +85,14 @@ targets:
         # on first invocation; iOS shows the system permission alerts.
         NSMicrophoneUsageDescription: "用于跟读练习和对话陪练时录下你的发音，与字幕原文或目标短语做对比。"
         NSSpeechRecognitionUsageDescription: "把跟读练习和对话陪练里的录音转为文字，用于与字幕原文做逐词比对、或判断目标短语是否被正确使用。所有识别在本机完成。"
+        # 拍照识别短语 (added 2026-06-04). Camera = capture path; Photo
+        # Library WhenInUse = standard PhotosPicker (no full library access
+        # needed since the picker runs OOP and returns just the picked item).
+        # Crucial: the description must spell out that the image is OCR'd
+        # ON-DEVICE and the photo itself is NEVER uploaded — App Review
+        # tends to push back on camera permissions without that clarity.
+        NSCameraUsageDescription: "用相机拍含英文的文本(书、广告、街边标语等),离线识别为可加入语料库的英文短语。照片本身不会上传到服务器。"
+        NSPhotoLibraryUsageDescription: "从相册选含英文的图片,离线识别为可加入语料库的英文短语。照片本身不会上传到服务器。"
         UIAppFonts:
           - Caveat-Bold.ttf
         CFBundleURLTypes:

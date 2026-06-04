@@ -260,6 +260,10 @@ struct PhraseSource: Encodable {
     let timestampSec: Double?
     let libraryEntryId: String?
     let youtubeId: String?
+    /// kind="photo" — UUID minted at capture time so the client can
+    /// group multiple phrases from the same photo. Server stores
+    /// opaquely in JSONB (no logic uses it backend-side). 2026-06-04.
+    let localPhotoId: String?
 
     /// Convenience: build a Library-video source from a CollectSheet context.
     static func library(entryId: String,
@@ -272,14 +276,32 @@ struct PhraseSource: Encodable {
             title: videoTitle,
             timestampSec: timestampSec,
             libraryEntryId: entryId,
-            youtubeId: youtubeId
+            youtubeId: youtubeId,
+            localPhotoId: nil
         )
     }
 
     /// Convenience: manual entry (current AddCorpusPhraseView default).
     static func webpage(url: String) -> PhraseSource {
         PhraseSource(kind: "webpage", url: url, title: nil, timestampSec: nil,
-                     libraryEntryId: nil, youtubeId: nil)
+                     libraryEntryId: nil, youtubeId: nil, localPhotoId: nil)
+    }
+
+    /// Convenience: phrase extracted from an OCR'd photo (iOS only,
+    /// added 2026-06-04). `localPhotoId` groups multiple phrases from
+    /// the same capture session. `title` is the first OCR line or a
+    /// short caption — purely for "我的 → 按来源" display. No url; the
+    /// photo bytes intentionally stay on-device.
+    static func photo(localPhotoId: String, title: String?) -> PhraseSource {
+        PhraseSource(
+            kind: "photo",
+            url: nil,
+            title: title,
+            timestampSec: nil,
+            libraryEntryId: nil,
+            youtubeId: nil,
+            localPhotoId: localPhotoId
+        )
     }
 }
 
@@ -319,11 +341,12 @@ struct CorpusTagsResponse: Decodable { let tags: [CorpusTag] }
 /// A contribution's source. JSONB written by the plugin — camelCase on the wire
 /// in BOTH /mine and /lookup. Only `youtube` carries `timestampSec`.
 struct CorpusSource: Codable {
-    let kind: String   // library | youtube | webpage | pdf | curator | manual
+    let kind: String   // library | youtube | webpage | pdf | curator | photo
     /// Canonical URL of the original source. Optional because Library
     /// (post-builds-247) phrases may not have one if the OSS entry was
     /// from a non-YouTube origin (e.g. Bilibili import) — those rely on
     /// `libraryEntryId` for primary playback, no URL fallback.
+    /// "photo" kind never has a URL — the photo bytes stay on-device.
     let url: String?
     let title: String?
     let timestampSec: Double?
@@ -334,6 +357,10 @@ struct CorpusSource: Codable {
     /// AND the underlying entry originated from YouTube (fallback if the
     /// Library entry is later deleted).
     let youtubeId: String?
+    /// "photo" kind — UUID minted client-side at capture so a future
+    /// "我的 → 按来源" view can group phrases collected from the same
+    /// photo (analog to `libraryEntryId`). 2026-06-04.
+    let localPhotoId: String?
 }
 
 /// /browse phrase — snake_case, phrase-level (no per-instance source).

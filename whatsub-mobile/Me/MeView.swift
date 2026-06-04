@@ -13,6 +13,7 @@ struct MeView: View {
     @State private var deleteAccountError: String?
     @State private var showSubscribe = false
     @State private var showPendingPhrases = false
+    @State private var showPhotoCapture = false
     @ObservedObject private var pendingStore = PendingPhraseStore.shared
 
     private var versionString: String {
@@ -102,6 +103,20 @@ struct MeView: View {
                             Label("导入视频", systemImage: "arrow.down.circle")
                                 .foregroundStyle(.whatsubInk)
                         }
+                        // 2026-06-04 拍照识别短语 entry. Sheet, not nav-link,
+                        // because the picker chain (camera / gallery) is
+                        // self-contained and reads as a one-shot modal task.
+                        Button { showPhotoCapture = true } label: {
+                            HStack {
+                                Label("拍照识别短语", systemImage: "camera.viewfinder")
+                                    .foregroundStyle(.whatsubInk)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.whatsubInkFaint)
+                            }
+                        }
+                        .buttonStyle(.plain)
                         NavigationLink(destination: LlmSettingsView()) {
                             Label("LLM 设置", systemImage: "cpu")
                                 .foregroundStyle(.whatsubInk)
@@ -201,6 +216,9 @@ struct MeView: View {
             }
             .sheet(isPresented: $showPendingPhrases) {
                 PendingPhrasesView(filterEntryId: nil)
+            }
+            .sheet(isPresented: $showPhotoCapture) {
+                PhotoReviewView()
             }
         }
     }

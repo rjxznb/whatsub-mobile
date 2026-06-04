@@ -10,7 +10,7 @@ final class PhraseSelectorTests: XCTestCase {
                  phraseNormalized: key, phraseRaw: key, meaningZh: nil,
                  usageNote: nil, contextSentence: "...",
                  source: CorpusSource(kind: "webpage", url: "", title: nil, timestampSec: nil,
-                                      libraryEntryId: nil, youtubeId: nil),
+                                      libraryEntryId: nil, youtubeId: nil, localPhotoId: nil),
                  contributedAt: 0, tags: tags)
     }
 
