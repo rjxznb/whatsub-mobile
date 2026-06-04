@@ -1,8 +1,15 @@
 import Foundation
 
-/// Downloads the en_US-ljspeech-medium Piper voice files from HuggingFace
-/// to Application Support/tts-model/ljspeech/. Three files, total ~64MB.
-/// Pure URLSession; no API key needed; stable HF URLs.
+/// Downloads the en_US-ljspeech-medium Piper voice files to
+/// Application Support/tts-model/ljspeech/. Three files, total ~64MB.
+/// Pure URLSession; no API key needed.
+///
+/// 2026-06-04 host strategy: try `hf-mirror.com` (HuggingFace's
+/// China-friendly mirror, sub-second start in mainland China) FIRST,
+/// fall back to `huggingface.co` (canonical source, needed when the
+/// mirror is down or the user is on a network where it's blocked).
+/// Each file tries hosts in order; first 2xx wins. The fallback
+/// happens silently — the user sees one progress bar.
 @MainActor
 final class PiperModelDownloader: ObservableObject {
 
@@ -17,16 +24,24 @@ final class PiperModelDownloader: ObservableObject {
 
     @Published private(set) var status: Status = .notDownloaded
 
-    /// Files to download. Order matters only for the progress UI.
-    /// URLs are pinned to the resolve/main branch of csukuangfj's HF repo,
-    /// which is the canonical sherpa-onnx model mirror.
-    private let files: [(url: String, name: String, approxBytes: Int64)] = [
-        ("https://huggingface.co/csukuangfj/vits-piper-en_US-ljspeech-medium/resolve/main/en_US-ljspeech-medium.onnx",
-         "en_US-ljspeech-medium.onnx", 64_000_000),
-        ("https://huggingface.co/csukuangfj/vits-piper-en_US-ljspeech-medium/resolve/main/tokens.txt",
-         "tokens.txt", 1_000),
-        ("https://huggingface.co/csukuangfj/vits-piper-en_US-ljspeech-medium/resolve/main/en_US-ljspeech-medium.onnx.json",
-         "en_US-ljspeech-medium.onnx.json", 5_000),
+    /// Hosts to try IN ORDER for each file. hf-mirror is GFW-friendly
+    /// (in-China users would otherwise be stuck on HF being unreachable);
+    /// huggingface.co is the canonical fallback for everywhere else +
+    /// the rare case the mirror has gaps.
+    private let mirrorHosts: [String] = [
+        "https://hf-mirror.com",
+        "https://huggingface.co",
+    ]
+
+    /// Path under each mirror host (same on both — hf-mirror is a 1:1
+    /// path-preserving proxy of huggingface.co).
+    private let modelRepoPath = "/csukuangfj/vits-piper-en_US-ljspeech-medium/resolve/main"
+
+    /// Files to download. `approxBytes` only drives the progress bar UI.
+    private let files: [(name: String, approxBytes: Int64)] = [
+        ("en_US-ljspeech-medium.onnx", 64_000_000),
+        ("tokens.txt", 1_000),
+        ("en_US-ljspeech-medium.onnx.json", 5_000),
     ]
 
     /// Root dir for Piper voices. Lazy-created on first access.
@@ -72,28 +87,43 @@ final class PiperModelDownloader: ObservableObject {
         var receivedBytes: Int64 = 0
         status = .downloading(progress: 0)
 
-        for (urlString, name, _) in files {
-            guard let url = URL(string: urlString) else {
-                status = .error("URL 解析失败：\(urlString)")
-                return
+        for file in files {
+            // Try each mirror host in priority order; first 2xx wins.
+            // Errors from earlier hosts are remembered only so the final
+            // user-visible message can name the LAST attempt's reason.
+            var lastError: String?
+            var saved = false
+            for host in mirrorHosts {
+                let urlString = "\(host)\(modelRepoPath)/\(file.name)"
+                guard let url = URL(string: urlString) else {
+                    lastError = "URL 解析失败：\(urlString)"
+                    continue
+                }
+                do {
+                    let (tempURL, response) = try await URLSession.shared.download(from: url)
+                    guard let http = response as? HTTPURLResponse,
+                          (200..<300).contains(http.statusCode) else {
+                        let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                        lastError = "HTTP \(code) — \(host)"
+                        continue
+                    }
+                    let dest = dir.appendingPathComponent(file.name)
+                    try? FileManager.default.removeItem(at: dest)
+                    try FileManager.default.moveItem(at: tempURL, to: dest)
+                    if let size = try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64 {
+                        receivedBytes += size
+                    }
+                    let progress = min(1.0, Double(receivedBytes) / Double(totalApproxBytes))
+                    status = .downloading(progress: progress)
+                    saved = true
+                    break
+                } catch {
+                    lastError = "\(error.localizedDescription) (\(host))"
+                    continue
+                }
             }
-            do {
-                let (tempURL, response) = try await URLSession.shared.download(from: url)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                    let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    status = .error("下载失败 (HTTP \(code)) - \(name)")
-                    return
-                }
-                let dest = dir.appendingPathComponent(name)
-                try? FileManager.default.removeItem(at: dest)
-                try FileManager.default.moveItem(at: tempURL, to: dest)
-                if let size = try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64 {
-                    receivedBytes += size
-                }
-                let progress = min(1.0, Double(receivedBytes) / Double(totalApproxBytes))
-                status = .downloading(progress: progress)
-            } catch {
-                status = .error("下载失败：\(error.localizedDescription)")
+            if !saved {
+                status = .error("下载失败 — \(file.name) — \(lastError ?? "所有镜像源都不可达")")
                 return
             }
         }

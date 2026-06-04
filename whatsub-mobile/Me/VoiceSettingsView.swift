@@ -29,7 +29,7 @@ struct VoiceSettingsView: View {
             } header: {
                 Text("内置神经语音").foregroundStyle(.whatsubInkMuted)
             } footer: {
-                Text("Whatsub 内置 Piper · LJSpeech 美式女声。离线运行 (~64MB 一次性下载到 Documents)；首次启用要下载语音模型。下载完成后无需网络，直接生成。")
+                Text("Whatsub 内置 Piper · LJSpeech 美式女声。离线运行 (~64MB 一次性下载)；首次启用要联网下载语音模型，国内优先走 hf-mirror 镜像源 (秒下),失败自动回退 HuggingFace。下载完成后无需网络,直接生成。")
                     .font(.caption)
                     .foregroundStyle(.whatsubInkMuted)
             }
