@@ -202,6 +202,14 @@ actor WhatsubAPI {
         return try decode(MineResponse.self, from: data)
     }
 
+    /// `GET /api/llm/quota` — current period used/limit + reset-at for the
+    /// managed-LLM relay. Same auth as the proxy endpoint (Pro session OR
+    /// trialToken); 401 when missing, 403 when neither tier matches.
+    func llmQuota(token: String) async throws -> LlmQuota {
+        let data = try await get(Endpoints.llm("quota"), bearer: token)
+        return try decode(LlmQuota.self, from: data)
+    }
+
     func corpusQuota(token: String) async throws -> CorpusQuota {
         let data = try await get(Endpoints.corpus("quota"), bearer: token)
         return try decode(CorpusQuota.self, from: data)

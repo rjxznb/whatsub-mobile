@@ -58,7 +58,8 @@ struct ContentView: View {
     // capabilities (公共语料库, expanded quotas) are now gated CONTEXTUALLY by
     // the surfaces that need them (CorpusView's 公共 tab, ImportView quotaWall),
     // which present SubscribeSheet on tap. No more 2-tier ¥18 buyout + ¥12/月 —
-    // single Pro subscription path.
+    // single Pro subscription path (¥22/月 + ¥168/年 since 2026-06-04;
+    // includes managed-LLM relay — users no longer need their own DeepSeek key).
 
     var body: some View {
         Group {

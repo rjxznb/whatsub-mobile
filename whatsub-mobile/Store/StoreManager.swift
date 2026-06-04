@@ -1,11 +1,17 @@
 import Foundation
 import StoreKit
 
-/// StoreKit 2 wrapper for whatSub Pro subscriptions (¥12/月, ¥88/年). Loads the
-/// products, runs purchases, listens for transaction updates, exposes an
-/// offline-capable local entitlement check, and reports verified signed
-/// transactions to the backend via `reportVerifiedJWS` (set by the app — does
-/// /iap/verify + refreshMe).
+/// StoreKit 2 wrapper for whatSub Pro subscriptions (¥22/月, ¥168/年, bumped
+/// from ¥12/¥88 on 2026-06-04 to fund the managed-LLM relay — spec at
+/// `Get_Video/docs/superpowers/specs/2026-06-03-whatsub-managed-llm-relay.md`).
+/// All UI shows `product.displayPrice` (StoreKit-driven, picks up ASC tier
+/// changes automatically), so this comment is the only iOS-side place that
+/// hardcodes the headline numbers.
+///
+/// Loads the products, runs purchases, listens for transaction updates,
+/// exposes an offline-capable local entitlement check, and reports verified
+/// signed transactions to the backend via `reportVerifiedJWS` (set by the
+/// app — does /iap/verify + refreshMe).
 ///
 /// 2026-05-28 cleanup: the legacy ¥18 buyout SKU (`cc.eversay.whatsub.mobile.
 /// fullunlock`) was fully deleted in App Store Connect — never reached real

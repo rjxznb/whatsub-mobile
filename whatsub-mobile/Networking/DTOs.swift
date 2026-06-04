@@ -210,6 +210,22 @@ struct CorpusQuota: Decodable {
     let limit: Int
 }
 
+/// Managed-LLM relay quota — `GET /api/llm/quota`. `tier` distinguishes
+/// "pro" (Pro session token) from "trial" (trialToken issued by
+/// /trial/start) so the UI can render the right copy. `periodResetAt` is
+/// epoch ms of the first day of next month (UTC) — used for the
+/// "下次重置 X 月 1 日" hint. `used` and `limit` are total tokens
+/// (input + output) for the current calendar month.
+///
+/// Added 2026-06-04 (managed-LLM relay).
+struct LlmQuota: Decodable {
+    let used: Int
+    let limit: Int
+    let requestCount: Int
+    let tier: String
+    let periodResetAt: Int64
+}
+
 /// Structured `source` for POST /api/corpus/contribute. Backend stores this
 /// as JSONB and never validates the shape — any keys we add here just flow
 /// through. Wire shape per kind:

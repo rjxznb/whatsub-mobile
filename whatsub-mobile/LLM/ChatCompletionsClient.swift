@@ -11,26 +11,72 @@ struct ChatMessage { let role: String; let content: String }
 struct ChatCompletionsClient {
     let settings: LlmSettings
     let session: URLSession
+    /// Optional explicit Bearer override — used by tests + special-case
+    /// callers (e.g. relay LLM quota check). Production code leaves this
+    /// nil and the resolver reads the session token from Keychain.
+    let sessionTokenOverride: String?
 
-    init(settings: LlmSettings, session: URLSession = .shared) {
+    init(settings: LlmSettings, session: URLSession = .shared,
+         sessionTokenOverride: String? = nil) {
         self.settings = settings
         self.session = session
+        self.sessionTokenOverride = sessionTokenOverride
+    }
+
+    /// Effective wire config for one call — collapses the "use relay vs
+    /// BYOK" decision into one place so the request builder doesn't have
+    /// to branch repeatedly. When relay mode is on AND we have a session
+    /// token, we hit the whatsub-hosted proxy with the user's bearer.
+    /// Otherwise fall back to the user's BYOK config.
+    private struct Resolved {
+        let baseUrl: String
+        let bearer: String
+        let model: String
+        /// Relay forces `stream: true` server-side and returns SSE, so we
+        /// must parse the SSE here. BYOK keeps the simpler JSON path.
+        let usesRelaySSE: Bool
+    }
+
+    private func resolveConfig() -> Resolved? {
+        if settings.useManagedRelay {
+            let token = sessionTokenOverride ?? KeychainStore.load()?.sessionToken ?? ""
+            if !token.isEmpty {
+                return Resolved(
+                    baseUrl: Endpoints.llmRelayClientBase,
+                    bearer: token,
+                    model: settings.model,        // ignored server-side; sent for completeness
+                    usesRelaySSE: true,
+                )
+            }
+            // Relay on but no token (not logged in / token expired) — fall
+            // through to BYOK if it's configured, else treat as not-configured.
+        }
+        guard !settings.apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return nil
+        }
+        return Resolved(
+            baseUrl: settings.baseUrl,
+            bearer: settings.apiKey,
+            model: settings.model,
+            usesRelaySSE: false,
+        )
     }
 
     // MARK: - non-streaming (unchanged caller surface)
 
     func chat(_ messages: [ChatMessage]) async throws -> String {
-        guard settings.isConfigured, let url = URL(string: "\(settings.baseUrl)/chat/completions") else {
+        guard let r = resolveConfig() else { throw LlmError.notConfigured }
+        guard let url = URL(string: "\(r.baseUrl)/chat/completions") else {
             throw LlmError.notConfigured
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(settings.apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("Bearer \(r.bearer)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 120
-        let body: [String: Any] = [
-            "model": settings.model,
-            "stream": false,
+
+        var body: [String: Any] = [
+            "model": r.model,
             "temperature": 0.3,
             // Set explicitly — DeepSeek v4 reasoning models can otherwise burn
             // the implicit token budget on internal reasoning and emit empty
@@ -38,6 +84,15 @@ struct ChatCompletionsClient {
             "max_tokens": 4096,
             "messages": messages.map { ["role": $0.role, "content": $0.content] },
         ]
+        if r.usesRelaySSE {
+            // Relay forces stream:true server-side so the wire is always
+            // SSE — be explicit on our end so future relay tightening
+            // (e.g. rejecting stream:false) can't surprise us.
+            body["stream"] = true
+            body["stream_options"] = ["include_usage": true]
+        } else {
+            body["stream"] = false
+        }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, resp): (Data, URLResponse)
@@ -45,8 +100,20 @@ struct ChatCompletionsClient {
         catch { throw LlmError.network(error.localizedDescription) }
         guard let http = resp as? HTTPURLResponse else { throw LlmError.network("no http") }
         guard (200..<300).contains(http.statusCode) else {
-            throw LlmError.api(http.statusCode, String(data: data, encoding: .utf8)?.prefix(200).description ?? "")
+            let bodyText = String(data: data, encoding: .utf8)?.prefix(400).description ?? ""
+            // Relay surfaces structured errors (`{error:"quota_exceeded",...}`)
+            // that the caller may want to render specifically. Pass them
+            // through verbatim; LlmError.api is already string-only.
+            throw LlmError.api(http.statusCode, bodyText)
         }
+
+        if r.usesRelaySSE {
+            // Parse the SSE response — concatenate `delta.content` from every
+            // chunk. Usage chunk (the terminal one with `usage` instead of
+            // `delta`) is ignored client-side — the relay logs it for billing.
+            return try parseSSEContent(data: data, status: http.statusCode)
+        }
+
         // Surface the raw body in the error when shape doesn't match — DeepSeek
         // ships occasional schema variants (reasoning_content alongside content,
         // null content with finish_reason='content_filter', etc.) and chasing
@@ -69,6 +136,39 @@ struct ChatCompletionsClient {
             throw LlmError.api(http.statusCode, "content 字段为空或仅空白 · body=\(body)")
         }
         return content
+    }
+
+    /// Walk a buffered SSE response and collect `delta.content` into one
+    /// string. We rely on a buffered Data (not streamed bytes) because
+    /// the existing caller surface returns the full text — chunking
+    /// happens locally in `stream()` afterward. Robust to partial lines
+    /// landing across chunk boundaries because the relay flushes whole
+    /// `data:` frames.
+    private func parseSSEContent(data: Data, status: Int) throws -> String {
+        let text = String(data: data, encoding: .utf8) ?? ""
+        var collected = ""
+        var sawTerminator = false
+        for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { sawTerminator = true; continue }
+            guard let payloadData = payload.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+            else { continue }
+            if let choices = obj["choices"] as? [[String: Any]],
+               let delta = choices.first?["delta"] as? [String: Any],
+               let chunk = delta["content"] as? String {
+                collected += chunk
+            }
+            // Usage chunk (terminal one with no delta) is implicitly skipped.
+        }
+        let trimmed = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            let head = text.prefix(400)
+            throw LlmError.api(status, "SSE 空内容 · sawTerminator=\(sawTerminator) head=\(head)")
+        }
+        return collected
     }
 
     // MARK: - simulated streaming (used by QuickChat)
