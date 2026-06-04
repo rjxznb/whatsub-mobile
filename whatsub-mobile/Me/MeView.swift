@@ -75,14 +75,14 @@ struct MeView: View {
                             Button("管理订阅") { showManageSubscriptions = true }
                                 .foregroundStyle(.whatsubAccent)
                         } else {
-                            Text("订阅 Pro：50 个云端视频 · 单个 500MB/60 分钟 · 1000 个语料库；免费 3 个 · 单个 100MB/20 分钟。")
+                            Text("订阅 Pro：🆕 内置 DeepSeek AI（零配置） · 50 个云端视频 · 单个 500MB/60 分钟 · 1000 个语料库；免费档 3 个视频 · 100MB/20 分钟 · 200K 一次性 AI 体验包。")
                                 .font(.footnote).foregroundStyle(.whatsubInkMuted)
                             // A single entry button (not inline price buttons) — tapping
                             // opens the payment card. Less money-grabby.
                             Button {
                                 showSubscribe = true
                             } label: {
-                                Label("订阅 Pro · 解锁 50 视频 + 1000 语料库", systemImage: "star.circle.fill")
+                                Label("订阅 Pro · 解锁 AI + 50 视频 + 1000 语料库", systemImage: "star.circle.fill")
                                     .foregroundStyle(.whatsubAccent)
                             }
                         }
