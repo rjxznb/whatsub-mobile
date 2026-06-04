@@ -29,6 +29,19 @@ enum APIError: Error, Equatable {
             case "no_code": return "请先获取验证码"
             case "wrong_code": return "验证码错误"
             case "too_many_attempts": return "尝试次数过多，请重新获取验证码"
+            // LLM relay-specific (2026-06-04). Backend distinguishes these
+            // so the UI can offer the right next step instead of a generic
+            // "服务器错误". Order matters — "quota_exceeded" exists on both
+            // /library/sync (413) and /llm/v1 (429); the 429 branch must
+            // come BEFORE the generic library line below.
+            case "license_blocked":
+                return "你已购买永久网站授权（¥59.9 买断），按现行政策需 BYOK 自填 LLM key，或单独订阅 Pro 才能用 whatsub 托管 LLM。下方关闭「使用 whatsub 托管」即可改用自己的 key。"
+            case "free_used_up":
+                return "免费体验额度（200K tokens）已用完。请关闭 toggle 走 BYOK，或升级 Pro 解锁完整月度配额。"
+            case "trial_used_up":
+                return "桌面试用额度已用完，请升级 Pro 继续使用。"
+            case "quota_exceeded" where code == 429:
+                return "本月 LLM 额度已用完，下月 1 日重置或升级配额。"
             case "quota_exceeded": return "云端视频已达上限，先在 Library 删一个，或购买授权解锁更多"
             default: return "服务器错误（\(code)）"
             }

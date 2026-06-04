@@ -124,9 +124,27 @@ struct LlmSettingsView: View {
             }
             .padding(.vertical, 2)
         } else if let err = quotaError {
-            Text(err)
-                .font(.footnote)
-                .foregroundStyle(.whatsubInkMuted)
+            // 403 license_blocked / free_used_up / etc all surface as
+            // friendly server-supplied Chinese here. The body is long-
+            // form, so let it wrap rather than truncating.
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                    Text(err)
+                        .font(.footnote)
+                        .foregroundStyle(.whatsubInkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button {
+                    useManagedRelay = false
+                    autosave()
+                } label: {
+                    Label("关闭托管 · 改用自己的 API key", systemImage: "wrench.adjustable")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.whatsubAccent)
+                }
+            }
         } else if appState.session == nil {
             Text("请先登录后查看额度")
                 .font(.footnote)
