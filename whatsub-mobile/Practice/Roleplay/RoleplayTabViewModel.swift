@@ -13,6 +13,9 @@ final class RoleplayTabViewModel: ObservableObject {
     /// present `RoleplaySessionView` as a sheet. Cleared when the sheet
     /// dismisses (via `dismissSession()`).
     @Published var picked: RoleplayScenario?
+    /// Epoch seconds of the last cache write for this entry. Drives the
+    /// "上次生成 · X 前" hint above the regenerate button.
+    @Published private(set) var lastGeneratedAt: Double?
 
     private let entry: LibraryEntryDetail
     /// Mutable so the view can hand corpus phrases in AFTER init (the
@@ -20,42 +23,51 @@ final class RoleplayTabViewModel: ObservableObject {
     /// these before `load()` is what makes scene derivation use them.
     private var corpusPhrases: [String]
     private let client: RoleplayScenarioClient
+    private let cache: RoleplayScenarioCache
 
     init(entry: LibraryEntryDetail,
          corpusPhrases: [String],
-         settings: LlmSettings = LlmSettingsStore.load()) {
+         settings: LlmSettings = LlmSettingsStore.load(),
+         cache: RoleplayScenarioCache = RoleplayScenarioCache()) {
         self.entry = entry
         self.corpusPhrases = corpusPhrases
         self.client = .live(settings: settings)
+        self.cache = cache
     }
 
-    /// Called by the view once `WhatsubAPI.mineCorpus` resolves. If the
-    /// initial `loadIfNeeded()` hasn't run yet, the phrases will land in
-    /// the prompt naturally on the first `load()`; if the load already
-    /// finished without them, we kick a re-derive so the user sees scenes
-    /// anchored to their actual corpus.
+    /// Called by the view once `WhatsubAPI.mineCorpus` resolves. We
+    /// store the phrases for any FUTURE regenerate; we do NOT
+    /// re-derive automatically on corpus drift — fingerprint logic in
+    /// the cache makes this a no-op unless the user explicitly hits
+    /// 「重新生成」.
     func _setCorpusPhrasesAndReloadIfIdle(_ phrases: [String]) async {
-        let previouslyEmpty = corpusPhrases.isEmpty
         corpusPhrases = phrases
-        // Only reload if (a) we had no phrases the first time AND
-        // (b) we're now in picker state (initial load already finished
-        // without corpus context). idle/loading states will pick the
-        // phrases up via the natural load().
-        if previouslyEmpty, !phrases.isEmpty, case .picker = phase {
-            await load()
-        }
+        // 2026-06-04: removed the auto-reload-on-late-corpus-arrival
+        // branch. Even if the picker is showing scenes derived from
+        // an empty corpus, we honor them until the user explicitly
+        // regenerates — that's what cache persistence implies.
     }
 
-    /// Idempotent — re-entering the tab won't re-fire the LLM call. Use
-    /// `reload()` for the "换一组场景" button.
+    /// Idempotent. On first entry to the tab tries the on-disk cache;
+    /// if it has scenes for this entry → render immediately (zero LLM
+    /// call). Otherwise call the LLM and persist. Use `regenerate()`
+    /// for the "重新生成" button to force a fresh LLM call.
     func loadIfNeeded() async {
         guard case .idle = phase else { return }
-        await load()
+        if let cached = cache.get(entryId: entry.id), !cached.scenarios.isEmpty {
+            scenarios = cached.scenarios
+            lastGeneratedAt = cached.savedAt
+            phase = .picker
+            return
+        }
+        await derive(persistOnSuccess: true)
     }
 
-    /// Force a fresh LLM call (used by "换一组场景" button).
-    func reload() async {
-        await load()
+    /// User-triggered fresh LLM call. Overwrites the cache row on
+    /// success; on failure we keep the existing cached set (so the tab
+    /// still has something to render) and just surface the error.
+    func regenerate() async {
+        await derive(persistOnSuccess: true)
     }
 
     func pick(_ scenario: RoleplayScenario) {
@@ -72,7 +84,10 @@ final class RoleplayTabViewModel: ObservableObject {
 
     // MARK: - private
 
-    private func load() async {
+    /// One LLM call + state transition. `persistOnSuccess` controls
+    /// whether a success path writes the cache (always true at the
+    /// moment; left as a hook for future "preview / don't save" flows).
+    private func derive(persistOnSuccess: Bool) async {
         phase = .loading
 
         // Fast-path guard: if the user hasn't configured an LLM key, there's
@@ -91,13 +106,24 @@ final class RoleplayTabViewModel: ObservableObject {
         switch result {
         case .success(let list):
             scenarios = list
+            if persistOnSuccess {
+                cache.put(entryId: entry.id,
+                          scenarios: list,
+                          corpusPhrases: corpusPhrases)
+                lastGeneratedAt = Date().timeIntervalSince1970
+            }
             phase = .picker
         case .failure(let msg):
             // The fallback scene keeps the tab usable even when the LLM
             // refused. We surface the error message but ALSO inject the
-            // stock so the user has something to tap.
+            // stock so the user has something to tap. We do NOT persist
+            // a fallback row — next launch tries the LLM again.
             let stock = RoleplayScenarioClient.stockFallback(videoTitle: entry.title)
-            scenarios = [stock]
+            // If we have a cached set, keep it instead of clobbering with
+            // a single stock card.
+            if scenarios.isEmpty {
+                scenarios = [stock]
+            }
             phase = .error(msg)
         }
     }

@@ -79,22 +79,35 @@ struct RoleplayTabView: View {
                     }
                 }
 
-                Button {
-                    Task { await vm.reload() }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("换一组场景")
+                // 2026-06-04: scenarios are now persisted to
+                // Caches/roleplay_scenarios.json, so re-entering the tab
+                // does NOT re-burn an LLM call. This button is the only
+                // way to force a fresh derivation. The "上次生成 · X 前"
+                // hint surfaces when scenes came from the cache so the
+                // user knows they're looking at saved content.
+                VStack(spacing: 4) {
+                    if let savedAt = vm.lastGeneratedAt {
+                        Text("上次生成 · \(Self.lastGeneratedLabel(epoch: savedAt))")
+                            .font(.caption2)
+                            .foregroundStyle(.whatsubInkFaint)
                     }
-                    .font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .foregroundStyle(.whatsubInkMuted)
-                    .background(Color.whatsubBgElev.opacity(0.5),
-                                in: Capsule())
+                    Button {
+                        Task { await vm.regenerate() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.clockwise")
+                            Text(vm.phase == .loading ? "重新生成中…" : "重新生成场景")
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .foregroundStyle(.whatsubInkMuted)
+                        .background(Color.whatsubBgElev.opacity(0.5),
+                                    in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(vm.phase == .loading)
                 }
-                .buttonStyle(.plain)
                 .padding(.top, 8)
-                .disabled(vm.phase == .loading)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -143,6 +156,20 @@ struct RoleplayTabView: View {
         } catch {
             // Silent — scene derivation still works without corpus context.
         }
+    }
+
+    /// "5 分钟前" / "2 小时前" / "昨天" / "3 天前" / "Mar 12". Stays
+    /// short so it sits comfortably above the regenerate button.
+    static func lastGeneratedLabel(epoch: Double) -> String {
+        let delta = Date().timeIntervalSince1970 - epoch
+        if delta < 60 { return "刚刚" }
+        if delta < 3600 { return "\(Int(delta / 60)) 分钟前" }
+        if delta < 86_400 { return "\(Int(delta / 3600)) 小时前" }
+        if delta < 86_400 * 7 { return "\(Int(delta / 86_400)) 天前" }
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "zh_CN")
+        fmt.dateFormat = "M月d日"
+        return fmt.string(from: Date(timeIntervalSince1970: epoch))
     }
 }
 

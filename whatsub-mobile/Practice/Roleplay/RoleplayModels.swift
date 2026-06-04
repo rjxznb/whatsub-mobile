@@ -10,7 +10,7 @@ import Foundation
 /// to emit a stable id — observation: DeepSeek/Claude both invent random
 /// ids on each call, so trying to "keep the same scenario across reloads"
 /// via the LLM id is a fool's errand. Identity is local + per-load.
-struct RoleplayScenario: Identifiable, Equatable {
+struct RoleplayScenario: Identifiable, Equatable, Codable {
     /// Local UUID. The LLM-supplied id (if any) is ignored.
     let id: UUID
     /// Short Chinese title shown on the card (e.g. "你当旅客我当海关").

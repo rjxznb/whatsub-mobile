@@ -394,26 +394,40 @@ struct QuickChatView: View {
     // to see the rest; user can now swipe to see the full chip text in
     // one swipe. Tap-to-open-detail-card is still wired below.
     private var headerChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(phrases) { p in
-                    Button { stuckPhrase = p } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: vm.completedPhrases.contains(p.phraseNormalized) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(vm.completedPhrases.contains(p.phraseNormalized) ? .green : .whatsubInkFaint)
-                            Text(p.phraseRaw)
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .foregroundStyle(.whatsubInk)
+        // 2026-06-04: prepended a pinned-left "目标短语" label so users
+        // know what the chips are (they read as random vocab otherwise,
+        // especially in roleplay mode where they're the scene's
+        // vocabHints not the user's collected phrases). The label sits
+        // OUTSIDE the ScrollView so it doesn't scroll out of view as
+        // chip rows grow.
+        HStack(alignment: .center, spacing: 8) {
+            Text("目标短语")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.whatsubInkMuted)
+                .padding(.leading, 16)
+                .padding(.trailing, 2)
+                .layoutPriority(1)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(phrases) { p in
+                        Button { stuckPhrase = p } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: vm.completedPhrases.contains(p.phraseNormalized) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(vm.completedPhrases.contains(p.phraseNormalized) ? .green : .whatsubInkFaint)
+                                Text(p.phraseRaw)
+                                    .font(.caption.weight(.semibold))
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .foregroundStyle(.whatsubInk)
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(Capsule().fill(Color.whatsubBgElev))
                         }
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Capsule().fill(Color.whatsubBgElev))
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.trailing, 16)
             }
-            .padding(.horizontal, 16)
         }
         .padding(.bottom, 4)
     }
