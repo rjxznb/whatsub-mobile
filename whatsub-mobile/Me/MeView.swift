@@ -75,10 +75,10 @@ struct MeView: View {
                             Button("管理订阅") { showManageSubscriptions = true }
                                 .foregroundStyle(.whatsubAccent)
                         } else {
-                            Text("订阅 Pro：🆕 内置 DeepSeek AI（零配置） · 50 个云端视频 · 单个 500MB/60 分钟 · 1000 个语料库；免费档 3 个视频 · 100MB/20 分钟 · 200K 一次性 AI 体验包。")
-                                .font(.footnote).foregroundStyle(.whatsubInkMuted)
-                            // A single entry button (not inline price buttons) — tapping
-                            // opens the payment card. Less money-grabby.
+                            // Inline blurb removed 2026-06-04 per user feedback —
+                            // the full feature list lives inside SubscribeSheet,
+                            // and the button label below is now the only
+                            // pre-tap copy in this row.
                             Button {
                                 showSubscribe = true
                             } label: {
