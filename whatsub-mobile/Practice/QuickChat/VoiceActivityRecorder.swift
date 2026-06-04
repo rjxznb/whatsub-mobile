@@ -284,10 +284,45 @@ final class VoiceActivityRecorder {
         }
 
         if text != lastPartialText {
+            // SF on-device occasionally auto-segments WITHOUT firing
+            // isFinal — user reports of "chunk 1 disappears after a
+            // mid-utterance pause". The handler above only drains
+            // finalizedSegments when isFinal lands; without that signal
+            // we'd just overwrite lastPartialText with chunk 2's text
+            // and lose chunk 1. Detect the reset by checking if the
+            // previous partial's tail still appears in the new partial
+            // — normal partial-growth and SF refinements preserve the
+            // suffix; a true segment reset doesn't.
+            if Self.looksLikeRecognizerReset(prev: lastPartialText, new: text) {
+                let cleaned = lastPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleaned.isEmpty {
+                    finalizedSegments.append(cleaned)
+                }
+            }
             lastPartialText = text
             lastPartialChangedAt = Date()
             onPartialTranscript?(accumulatedTranscript)
         }
+    }
+
+    /// True when the new partial text looks like a fresh SF utterance
+    /// rather than an extension/refinement of the previous one. We only
+    /// trip on substantive prev text (≥ 8 chars) so the very first
+    /// partials of a session don't get treated as resets. The tail-12
+    /// suffix is long enough to be specific (4+ alphanumeric chars
+    /// after trim — Apple's recognizer doesn't lose 12 chars of context
+    /// across a refine) and short enough to tolerate minor punctuation
+    /// or capitalisation tweaks at the end. Conservative bias: false
+    /// negatives are visible to the user (chunk doesn't reset → no
+    /// harm); false positives mean the same text appears twice in the
+    /// final transcript (LLM still understands, slightly less clean).
+    private static func looksLikeRecognizerReset(prev: String, new: String) -> Bool {
+        guard prev.count >= 8 else { return false }
+        let tail = String(prev.suffix(12))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard tail.count >= 4 else { return false }
+        return !new.lowercased().contains(tail)
     }
 
     /// Caller-visible transcript = all finalized segments joined + the

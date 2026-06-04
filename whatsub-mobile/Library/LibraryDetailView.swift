@@ -149,6 +149,20 @@ struct LibraryDetailView: View {
                 videoURL: ossVideoURL
             )
         }
+        // Pause whenever this view leaves the screen — covers:
+        //   • bottom TabView switch (Library → 语料库 / 我的): without this
+        //     the audio kept playing in the background. Users complained
+        //     the video "follows them" across tabs.
+        //   • navigation pop back to the Library list (cleanest: back arrow
+        //     killed sound but video frame stays implied; this aligns both).
+        // Does NOT fire on sheet presentation (sheets keep the underlying
+        // view alive) so shadow / cloze / collect / roleplay sheets continue
+        // to work — their own logic handles pause/resume as needed.
+        // Does NOT fire on portrait↔landscape rotation either — that's the
+        // same SwiftUI view re-laid-out, not torn down.
+        // Position stays at the paused timestamp, so resuming the video by
+        // tapping play continues from where the user left off.
+        .onDisappear { avPlayer?.pause() }
     }
 
     /// The video surface + loading state + the caption / CC-toggle overlays.
@@ -346,7 +360,11 @@ struct LibraryDetailView: View {
                     vm.seekTo(seconds: sec)
                 }
             case .roleplay:
-                RoleplayTabView(entry: entry)
+                // Pause the underlying video the moment the user opens a
+                // roleplay session — the orb wants the user's mic free of
+                // competing audio. Not auto-resumed on dismiss; the user
+                // taps play themselves if they want the video back.
+                RoleplayTabView(entry: entry, onSessionStart: { avPlayer?.pause() })
             }
         }
     }

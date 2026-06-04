@@ -68,6 +68,20 @@ final class PendingPhraseStore: ObservableObject {
         save()
     }
 
+    /// Drop every staged phrase tied to a Library entry. Called from
+    /// `LibraryViewModel.delete` so deleting a video also clears its draft
+    /// staging — those phrases were anchored to the video's context and
+    /// can't be navigated back to once the source video is gone (banner
+    /// disappears with the detail view; orphaned entries would only
+    /// surface in the global 待同步暂存 list with no way back to context).
+    /// Phrases ALREADY synced to the cloud corpus are untouched — they
+    /// live independently in the user's personal corpus from now on.
+    func removeAll(entryId: String) {
+        guard items.contains(where: { $0.entryId == entryId }) else { return }
+        items.removeAll { $0.entryId == entryId }
+        save()
+    }
+
     // MARK: - queries
 
     /// How many pending phrases this Library entry has staged.

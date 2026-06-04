@@ -10,14 +10,22 @@ import SwiftUI
 /// switching tabs doesn't force a reload of the other.
 struct RoleplayTabView: View {
     let entry: LibraryEntryDetail
+    /// Called right when the roleplay session sheet first appears — the
+    /// parent (`LibraryDetailView`) uses it to pause the underlying
+    /// `AVPlayer` so the video audio doesn't fight the mic/TTS during the
+    /// orb dialog. Not auto-resumed on dismiss: the user releases the
+    /// session and decides whether to keep watching the video — they tap
+    /// play themselves if they want to.
+    var onSessionStart: (() -> Void)? = nil
 
     @EnvironmentObject private var appState: AppState
     @StateObject private var vm: RoleplayTabViewModel
     @State private var loadedCorpusPhrases: [String] = []
     @State private var corpusLoaded = false
 
-    init(entry: LibraryEntryDetail) {
+    init(entry: LibraryEntryDetail, onSessionStart: (() -> Void)? = nil) {
         self.entry = entry
+        self.onSessionStart = onSessionStart
         _vm = StateObject(wrappedValue: RoleplayTabViewModel(
             entry: entry, corpusPhrases: []
         ))
@@ -51,6 +59,7 @@ struct RoleplayTabView: View {
         }
         .sheet(item: $vm.picked) { scenario in
             RoleplaySessionView(scenario: scenario)
+                .onAppear { onSessionStart?() }
                 .onDisappear { vm.dismissSession() }
         }
     }

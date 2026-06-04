@@ -20,6 +20,13 @@ private struct TranslationTarget: Identifiable {
 struct QuickChatView: View {
     let phrases: [SessionPhrase]
     let suggestedTag: String?
+    /// True when invoked via the roleplay init — renders a "Turn N / max"
+    /// pacing indicator above the chip strip so the user can feel the
+    /// session approaching its 8-turn cap. Phrase-drill mode hides it
+    /// because the goal there is "use all 3 phrases", not "burn through
+    /// N turns" — surfacing the counter would change what users optimize
+    /// for. Stored let, set in each init.
+    private let displayTurnCounter: Bool
 
     @StateObject private var vm: QuickChatViewModel
     @Environment(\.dismiss) private var dismiss
@@ -59,6 +66,7 @@ struct QuickChatView: View {
         }
         self.phrases = phrases
         self.suggestedTag = suggestedTag
+        self.displayTurnCounter = false
         let client = ChatCompletionsClient(settings: settings)
         let systemPrompt = QuickChatPrompts.systemPrompt(phrases: phrases, suggestedTag: suggestedTag)
         let engine = ConversationEngine(client: client, systemPrompt: systemPrompt)
@@ -85,6 +93,7 @@ struct QuickChatView: View {
          settings: LlmSettings = LlmSettingsStore.load()) {
         self.phrases = vocabPhrases
         self.suggestedTag = roleplayScenarioTitle
+        self.displayTurnCounter = true
         let client = ChatCompletionsClient(settings: settings)
         let engine = ConversationEngine(client: client, systemPrompt: systemPrompt)
         _vm = StateObject(wrappedValue: QuickChatViewModel(
@@ -102,6 +111,7 @@ struct QuickChatView: View {
                 Color.whatsubBg
                     .ignoresSafeArea()
                 VStack(spacing: 0) {
+                    turnCounter   // hidden in phrase-drill mode (no-op view)
                     headerChips.padding(.top, 6)
                     Spacer(minLength: 0)
                     VoiceOrbView(state: orbState,
@@ -384,6 +394,28 @@ struct QuickChatView: View {
             if vm.turns.isEmpty { return "准备开始…" }
             if micPermissionDenied { return "未授权麦克风，去 设置 → whatSub 打开" }
             return "按住球说话"
+        }
+    }
+
+    // ---- turn counter (roleplay-only) ----
+    // Subtle "Turn N / max" hint above the chip strip. Gives the user a
+    // sense of how much room is left in the scene so the AI's natural
+    // goodbye at turn `max` doesn't feel abrupt. Phrase-drill mode hides
+    // it on purpose: the win condition there is "use all phrases", not
+    // "hit some turn count", and showing the counter would distort how
+    // users pace themselves. Trailing alignment + caption2 so it reads
+    // as ambient meta-info, not a primary control.
+    @ViewBuilder
+    private var turnCounter: some View {
+        if displayTurnCounter, let cap = vm.maxTurns {
+            HStack {
+                Spacer()
+                Text("Turn \(max(1, vm.turnIndex)) / \(cap)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.whatsubInkFaint)
+                    .padding(.trailing, 16)
+                    .padding(.top, 4)
+            }
         }
     }
 

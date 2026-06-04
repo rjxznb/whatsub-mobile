@@ -94,9 +94,16 @@ struct ScenarioDerivationResponse: Decodable {
                 return nil
             }
             let difficulty = max(1, min(3, r.difficulty ?? 2))
-            let hints = (r.vocabHints ?? [])
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+            // Cap at 5 even if the LLM ignored the prompt and returned
+            // more (DeepSeek does this routinely when corpus context has
+            // 10+ phrases). Header chip strip gets crowded past 5; verdict
+            // block stays in lockstep since both read the SAME array.
+            let hints = Array(
+                (r.vocabHints ?? [])
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .prefix(5)
+            )
             return RoleplayScenario(
                 id: UUID(),
                 title: title,

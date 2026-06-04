@@ -73,7 +73,12 @@ final class QuickChatViewModel: ObservableObject {
     @Published var typedInput: String = ""
 
     // ---- internal session state ----
-    private var turnIndex = 0                       // 0 = opening
+    /// 0 = opening (AI hasn't replied yet); 1+ = user-driven turns the
+    /// session has consumed. Surfaced to the view (read-only) so the
+    /// roleplay header can render a "Turn N / max" pacing indicator —
+    /// phrase-drill mode doesn't display it, so the @Published cost is
+    /// only paid where it's used.
+    @Published private(set) var turnIndex: Int = 0
     private var written = false                     // ensure single end-of-session write
     /// How many times VAD timed out with no speech. After 2, end the session.
     private(set) var noSpeechRounds: Int = 0

@@ -53,7 +53,7 @@ enum RoleplayPrompts {
         - setup 是一句 English（25 字以内），描述场景。
         - userRole / agentRole 用 2-6 字的简洁角色名（中英皆可，保持简短）。
         - difficulty: 1=A2, 2=B1, 3=B2。结合视频原文难度判断；不确定就选 2。
-        - vocabHints: 3-5 个 English phrases，全部小写、保留 phrasal 完整形态（"figure it out" 而非 "figure"）。
+        - vocabHints: **严格 3-5 个** English phrases（绝不超过 5 个；多了客户端会被截掉，多写浪费 token）。全部小写、保留 phrasal 完整形态（"figure it out" 而非 "figure"）。
         - 不要给同一个视频生成 3 个相似场景；如果只有一个明显合适的，给 1 个就行。
 
         输出格式（exactly）：

@@ -12,6 +12,12 @@ final class LibraryViewModel: ObservableObject {
         do {
             try await WhatsubAPI.shared.deleteLibraryEntry(id: id, token: token)
             entries.removeAll { $0.id == id }
+            // Also drop any local drafts staged from this video — they were
+            // anchored to this video's context (timestamps + transcript
+            // sentences) and can't be navigated back to once the source is
+            // gone. Phrases ALREADY synced to the cloud corpus are
+            // unaffected — they live independently from this point on.
+            PendingPhraseStore.shared.removeAll(entryId: id)
         } catch {
             errorMessage = "删除失败，请稍后重试"
         }
