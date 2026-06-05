@@ -226,7 +226,12 @@ struct VoiceOrbView: View {
     /// text itself a frosted-glass appearance to match the orb body.
     @ViewBuilder
     private func pushMeLabel(time: Date) -> some View {
-        let text = "press me"
+        // Scale font with baseSize so the label fits in small orbs too.
+        // At default baseSize=180 → 44pt (the original tuning). At a
+        // smaller LiveScene baseSize=110 it shrinks to ~27pt and stays
+        // a single word instead of truncating to "press…".
+        let labelSize = baseSize * (44.0 / 180.0)
+        let text = "press"
         // 0..1 sweep phase, loop every 2.4 s.
         let phase = time.timeIntervalSinceReferenceDate
             .truncatingRemainder(dividingBy: 2.4) / 2.4
@@ -238,13 +243,13 @@ struct VoiceOrbView: View {
         // briefly lifts each character as it passes through.
         ZStack {
             Text(text)
-                .font(.custom("Caveat-Bold", size: 44))
+                .font(.custom("Caveat-Bold", size: labelSize))
                 .foregroundStyle(.regularMaterial.opacity(0.65))
 
             // Highlight pass — same text, full-white, masked by a moving
             // gradient band so only the slice currently under the band lights up.
             Text(text)
-                .font(.custom("Caveat-Bold", size: 44))
+                .font(.custom("Caveat-Bold", size: labelSize))
                 .foregroundStyle(.white)
                 .mask(
                     LinearGradient(

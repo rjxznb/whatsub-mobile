@@ -406,46 +406,48 @@ struct LiveSceneView: View {
         }
     }
 
-    /// Push-to-talk orb. **The hit-area is a UIKit overlay**, not
-    /// SwiftUI's .gesture(...) — 4 SwiftUI attempts (d7e501a / 0b5e6ca
-    /// / 41a97f0 / fe9c470) all hit the same "release event never
-    /// reaches .onEnded" bug. Debug logs confirmed only 1 onChanged
-    /// fires per hold and then nothing — SwiftUI was silently
-    /// cancelling the gesture mid-press. UIKit
-    /// `UILongPressGestureRecognizer` doesn't have that problem; once
-    /// `.began` fires it owns the touch outright through `.ended` /
-    /// `.cancelled`. See `PushToTalkOverlay.swift` for full rationale.
+    /// Push-to-talk orb. **6th** attempt at making this work:
+    ///   1. d7e501a — inline DragGesture, captured stale isRecording
+    ///   2. 0b5e6ca — closure reads vm.phase, still inline. Still broke.
+    ///   3. 41a97f0 — computed gesture + @State latch (matched QuickChat
+    ///       structurally). Still broke.
+    ///   4. fe9c470 — removed ScrollView ancestor. Still broke.
+    ///   5. ef33d0a — UIKit `UILongPressGestureRecognizer` via
+    ///       `PushToTalkOverlay`. Apparently STILL didn't fire
+    ///       (per user 2026-06-05 — even haptic absent → recogniser
+    ///       never .began'd → ZStack hit-testing issue?).
+    ///
+    /// This attempt: SwiftUI `Button` with a custom `ButtonStyle` that
+    /// observes `configuration.isPressed`. Button's touch handling is
+    /// the most battle-tested entry point in SwiftUI — it's the one
+    /// Apple uses for system controls. ButtonStyle's `isPressed`
+    /// transitions on press-down and release-up reliably, even in
+    /// situations where raw gestures get cancelled.
     @ViewBuilder
     private func orbBlock(isRecording: Bool) -> some View {
         VStack(spacing: 4) {
-            ZStack {
+            Button(action: {}) {
                 VoiceOrbView(
                     state: isOrbPressed ? .recording : .idle,
                     audioLevel: vm.audioLevel,
                     isPressed: isOrbPressed,
                     baseSize: 110
                 )
-                // Transparent overlay sized to match the orb's halo
-                // footprint (~110 × 1.85 ≈ 203pt). Big square hit area
-                // for finger tolerance.
-                PushToTalkOverlay(
-                    onPress: {
-                        logDebug("UIKit onPress phase=\(phaseKey(vm.phase))")
-                        guard !isOrbPressed, case .ready = vm.phase else { return }
-                        isOrbPressed = true
-                        vm.startRecording()
-                        logDebug("→ start phase=\(phaseKey(vm.phase))")
-                    },
-                    onRelease: {
-                        logDebug("UIKit onRelease pressed=\(isOrbPressed)")
-                        guard isOrbPressed else { return }
-                        isOrbPressed = false
-                        vm.endRecording()
-                        logDebug("→ end   phase=\(phaseKey(vm.phase))")
-                    }
-                )
-                .frame(width: 210, height: 210)
             }
+            .buttonStyle(PressDetectingButtonStyle(onPressChanged: { pressed in
+                logDebug("Btn pressed=\(pressed) phase=\(phaseKey(vm.phase))")
+                if pressed {
+                    guard !isOrbPressed, case .ready = vm.phase else { return }
+                    isOrbPressed = true
+                    vm.startRecording()
+                    logDebug("→ start phase=\(phaseKey(vm.phase))")
+                } else {
+                    guard isOrbPressed else { return }
+                    isOrbPressed = false
+                    vm.endRecording()
+                    logDebug("→ end   phase=\(phaseKey(vm.phase))")
+                }
+            }))
             Text(isOrbPressed ? "松开结束" : "按住说英语")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.whatsubInkMuted)
@@ -582,5 +584,24 @@ struct LiveSceneView: View {
             }
             Spacer()
         }
+    }
+}
+
+/// Custom ButtonStyle that surfaces Apple's `configuration.isPressed`
+/// transitions as a callback. SwiftUI Button is the most reliable
+/// touch entry point in this framework — its press detection works
+/// even in view trees where raw `DragGesture` / `LongPressGesture` /
+/// even UIKit gesture overlays were getting silently cancelled
+/// (LiveScene's saga, 5 failed attempts before this one).
+///
+/// 2026-06-05.
+fileprivate struct PressDetectingButtonStyle: ButtonStyle {
+    let onPressChanged: (Bool) -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .onChange(of: configuration.isPressed) { newValue in
+                onPressChanged(newValue)
+            }
     }
 }
