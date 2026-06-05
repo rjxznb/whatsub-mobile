@@ -55,23 +55,38 @@ targets:
       - whatsub-mobile/Resources/ecdict-cn.json
       - whatsub-mobile/Resources/correct.wav
       - whatsub-mobile/Resources/Caveat-Bold.ttf
-      # `type: folder` alone wasn't producing Copy-Bundle-Resources
-      # entries in the generated pbxproj — CI Archive log (c549807)
-      # showed only ipa-en-us.json / ecdict-cn.json / correct.wav /
-      # Caveat-Bold.ttf being copied. NEEDS `buildPhase: resources`
-      # to force XcodeGen to attach the folder reference to the
-      # "Copy Bundle Resources" build phase. Without that, the folder
-      # ref exists in the project but is dead weight.
-      - path: whatsub-mobile/Resources/espeak-ng-data
-        type: folder
-        buildPhase: resources
-      # Piper voice model bundled as 3 individual file resources
-      # (not folder reference) — same reason as espeak above, but
-      # easier since it's only 3 files. They land at the bundle ROOT
-      # (Bundle.main.bundleURL), so PiperTTS.modelDir resolves there.
-      - whatsub-mobile/Resources/piper-ljspeech/en_US-ljspeech-medium.onnx
-      - whatsub-mobile/Resources/piper-ljspeech/tokens.txt
-      - whatsub-mobile/Resources/piper-ljspeech/en_US-ljspeech-medium.onnx.json
+      # NOTE: espeak-ng-data + piper-ljspeech are NOT declared as
+      # XcodeGen resources here — every attempt (folder ref, per-file,
+      # buildPhase: resources) was silently dropped from the pbxproj's
+      # Copy Bundle Resources phase by XcodeGen 2.45.4. The bullet-
+      # proof workaround is the postBuildScripts entry at the end of
+      # this target — a shell script that copies them into the .app
+      # bundle directly after build, BEFORE codesign runs.
+    postBuildScripts:
+      - name: Embed Piper voice model + espeak-ng-data
+        # basedOnDependencyAnalysis=false → run on every build, ignore
+        # Xcode's input/output file dependency caching. Cheap (≪1s),
+        # safer than missing the copy.
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          APP="$TARGET_BUILD_DIR/$WRAPPER_NAME"
+          SRC="$SRCROOT/whatsub-mobile/Resources"
+          if [ -d "$SRC/espeak-ng-data" ]; then
+            rm -rf "$APP/espeak-ng-data"
+            cp -R "$SRC/espeak-ng-data" "$APP/"
+            echo "[piper] copied espeak-ng-data ($(du -sh "$APP/espeak-ng-data" | cut -f1)) → .app"
+          else
+            echo "[piper] WARN: $SRC/espeak-ng-data missing — Piper TTS will silently fail"
+          fi
+          if [ -d "$SRC/piper-ljspeech" ]; then
+            cp -f "$SRC/piper-ljspeech/en_US-ljspeech-medium.onnx" "$APP/"
+            cp -f "$SRC/piper-ljspeech/tokens.txt" "$APP/"
+            cp -f "$SRC/piper-ljspeech/en_US-ljspeech-medium.onnx.json" "$APP/"
+            echo "[piper] copied voice model files → .app (.onnx $(du -h "$APP/en_US-ljspeech-medium.onnx" | cut -f1))"
+          else
+            echo "[piper] WARN: $SRC/piper-ljspeech missing — Piper TTS will silently fail"
+          fi
     info:
       path: whatsub-mobile/Info.plist
       properties:
