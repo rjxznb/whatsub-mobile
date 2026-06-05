@@ -51,7 +51,10 @@ struct CameraTabView: View {
                             icon: "camera.viewfinder",
                             action: { showPhoto = true }
                         )
-                        importHint
+                        // (import-hint card moved to Library tab's empty
+                        // state 2026-06-05 — the 3 import paths read more
+                        // naturally next to the "+" toolbar button + the
+                        // tab where the synced videos actually land.)
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
@@ -130,34 +133,7 @@ struct CameraTabView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - share-from-other-apps hint
-
-    /// Quieter card at the bottom — informational not interactive (no
-    /// chevron; no tap). Surfaces the existence of the Share Extension
-    /// for users who don't realise they can push YouTube/Bilibili URLs
-    /// into whatSub from those apps.
-    private var importHint: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.whatsubInkMuted)
-                Text("也可以分享视频进来")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.whatsubInkMuted)
-            }
-            Text("在 YouTube 或 B 站 app 里点 分享 → whatSub,视频会自动进入「我的视频库」。")
-                .font(.caption)
-                .foregroundStyle(.whatsubInkFaint)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.whatsubBg, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.whatsubBgElev, lineWidth: 1)
-        )
-        .padding(.top, 10)
-    }
+    // (importHint view removed 2026-06-05 — moved to LibraryView's
+    // empty state as a 3-path hint row block. See LibraryView's
+    // importHintRow + emptyStateImportHints.)
 }

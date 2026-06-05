@@ -90,14 +90,34 @@ struct LibraryView: View {
             }.padding(32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if vm.entries.isEmpty {
-            // Center the empty state in the area below the header (the parent VStack
-            // is .leading/.top, so without this the placeholder hugs the top-left on iPad).
-            VStack(spacing: 10) {
-                Image(systemName: "play.rectangle").font(.system(size: 48)).foregroundStyle(.whatsubAccent)
-                Text("还没有同步的视频").font(.headline).foregroundStyle(.whatsubInk)
-                Text("在桌面端 whatSub 的视频卡片上点 ☁️ 同步到云，\n这里下拉刷新就能看到").font(.footnote)
-                    .foregroundStyle(.whatsubInkMuted).multilineTextAlignment(.center)
-            }.padding(32)
+            // 2026-06-05: enriched empty state with the three import paths
+            // (was previously a single line pointing only to the desktop
+            // sync route). Surfaces:
+            //   ① 「+」 toolbar (paste a YouTube / B 站 URL)
+            //   ② Share extension (YouTube / B 站 → whatSub)
+            //   ③ Desktop sync (cloud icon in the desktop client)
+            // Only shown on empty Library — once the user has any video
+            // here, the "+" button alone is enough discoverability; we
+            // don't add a persistent footer to non-empty lists.
+            VStack(spacing: 14) {
+                Image(systemName: "play.rectangle")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.whatsubAccent)
+                Text("还没有视频")
+                    .font(.headline)
+                    .foregroundStyle(.whatsubInk)
+                VStack(alignment: .leading, spacing: 10) {
+                    importHintRow(icon: "plus.circle.fill",
+                                  text: "点击右上角「+」粘贴 YouTube、B 站等链接")
+                    importHintRow(icon: "square.and.arrow.up",
+                                  text: "在视频 app 里点分享 → whatSub")
+                    importHintRow(icon: "icloud.and.arrow.down",
+                                  text: "桌面端点 ☁️ 同步,这里下拉刷新")
+                }
+                .padding(.top, 4)
+                .padding(.horizontal, 12)
+            }
+            .padding(32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(vm.entries) { entry in
@@ -132,6 +152,23 @@ struct LibraryView: View {
             } message: { entry in
                 Text("「\(entry.title)」将从云端移除（含已上传的视频文件）。桌面端本地副本保留，可重新同步。")
             }
+        }
+    }
+
+    /// One row in the empty-state import-paths block. The leading-icon
+    /// width is fixed so the text lines up vertically across rows
+    /// regardless of which SF Symbol gets used.
+    private func importHintRow(icon: String, text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: icon)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.whatsubAccent)
+                .frame(width: 18, alignment: .center)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.whatsubInkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 }
