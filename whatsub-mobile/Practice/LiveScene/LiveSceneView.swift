@@ -1,18 +1,23 @@
 import SwiftUI
 import PhotosUI
 
-/// 实景口语练习 sheet. Phase-driven content tree: picker → Vision →
+/// 实景口语练习 surface. Phase-driven content tree: picker → Vision →
 /// LLM prompt → press-and-hold record → LLM grade → review.
 ///
+/// Hosted INLINE inside `CameraTabView` (the 实景口语 tab) rather than
+/// presented as a sheet (build 2026-06-05+). The parent owns the nav
+/// chrome (title + top-right 拍照翻译 button); this view just renders
+/// the phase-driven body.
+///
 /// Reuses `PhotoCameraPicker` / `PhotosPicker` from the photo flow + the
-/// `VoiceActivityRecorder` from QuickChat. The orb here is a simpler
-/// push-to-talk button than QuickChat's full orb shell — single-round
-/// exercise doesn't need scene-phase auto-flow.
+/// `VoiceActivityRecorder` + `VoiceOrbView` from QuickChat. The orb is
+/// the same Liquid-Glass shader QuickChat uses — feels native + makes
+/// the recording surface feel like the QuickChat session, just gated by
+/// push-to-talk instead of auto-VAD.
 ///
 /// 2026-06-05.
 struct LiveSceneView: View {
     @StateObject private var vm = LiveSceneViewModel()
-    @Environment(\.dismiss) private var dismiss
 
     // Picker presentation state — local to the view, kept out of vm
     // because they're pure UI surfaces, not business state.
@@ -20,48 +25,82 @@ struct LiveSceneView: View {
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var cameraImage: UIImage?
 
+    /// Progressive-scaffolding 提示 cycle (build 2026-06-05+):
+    ///   .none           → only the English prompt + vocab chips visible
+    ///   .zh             → also reveal the Chinese hint (promptZh)
+    ///   .zhAndSample    → also reveal the English sample answer
+    /// Cycles back to .none on the 4th tap so the user can hide hints
+    /// and try fresh. Reset to .none whenever a new prompt loads (see
+    /// .onChange below) — past hints shouldn't leak across exercises.
+    @State private var hintLevel: HintLevel = .none
+    enum HintLevel: Int, Comparable {
+        case none = 0, zh = 1, zhAndSample = 2
+        static func < (lhs: HintLevel, rhs: HintLevel) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+        var next: HintLevel {
+            switch self {
+            case .none: return .zh
+            case .zh: return .zhAndSample
+            case .zhAndSample: return .none
+            }
+        }
+    }
+
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.whatsubBg.ignoresSafeArea()
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ZStack {
+            Color.whatsubBg.ignoresSafeArea()
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .sheet(isPresented: $showCamera) {
+            PhotoCameraPicker(image: $cameraImage)
+                .ignoresSafeArea()
+        }
+        .onChange(of: cameraImage) { newImage in
+            if let img = newImage {
+                cameraImage = nil
+                Task { await vm.didPickImage(img) }
             }
-            .navigationTitle("实景口语练习")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") {
-                        vm.tearDown()
-                        dismiss()
-                    }
+        }
+        .onChange(of: photoPickerItem) { newItem in
+            guard let item = newItem else { return }
+            photoPickerItem = nil
+            Task {
+                if let img = await PhotoLibraryPicker.resolve(item) {
+                    await vm.didPickImage(img)
                 }
             }
-            // Camera capture sheet — present on demand from the picker buttons.
-            // The gallery picker is the `PhotosPicker` view inside pickerView
-            // (modern iOS 16+ API — it's a Button that opens the picker UI
-            // directly, no `.photosPicker(isPresented:)` modifier needed).
-            .sheet(isPresented: $showCamera) {
-                PhotoCameraPicker(image: $cameraImage)
-                    .ignoresSafeArea()
-            }
-            // Camera → vm pipeline.
-            .onChange(of: cameraImage) { newImage in
-                if let img = newImage {
-                    cameraImage = nil   // reset binding so re-selection fires
-                    Task { await vm.didPickImage(img) }
-                }
-            }
-            // Gallery → vm pipeline.
-            .onChange(of: photoPickerItem) { newItem in
-                guard let item = newItem else { return }
-                photoPickerItem = nil
-                Task {
-                    if let img = await PhotoLibraryPicker.resolve(item) {
-                        await vm.didPickImage(img)
-                    }
-                }
-            }
+        }
+        // Reset the 提示 reveal level whenever the user lands on a fresh
+        // prompt (new pick → new derivation). Past hints shouldn't carry
+        // across exercises and prejudice the next attempt.
+        .onChange(of: phaseKey(vm.phase)) { _ in
+            hintLevel = .none
+        }
+        // Don't tear down on .onDisappear — tab switches fire it too, and
+        // we want the prompt + captured image to persist when the user
+        // comes back to this tab. The recorder cleans up its own audio
+        // session on each endRecording() call, so a tab switch mid-prompt
+        // leaks nothing. (If the user is HOLDING the orb during a tab
+        // switch — rare — the recorder's 30s hardCap or the next press's
+        // teardown cleans up; not worth special-casing.)
+    }
+
+    /// Reduce Phase to a small key string for onChange — Phase isn't
+    /// Hashable (associated values include UIImage / SceneContext which
+    /// aren't naturally so), and we only care about "did we transition
+    /// to a new prompt" for the hint-reset.
+    private func phaseKey(_ p: LiveSceneViewModel.Phase) -> String {
+        switch p {
+        case .picker: return "picker"
+        case .classifying: return "classifying"
+        case .prompting: return "prompting"
+        case .ready: return "ready"
+        case .recording: return "recording"
+        case .grading: return "grading"
+        case .review: return "review"
+        case .error: return "error"
         }
     }
 
@@ -94,9 +133,16 @@ struct LiveSceneView: View {
     private var pickerView: some View {
         VStack(spacing: 24) {
             Spacer()
-            Image(systemName: "eye.circle")
-                .font(.system(size: 64, weight: .light))
-                .foregroundStyle(.whatsubAccent)
+            // Center icon: the multi-color mountains asset (was eye.circle
+            // SF Symbol). Same asset that lives in the asset catalog as
+            // LiveSceneCardIcon — brand palette mountains + yellow sun.
+            // Bigger here (88pt) than in the old card row (36pt) — this
+            // is the empty-state hero.
+            Image("LiveSceneCardIcon")
+                .resizable()
+                .renderingMode(.original)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 88, height: 88)
             VStack(spacing: 8) {
                 Text("拍一张你眼前的画面")
                     .font(.title3.weight(.semibold))
@@ -153,15 +199,31 @@ struct LiveSceneView: View {
     private func promptView(prompt: SpeakingPrompt, isRecording: Bool, livePartial: String) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                difficultyRow(prompt.difficulty)
-                Text(prompt.promptEn)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.whatsubInk)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(prompt.promptZh)
-                    .font(.footnote)
-                    .foregroundStyle(.whatsubInkMuted)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Top row: difficulty stars on the left, photo thumbnail
+                // on the right so the user keeps "what they were asked
+                // about" visible alongside the prompt text.
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        difficultyRow(prompt.difficulty)
+                        Text(prompt.promptEn)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.whatsubInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    if let img = vm.capturedImage {
+                        Image(uiImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 76, height: 76)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+
+                // 提示 button + progressive reveal cards. Hidden by
+                // default; user opts in when stuck.
+                hintBlock(prompt: prompt)
+
                 if !prompt.targetVocab.isEmpty {
                     vocabChips(prompt.targetVocab)
                 }
@@ -177,10 +239,64 @@ struct LiveSceneView: View {
             .padding(20)
         }
         .safeAreaInset(edge: .bottom) {
-            recordButton(isRecording: isRecording)
+            orbBlock(isRecording: isRecording)
                 .padding(.bottom, 24)
         }
     }
+
+    // MARK: - hint block (progressive reveal)
+
+    @ViewBuilder
+    private func hintBlock(prompt: SpeakingPrompt) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                hintLevel = hintLevel.next
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "lightbulb")
+                        .font(.caption.weight(.semibold))
+                    Text(hintButtonLabel)
+                        .font(.caption.weight(.semibold))
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Capsule().fill(Color.whatsubBgElev))
+                .foregroundStyle(.whatsubAccent)
+            }
+            .buttonStyle(.plain)
+
+            if hintLevel >= .zh, !prompt.promptZh.isEmpty {
+                hintCard(title: "中文提示", body: prompt.promptZh)
+            }
+            if hintLevel >= .zhAndSample, !prompt.sampleAnswer.isEmpty {
+                hintCard(title: "参考答案 (英文)", body: prompt.sampleAnswer)
+            }
+        }
+    }
+
+    private var hintButtonLabel: String {
+        switch hintLevel {
+        case .none: return "提示"
+        case .zh: return "更多提示 (示范答案)"
+        case .zhAndSample: return "隐藏提示"
+        }
+    }
+
+    private func hintCard(title: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.whatsubInkMuted)
+            Text(body)
+                .font(.footnote)
+                .foregroundStyle(.whatsubInk)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - difficulty + vocab chips
 
     private func difficultyRow(_ difficulty: Int) -> some View {
         HStack(spacing: 4) {
@@ -200,8 +316,6 @@ struct LiveSceneView: View {
             Text("建议用上")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.whatsubInkMuted)
-            // Use a horizontal scroll for safety on tiny screens — same
-            // pattern as QuickChat's header chips.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(vocab, id: \.self) { v in
@@ -216,10 +330,15 @@ struct LiveSceneView: View {
         }
     }
 
-    private func recordButton(isRecording: Bool) -> some View {
-        // Push-to-talk: a long-press DragGesture so we get start + end
-        // signals reliably (TapGesture only fires on release; we need
-        // continuous press detection). Same shape QuickChat's orb uses.
+    // MARK: - orb (push-to-talk)
+
+    /// Reuses VoiceOrbView from QuickChat — Liquid-Glass shader on iOS 17+,
+    /// material fallback on iOS 16. Press gesture is the same shape as
+    /// QuickChat's: DragGesture(minimumDistance: 0) onChanged/onEnded so
+    /// we get reliable press AND release signals (a TapGesture only fires
+    /// on release).
+    @ViewBuilder
+    private func orbBlock(isRecording: Bool) -> some View {
         let press = DragGesture(minimumDistance: 0)
             .onChanged { _ in
                 if !isRecording { vm.startRecording() }
@@ -228,17 +347,13 @@ struct LiveSceneView: View {
                 if isRecording { vm.endRecording() }
             }
 
-        return VStack(spacing: 8) {
-            ZStack {
-                Circle()
-                    .fill(isRecording ? Color.red : Color.whatsubAccent)
-                    .frame(width: 80, height: 80)
-                    .scaleEffect(isRecording ? 1.0 + min(0.2, CGFloat(vm.audioLevel) * 0.4) : 1.0)
-                    .animation(.easeOut(duration: 0.08), value: vm.audioLevel)
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(.black)
-            }
+        VStack(spacing: 4) {
+            VoiceOrbView(
+                state: isRecording ? .recording : .idle,
+                audioLevel: vm.audioLevel,
+                isPressed: isRecording
+            )
+            .contentShape(Circle())
             .gesture(press)
             Text(isRecording ? "松开结束" : "按住说英语")
                 .font(.caption.weight(.semibold))
@@ -266,9 +381,12 @@ struct LiveSceneView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                if !grade.modelAnswer.isEmpty {
+                // Reference answer now sourced from prompt.sampleAnswer
+                // (pre-computed at derivation time) — see SceneGrade
+                // comment for why we dropped grader.modelAnswer.
+                if !prompt.sampleAnswer.isEmpty {
                     section("参考答案") {
-                        Text(grade.modelAnswer)
+                        Text(prompt.sampleAnswer)
                             .font(.subheadline)
                             .foregroundStyle(.whatsubInk)
                             .fixedSize(horizontal: false, vertical: true)
@@ -296,17 +414,6 @@ struct LiveSceneView: View {
                         .padding(.vertical, 14)
                         .background(Color.whatsubBgElev, in: Capsule())
                         .foregroundStyle(.whatsubInk)
-                        .font(.body.weight(.semibold))
-                }
-                Button {
-                    vm.tearDown()
-                    dismiss()
-                } label: {
-                    Text("完成")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Color.whatsubAccent, in: Capsule())
-                        .foregroundStyle(.black)
                         .font(.body.weight(.semibold))
                 }
             }

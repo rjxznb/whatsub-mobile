@@ -39,6 +39,13 @@ final class LiveSceneViewModel: ObservableObject {
     /// view binds to this to animate. 0..1 normalized.
     @Published private(set) var audioLevel: Float = 0
 
+    /// The image the user picked or shot — kept so the prompt view can
+    /// render a thumbnail next to the English task text (build 2026-06-05
+    /// UX request). Cleared on `restart()` / `tearDown()`. Outside the
+    /// Phase enum because every non-picker phase wants it; threading it
+    /// through each associated value would just add boilerplate.
+    @Published private(set) var capturedImage: UIImage?
+
     private let promptClient: LiveScenePromptClient
     private let grader: LiveSceneGrader
     private var recorder: VoiceActivityRecorder?
@@ -55,6 +62,7 @@ final class LiveSceneViewModel: ObservableObject {
 
     /// Picker delivered an image. Run Vision → LLM prompt-derivation.
     func didPickImage(_ image: UIImage) async {
+        capturedImage = image          // keep for thumbnail render
         phase = .classifying
         let classifyResult = await SceneClassifier.classify(image)
         switch classifyResult {
@@ -152,22 +160,21 @@ final class LiveSceneViewModel: ObservableObject {
         recorder?.cancel()
         recorder = nil
         audioLevel = 0
+        capturedImage = nil
         phase = .picker
     }
 
-    /// Error state → go back to picker (lets the user try a different
-    /// photo if Vision failed, or retry if it was a transient LLM error).
-    func dismissError() {
-        recorder?.cancel()
-        recorder = nil
-        audioLevel = 0
-        phase = .picker
-    }
+    /// Error state → go back to picker. Same shape as restart() — we keep
+    /// it as a named entry point so the call-site at LiveSceneView's error
+    /// banner reads as "dismiss the error" rather than "restart" (which
+    /// would imply they had a session to abandon).
+    func dismissError() { restart() }
 
     /// Sheet is being torn down — make sure the recorder isn't left
     /// holding the audio session open.
     func tearDown() {
         recorder?.cancel()
         recorder = nil
+        capturedImage = nil
     }
 }

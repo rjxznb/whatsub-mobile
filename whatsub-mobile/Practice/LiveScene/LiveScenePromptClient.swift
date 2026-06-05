@@ -59,12 +59,14 @@ struct LiveScenePromptClient {
     private struct WireSpeakingPrompt: Decodable {
         let promptEn: String
         let promptZh: String
+        let sampleAnswer: String
         let targetVocab: [String]
         let difficulty: Int
 
         enum CodingKeys: String, CodingKey {
             case promptEn, prompt_en
             case promptZh, prompt_zh
+            case sampleAnswer, sample_answer
             case targetVocab, target_vocab
             case difficulty
         }
@@ -77,6 +79,9 @@ struct LiveScenePromptClient {
             self.promptZh = (try? c.decode(String.self, forKey: .promptZh))
                 ?? (try? c.decode(String.self, forKey: .prompt_zh))
                 ?? "用 2-3 句英文描述你看到的场景。"
+            self.sampleAnswer = (try? c.decode(String.self, forKey: .sampleAnswer))
+                ?? (try? c.decode(String.self, forKey: .sample_answer))
+                ?? ""   // empty fallback — 提示 第二级 + review 都 graceful skip
             let raw = (try? c.decode([String].self, forKey: .targetVocab))
                 ?? (try? c.decode([String].self, forKey: .target_vocab))
                 ?? []
@@ -100,6 +105,7 @@ struct LiveScenePromptClient {
             SpeakingPrompt(
                 promptEn: promptEn.trimmingCharacters(in: .whitespacesAndNewlines),
                 promptZh: promptZh.trimmingCharacters(in: .whitespacesAndNewlines),
+                sampleAnswer: sampleAnswer.trimmingCharacters(in: .whitespacesAndNewlines),
                 targetVocab: Array(targetVocab.prefix(5)),
                 difficulty: difficulty
             )

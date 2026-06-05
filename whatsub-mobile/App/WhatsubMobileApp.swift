@@ -117,17 +117,15 @@ struct ContentView: View {
                 .tabItem { Label("语料库", systemImage: "books.vertical") }
                 .tag(1)
 
-            // 「眼前」 (2026-06-05) — camera-based learning surface
-            // (实景口语练习 + 拍照翻译) + share-from-YouTube/Bilibili
-            // hint. New tab between 语料库 and 我的; tags renumbered
-            // accordingly (我的: 2→3).
-            // Icon uses Label(_, image:) (custom asset) instead of
-            // systemImage — the asset is a single-fill SVG marked
-            // template in Contents.json, so the system tab tint auto-
-            // applies and it reads like any SF Symbol next to its
-            // peers.
+            // 「实景口语」 (renamed from 眼前, 2026-06-05) — primary
+            // surface is the LiveScene flow (picker → Vision → LLM →
+            // speak → grade) inline; 拍照翻译 sits in the header's
+            // top-right toolbar. Custom CameraTabIcon SVG asset stays.
+            // Tab label is 4 chars (vs the full 实景口语练习 6 chars)
+            // so it fits comfortably alongside the other tab labels
+            // on smaller iPhones without truncation.
             CameraTabView()
-                .tabItem { Label("眼前", image: "CameraTabIcon") }
+                .tabItem { Label("实景口语", image: "CameraTabIcon") }
                 .tag(2)
 
             MeView()

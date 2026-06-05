@@ -52,12 +52,10 @@ struct LiveSceneGrader {
     private struct WireGrade: Decodable {
         let score: Int
         let feedback: String
-        let modelAnswer: String
         let vocabHits: [WireHit]
 
         enum CodingKeys: String, CodingKey {
             case score, feedback
-            case modelAnswer, model_answer
             case vocabHits, vocab_hits
         }
 
@@ -74,9 +72,9 @@ struct LiveSceneGrader {
                 self.score = 3   // neutral default — failure mode is "couldn't tell"
             }
             self.feedback = (try? c.decode(String.self, forKey: .feedback)) ?? ""
-            self.modelAnswer = (try? c.decode(String.self, forKey: .modelAnswer))
-                ?? (try? c.decode(String.self, forKey: .model_answer))
-                ?? ""
+            // modelAnswer field was removed from the grader prompt — review
+            // screen now uses `prompt.sampleAnswer` (pre-computed) instead.
+            // If a stale LLM emits modelAnswer we just ignore it.
             self.vocabHits = (try? c.decode([WireHit].self, forKey: .vocabHits))
                 ?? (try? c.decode([WireHit].self, forKey: .vocab_hits))
                 ?? []
@@ -102,7 +100,6 @@ struct LiveSceneGrader {
             return SceneGrade(
                 score: score,
                 feedback: feedback.trimmingCharacters(in: .whitespacesAndNewlines),
-                modelAnswer: modelAnswer.trimmingCharacters(in: .whitespacesAndNewlines),
                 vocabHits: hits
             )
         }

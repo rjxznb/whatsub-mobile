@@ -49,7 +49,19 @@ struct SpeakingPrompt: Equatable {
     let promptEn: String
     /// One-sentence Chinese hint shown beneath the English prompt for
     /// scaffolding. Example: "用 2-3 句英文描述这个场景,试着用上下面建议的短语。"
+    /// Hidden by default in the UI now; revealed via the 提示 button's
+    /// first click (build 2026-06-05+).
     let promptZh: String
+    /// English reference answer pre-computed at prompt-derivation time
+    /// (NOT post-grading). A 25-50 word native-style description of THIS
+    /// scene that naturally uses the targetVocab. Two uses:
+    ///   1. Revealed via the 提示 button's second click — progressive
+    ///      scaffolding for users who don't know where to start.
+    ///   2. Shown in the review screen as "参考答案".
+    /// Pre-computing once (vs. asking the grader to also produce one)
+    /// keeps the LLM cost at 2 calls per session (derive + grade)
+    /// instead of 3.
+    let sampleAnswer: String
     /// 3-5 English target phrases the LLM expects to surface naturally
     /// in a good answer. Used both as scaffolding (visible chips) AND
     /// as the verdict keys handed to the grader on the next round-trip.
@@ -77,7 +89,9 @@ struct VocabHit: Equatable, Identifiable {
 }
 
 /// LLM's grade of a single user attempt. The UI renders the score + feedback
-/// + model answer + the per-vocab roll-up.
+/// + the per-vocab roll-up. The "参考答案" shown in review is
+/// `prompt.sampleAnswer` (pre-computed at derivation time) — the grader
+/// doesn't re-generate it, saving one LLM round-trip per session.
 struct SceneGrade: Equatable {
     /// 1-5 overall score. The LLM is told to be encouraging but not
     /// dishonest — see `LiveScenePrompts.gradingSystemPrompt`.
@@ -85,10 +99,6 @@ struct SceneGrade: Equatable {
     /// 2-3 sentence Chinese feedback. What the user did well + what to
     /// improve. Avoids hedging fluff.
     let feedback: String
-    /// The "good answer" reference — an English version of how a native
-    /// speaker might describe this exact scene. Drives the "标准答案"
-    /// section in the review UI. ~25-50 words.
-    let modelAnswer: String
     /// Per-targetVocab roll-up. Length matches `SpeakingPrompt.targetVocab`
     /// — the LLM is told to emit one entry per target.
     let vocabHits: [VocabHit]
