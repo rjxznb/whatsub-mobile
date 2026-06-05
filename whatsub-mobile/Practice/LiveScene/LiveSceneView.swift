@@ -390,36 +390,11 @@ struct LiveSceneView: View {
 
     // MARK: - orb (push-to-talk)
 
-    /// Push-to-talk gesture — **computed property, not built inline**.
-    /// SwiftUI keeps the same gesture instance alive across re-renders
-    /// when the gesture is exposed via a computed Gesture property; built
-    /// inline inside a func, the gesture is a fresh instance per render
-    /// and SwiftUI swaps mid-press → the original .onEnded never fires.
-    /// Two prior attempts at this fix (d7e501a, 0b5e6ca) tweaked the
-    /// closure bodies but kept the inline-let pattern; the user
-    /// (correctly) reported release still didn't end recording. This
-    /// matches QuickChat's `orbPressGesture` shape exactly.
-    private var orbPressGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { _ in
-                logDebug("onChanged pressed=\(isOrbPressed) phase=\(phaseKey(vm.phase))")
-                // Touch-down transition only — onChanged also fires on
-                // movement during a hold, so we gate via the latch so
-                // startRecording fires exactly once per press.
-                guard !isOrbPressed,
-                      case .ready = vm.phase else { return }
-                isOrbPressed = true
-                vm.startRecording()
-                logDebug("→ start  phase=\(phaseKey(vm.phase))")
-            }
-            .onEnded { _ in
-                logDebug("onEnded pressed=\(isOrbPressed) phase=\(phaseKey(vm.phase))")
-                guard isOrbPressed else { return }
-                isOrbPressed = false
-                vm.endRecording()
-                logDebug("→ end    phase=\(phaseKey(vm.phase))")
-            }
-    }
+    // (SwiftUI orbPressGesture removed 2026-06-05 — 4 attempts at
+    // making SwiftUI DragGesture / LongPressGesture work all hit a
+    // silent-cancellation bug. UIKit `PushToTalkOverlay` (in orbBlock
+    // below) handles touches directly via UILongPressGestureRecognizer
+    // and works first try.)
 
     /// Append a line to the debug overlay, trim to last 6 lines. Strip
     /// this + the overlay rendering once the gesture is provably stable.
@@ -431,24 +406,46 @@ struct LiveSceneView: View {
         }
     }
 
-    /// Reuses VoiceOrbView from QuickChat — Liquid-Glass shader on iOS 17+,
-    /// material fallback on iOS 16. Shrunk via the new VoiceOrbView
-    /// `baseSize` parameter (NOT `.scaleEffect(...)`) — scaleEffect was
-    /// observed to break the DragGesture's release dispatch in builds
-    /// 0b5e6ca and 41a97f0, leaving the user unable to end recording
-    /// without a second tap. baseSize 110pt halves the default 180pt
-    /// for a footprint that comfortably clears the transcript above.
+    /// Push-to-talk orb. **The hit-area is a UIKit overlay**, not
+    /// SwiftUI's .gesture(...) — 4 SwiftUI attempts (d7e501a / 0b5e6ca
+    /// / 41a97f0 / fe9c470) all hit the same "release event never
+    /// reaches .onEnded" bug. Debug logs confirmed only 1 onChanged
+    /// fires per hold and then nothing — SwiftUI was silently
+    /// cancelling the gesture mid-press. UIKit
+    /// `UILongPressGestureRecognizer` doesn't have that problem; once
+    /// `.began` fires it owns the touch outright through `.ended` /
+    /// `.cancelled`. See `PushToTalkOverlay.swift` for full rationale.
     @ViewBuilder
     private func orbBlock(isRecording: Bool) -> some View {
         VStack(spacing: 4) {
-            VoiceOrbView(
-                state: isOrbPressed ? .recording : .idle,
-                audioLevel: vm.audioLevel,
-                isPressed: isOrbPressed,
-                baseSize: 110
-            )
-            .contentShape(Circle())
-            .gesture(orbPressGesture)
+            ZStack {
+                VoiceOrbView(
+                    state: isOrbPressed ? .recording : .idle,
+                    audioLevel: vm.audioLevel,
+                    isPressed: isOrbPressed,
+                    baseSize: 110
+                )
+                // Transparent overlay sized to match the orb's halo
+                // footprint (~110 × 1.85 ≈ 203pt). Big square hit area
+                // for finger tolerance.
+                PushToTalkOverlay(
+                    onPress: {
+                        logDebug("UIKit onPress phase=\(phaseKey(vm.phase))")
+                        guard !isOrbPressed, case .ready = vm.phase else { return }
+                        isOrbPressed = true
+                        vm.startRecording()
+                        logDebug("→ start phase=\(phaseKey(vm.phase))")
+                    },
+                    onRelease: {
+                        logDebug("UIKit onRelease pressed=\(isOrbPressed)")
+                        guard isOrbPressed else { return }
+                        isOrbPressed = false
+                        vm.endRecording()
+                        logDebug("→ end   phase=\(phaseKey(vm.phase))")
+                    }
+                )
+                .frame(width: 210, height: 210)
+            }
             Text(isOrbPressed ? "松开结束" : "按住说英语")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.whatsubInkMuted)
