@@ -121,8 +121,13 @@ struct ContentView: View {
             // (实景口语练习 + 拍照翻译) + share-from-YouTube/Bilibili
             // hint. New tab between 语料库 and 我的; tags renumbered
             // accordingly (我的: 2→3).
+            // Icon uses Label(_, image:) (custom asset) instead of
+            // systemImage — the asset is a single-fill SVG marked
+            // template in Contents.json, so the system tab tint auto-
+            // applies and it reads like any SF Symbol next to its
+            // peers.
             CameraTabView()
-                .tabItem { Label("眼前", systemImage: "eye") }
+                .tabItem { Label("眼前", image: "CameraTabIcon") }
                 .tag(2)
 
             MeView()

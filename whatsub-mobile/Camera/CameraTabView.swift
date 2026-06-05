@@ -36,7 +36,13 @@ struct CameraTabView: View {
                         featureCard(
                             title: "实景口语练习",
                             subtitle: "拍下你眼前的场景,AI 给你出口语题 → 说 → 打分 + 标准答案",
-                            icon: "eye.circle.fill",
+                            // Custom multi-color SVG (asset catalog,
+                            // template-rendering-intent: original) — see
+                            // featureCard(...isCustomAsset) signature
+                            // below; we branch on whether to render via
+                            // Image("name") or Image(systemName:).
+                            icon: "LiveSceneCardIcon",
+                            isCustomAsset: true,
                             action: { showLiveScene = true }
                         )
                         featureCard(
@@ -64,14 +70,44 @@ struct CameraTabView: View {
         }
     }
 
+    // MARK: - icon helper
+
+    /// Branch between SF Symbol and custom asset rendering. Kept separate
+    /// from `featureCard` so the size/styling decisions stay in one place
+    /// (any future cards picking a custom asset reuse it).
+    @ViewBuilder
+    private func iconView(name: String, isCustomAsset: Bool) -> some View {
+        if isCustomAsset {
+            Image(name)
+                .resizable()
+                .renderingMode(.original)   // keep the SVG's brand palette
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Image(systemName: name)
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.whatsubAccent)
+        }
+    }
+
     // MARK: - feature card
 
-    private func featureCard(title: String, subtitle: String, icon: String, action: @escaping () -> Void) -> some View {
+    /// `isCustomAsset` switches the icon rendering path:
+    ///   - false (default) → SF Symbol via `Image(systemName:)`, tinted
+    ///     `.whatsubAccent`, font-sized 28pt.
+    ///   - true → custom asset via `Image(_:)` with `.renderingMode(.original)`
+    ///     so the multi-color SVG (e.g. 风景) keeps its own brand-aligned
+    ///     palette. Resized to the same 36×36 box as the SF Symbol path
+    ///     so the two card icons line up visually.
+    private func featureCard(
+        title: String,
+        subtitle: String,
+        icon: String,
+        isCustomAsset: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.whatsubAccent)
+                iconView(name: icon, isCustomAsset: isCustomAsset)
                     .frame(width: 36, height: 36, alignment: .center)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
