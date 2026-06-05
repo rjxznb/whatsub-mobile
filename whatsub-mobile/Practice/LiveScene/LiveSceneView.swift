@@ -33,6 +33,19 @@ struct LiveSceneView: View {
     /// and try fresh. Reset to .none whenever a new prompt loads (see
     /// .onChange below) — past hints shouldn't leak across exercises.
     @State private var hintLevel: HintLevel = .none
+
+    /// Live press latch for the orb gesture (NOT vm.phase). Two reasons
+    /// QuickChat uses this same pattern + we MUST match it:
+    /// 1. The gesture is a computed property below so SwiftUI keeps the
+    ///    SAME gesture instance alive across view re-renders. If we
+    ///    instead built it inline inside a function each render (as I
+    ///    did in d7e501a / 0b5e6ca), SwiftUI swaps gesture instances mid-
+    ///    press and the original instance's `.onEnded` never fires —
+    ///    that's the "release doesn't end recording" bug the user hit.
+    /// 2. Using a @State Bool as the latch (read AND written inside the
+    ///    same closure) keeps press/release semantics explicit + lets
+    ///    onChanged be idempotent without depending on vm phase timing.
+    @State private var isOrbPressed: Bool = false
     enum HintLevel: Int, Comparable {
         case none = 0, zh = 1, zhAndSample = 2
         static func < (lhs: HintLevel, rhs: HintLevel) -> Bool {
@@ -75,8 +88,17 @@ struct LiveSceneView: View {
         // Reset the 提示 reveal level whenever the user lands on a fresh
         // prompt (new pick → new derivation). Past hints shouldn't carry
         // across exercises and prejudice the next attempt.
-        .onChange(of: phaseKey(vm.phase)) { _ in
+        //
+        // Also safety-reset the orb-press latch if phase moved AWAY from
+        // .recording for any reason that wasn't a clean user-release (e.g.
+        // the recorder hit its 30s hardCap while the user was still
+        // holding). Without this the orb would stay visually pressed
+        // forever after the recorder finished on its own.
+        .onChange(of: phaseKey(vm.phase)) { newKey in
             hintLevel = .none
+            if newKey != "recording" && isOrbPressed {
+                isOrbPressed = false
+            }
         }
         // Don't tear down on .onDisappear — tab switches fire it too, and
         // we want the prompt + captured image to persist when the user
@@ -332,46 +354,50 @@ struct LiveSceneView: View {
 
     // MARK: - orb (push-to-talk)
 
-    /// Reuses VoiceOrbView from QuickChat — Liquid-Glass shader on iOS 17+,
-    /// material fallback on iOS 16.
-    ///
-    /// **Why a local `isOrbPressed` @State instead of the recording param**
-    /// (bug fix 2026-06-05): gesture closures capture the function param
-    /// by value at gesture-creation time, so the closure created on the
-    /// FIRST render (when isRecording=false) was still seeing
-    /// isRecording=false on release — `if isRecording { endRecording() }`
-    /// silently no-op'd, and the user had to tap a SECOND time (which
-    /// rebuilt the gesture with the now-true value). Reading from a
-    /// @State binding (or vm.phase) inside the closure avoids the
-    /// stale-capture trap entirely. Same pattern QuickChat uses.
-    ///
-    /// **Why .scaleEffect(0.55)**: the orb's default size (`baseSize 180`
-    /// × `haloMultiplier 1.85` = ~333pt) was overlapping the live
-    /// transcript above. Scaling proportionally shrinks both core + halo
-    /// without forking VoiceOrbView. The layout slot stays at ~333pt so
-    /// the safeAreaInset reserves enough room above for content to
-    /// breathe.
-    @ViewBuilder
-    private func orbBlock(isRecording: Bool) -> some View {
-        let press = DragGesture(minimumDistance: 0)
+    /// Push-to-talk gesture — **computed property, not built inline**.
+    /// SwiftUI keeps the same gesture instance alive across re-renders
+    /// when the gesture is exposed via a computed Gesture property; built
+    /// inline inside a func, the gesture is a fresh instance per render
+    /// and SwiftUI swaps mid-press → the original .onEnded never fires.
+    /// Two prior attempts at this fix (d7e501a, 0b5e6ca) tweaked the
+    /// closure bodies but kept the inline-let pattern; the user
+    /// (correctly) reported release still didn't end recording. This
+    /// matches QuickChat's `orbPressGesture` shape exactly.
+    private var orbPressGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
             .onChanged { _ in
-                // Read live vm.phase, NOT the captured isRecording param.
-                if case .ready = vm.phase { vm.startRecording() }
+                // Touch-down transition only — onChanged also fires on
+                // movement during a hold, so we gate via the latch so
+                // startRecording fires exactly once per press.
+                guard !isOrbPressed,
+                      case .ready = vm.phase else { return }
+                isOrbPressed = true
+                vm.startRecording()
             }
             .onEnded { _ in
-                if case .recording = vm.phase { vm.endRecording() }
+                guard isOrbPressed else { return }
+                isOrbPressed = false
+                vm.endRecording()
             }
+    }
 
+    /// Reuses VoiceOrbView from QuickChat — Liquid-Glass shader on iOS 17+,
+    /// material fallback on iOS 16. `.scaleEffect(0.55)` shrinks both
+    /// core + halo proportionally (~333pt → ~183pt visual) so the orb
+    /// doesn't overlap the live transcript / vocab chips above. Layout
+    /// slot stays ~333pt so safeAreaInset reserves enough room above.
+    @ViewBuilder
+    private func orbBlock(isRecording: Bool) -> some View {
         VStack(spacing: 4) {
             VoiceOrbView(
-                state: isRecording ? .recording : .idle,
+                state: isOrbPressed ? .recording : .idle,
                 audioLevel: vm.audioLevel,
-                isPressed: isRecording
+                isPressed: isOrbPressed
             )
             .scaleEffect(0.55)
             .contentShape(Circle())
-            .gesture(press)
-            Text(isRecording ? "松开结束" : "按住说英语")
+            .gesture(orbPressGesture)
+            Text(isOrbPressed ? "松开结束" : "按住说英语")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.whatsubInkMuted)
         }
