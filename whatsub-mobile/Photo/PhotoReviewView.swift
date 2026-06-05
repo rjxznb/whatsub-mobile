@@ -20,7 +20,12 @@ struct PhotoReviewView: View {
         NavigationStack {
             content
                 .background(Color.whatsubBg.ignoresSafeArea())
-                .navigationTitle("拍照识别短语")
+                // Renamed 2026-06-05 (拍照识别短语 → 拍照翻译). The new
+                // name foregrounds the immediate user value (翻译) and lets
+                // "加入语料库" stay a secondary CTA inside the flow. Code +
+                // docstrings still reference 拍照识别短语 as the historical
+                // file context (matches git blame); user-facing string only.
+                .navigationTitle("拍照翻译")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {

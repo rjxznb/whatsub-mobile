@@ -117,9 +117,17 @@ struct ContentView: View {
                 .tabItem { Label("语料库", systemImage: "books.vertical") }
                 .tag(1)
 
+            // 「眼前」 (2026-06-05) — camera-based learning surface
+            // (实景口语练习 + 拍照翻译) + share-from-YouTube/Bilibili
+            // hint. New tab between 语料库 and 我的; tags renumbered
+            // accordingly (我的: 2→3).
+            CameraTabView()
+                .tabItem { Label("眼前", systemImage: "eye") }
+                .tag(2)
+
             MeView()
                 .tabItem { Label("我的", systemImage: "person.crop.circle") }
-                .tag(2)
+                .tag(3)
         }
         .onOpenURL { url in
             guard url.host == "import",

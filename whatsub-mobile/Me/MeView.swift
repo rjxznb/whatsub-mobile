@@ -13,11 +13,9 @@ struct MeView: View {
     @State private var deleteAccountError: String?
     @State private var showSubscribe = false
     @State private var showPendingPhrases = false
-    @State private var showPhotoCapture = false
-    /// Temporary entry for 实景口语练习 — commit B moves this into the
-    /// 眼前 tab alongside 拍照翻译 + share-from-YouTube hint, at which point
-    /// this State + the Button below + the sheet binding all go away.
-    @State private var showLiveScene = false
+    // (showPhotoCapture / showLiveScene removed 2026-06-05 — the 拍照翻译
+    // (was 拍照识别短语) + 实景口语练习 entries moved to the new 「眼前」
+    // tab. 导入视频 also gone — now a "+" button on the Library tab.)
     @ObservedObject private var pendingStore = PendingPhraseStore.shared
 
     private var versionString: String {
@@ -103,37 +101,10 @@ struct MeView: View {
                     .listRowBackground(Color.whatsubBgElev)
 
                     Section("工具") {
-                        NavigationLink(destination: ImportView()) {
-                            Label("导入视频", systemImage: "arrow.down.circle")
-                                .foregroundStyle(.whatsubInk)
-                        }
-                        // 2026-06-04 拍照识别短语 entry. Sheet, not nav-link,
-                        // because the picker chain (camera / gallery) is
-                        // self-contained and reads as a one-shot modal task.
-                        Button { showPhotoCapture = true } label: {
-                            HStack {
-                                Label("拍照识别短语", systemImage: "camera.viewfinder")
-                                    .foregroundStyle(.whatsubInk)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.whatsubInkFaint)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        // 2026-06-05 实景口语练习 — temp entry; commit B
-                        // moves it to the new 眼前 tab.
-                        Button { showLiveScene = true } label: {
-                            HStack {
-                                Label("实景口语练习", systemImage: "eye.circle")
-                                    .foregroundStyle(.whatsubInk)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.whatsubInkFaint)
-                            }
-                        }
-                        .buttonStyle(.plain)
+                        // 2026-06-05: 导入视频 / 拍照翻译 / 实景口语练习 all
+                        // moved to dedicated surfaces (Library "+" toolbar
+                        // + 「眼前」 tab) — this section is now strictly
+                        // settings + maintenance.
                         NavigationLink(destination: LlmSettingsView()) {
                             Label("LLM 设置", systemImage: "cpu")
                                 .foregroundStyle(.whatsubInk)
@@ -234,12 +205,7 @@ struct MeView: View {
             .sheet(isPresented: $showPendingPhrases) {
                 PendingPhrasesView(filterEntryId: nil)
             }
-            .sheet(isPresented: $showPhotoCapture) {
-                PhotoReviewView()
-            }
-            .sheet(isPresented: $showLiveScene) {
-                LiveSceneView()
-            }
+            // (photo + live-scene sheets moved to CameraTabView 2026-06-05)
         }
     }
 

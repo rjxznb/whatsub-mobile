@@ -85,14 +85,20 @@ targets:
         # on first invocation; iOS shows the system permission alerts.
         NSMicrophoneUsageDescription: "用于跟读练习和对话陪练时录下你的发音，与字幕原文或目标短语做对比。"
         NSSpeechRecognitionUsageDescription: "把跟读练习和对话陪练里的录音转为文字，用于与字幕原文做逐词比对、或判断目标短语是否被正确使用。所有识别在本机完成。"
-        # 拍照识别短语 (added 2026-06-04). Camera = capture path; Photo
-        # Library WhenInUse = standard PhotosPicker (no full library access
-        # needed since the picker runs OOP and returns just the picked item).
-        # Crucial: the description must spell out that the image is OCR'd
-        # ON-DEVICE and the photo itself is NEVER uploaded — App Review
-        # tends to push back on camera permissions without that clarity.
-        NSCameraUsageDescription: "用相机拍含英文的文本(书、广告、街边标语等),离线识别为可加入语料库的英文短语。照片本身不会上传到服务器。"
-        NSPhotoLibraryUsageDescription: "从相册选含英文的图片,离线识别为可加入语料库的英文短语。照片本身不会上传到服务器。"
+        # Camera + Photos — shared by two 「眼前」 tab features (2026-06-05):
+        #   ① 拍照翻译 (originally 拍照识别短语) — OCR English text on the
+        #      page, translate, extract phrases.
+        #   ② 实景口语练习 — classify the SCENE in the photo (objects, time
+        #      of day, etc.) on-device, derive an English speaking prompt,
+        #      grade the user's spoken description.
+        # Both use Apple Vision on-device (VNRecognizeTextRequest +
+        # VNClassifyImageRequest + a couple of detect rectangles requests).
+        # CRUCIAL for App Review: the description spells out that only
+        # derived TEXT (OCR / labels) ever leaves the device — the photo
+        # itself is never uploaded. ASC Privacy Nutrition Labels must
+        # match: Camera = Not Collected, Photos = Not Collected.
+        NSCameraUsageDescription: "用相机拍一张图片,在本机离线识别英文文本或场景物体,用于翻译、提取语料、生成英语口语练习题。照片本身不会上传到服务器。"
+        NSPhotoLibraryUsageDescription: "从相册选一张图片,在本机离线识别英文文本或场景物体,用于翻译、提取语料、生成英语口语练习题。照片本身不会上传到服务器。"
         UIAppFonts:
           - Caveat-Bold.ttf
         CFBundleURLTypes:

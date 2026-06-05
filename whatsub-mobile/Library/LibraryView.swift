@@ -4,6 +4,10 @@ struct LibraryView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryViewModel()
     @State private var pendingDelete: LibraryListItem?
+    /// 2026-06-05: 导入视频 moved here from 我的→工具 (more discoverable
+    /// — new users hit it from the empty Library state). Sheet (not nav
+    /// push) so it doesn't deepen the Library tab's navigation stack.
+    @State private var showImport = false
     // Migrate-vocab-before-delete flow removed (build 248+) — the local
     // vocab notebook is retired; corpus phrases that referenced the deleted
     // video keep their data + can fall back to YT embed via source.youtubeId.
@@ -19,13 +23,29 @@ struct LibraryView: View {
             // look. System nav bar is hidden on this screen; the detail view
             // shows its own bar (with back button) when pushed.
             VStack(alignment: .leading, spacing: 0) {
-                Text("Library")
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(.whatsubInk)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
+                // Header row: title left, "+" import button right. Same
+                // baseline alignment so the "+" sits in the visual
+                // shoulder of the large title.
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Library")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(.whatsubInk)
+                    Spacer()
+                    Button {
+                        showImport = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.whatsubAccent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("导入视频")
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
                 content
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -36,6 +56,19 @@ struct LibraryView: View {
             }
             .task { if !vm.loadedOnce { await reload() } }
             .refreshable { await reload() }
+            .sheet(isPresented: $showImport) {
+                // ImportView expects to be inside a NavigationStack — it
+                // uses .navigationTitle internally. Wrap so the sheet
+                // gets a top bar with the "导入视频" title + close affordance.
+                NavigationStack {
+                    ImportView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("关闭") { showImport = false }
+                            }
+                        }
+                }
+            }
         }
     }
 
