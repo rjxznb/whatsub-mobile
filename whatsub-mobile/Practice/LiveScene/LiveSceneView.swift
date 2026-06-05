@@ -401,8 +401,12 @@ struct LiveSceneView: View {
     private func logDebug(_ msg: String) {
         let stamp = String(format: "%.3f", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 100))
         debugLog.append("[\(stamp)] \(msg)")
-        if debugLog.count > 6 {
-            debugLog.removeFirst(debugLog.count - 6)
+        // Bumped to 12 (was 6) — the lifecycle + UIControl + raw-touch
+        // overrides emit 3-4 events per press cycle on average, and a
+        // 6-line cap was rotating out earlier events too fast for
+        // diagnosis.
+        if debugLog.count > 12 {
+            debugLog.removeFirst(debugLog.count - 12)
         }
     }
 
@@ -434,19 +438,18 @@ struct LiveSceneView: View {
                 .allowsHitTesting(false)   // hand all touches to overlay
                 PushToTalkOverlay(
                     onPress: {
-                        logDebug("touch BEGAN phase=\(phaseKey(vm.phase))")
                         guard !isOrbPressed, case .ready = vm.phase else { return }
                         isOrbPressed = true
                         vm.startRecording()
                         logDebug("→ start phase=\(phaseKey(vm.phase))")
                     },
                     onRelease: {
-                        logDebug("touch END/CANCEL pressed=\(isOrbPressed)")
                         guard isOrbPressed else { return }
                         isOrbPressed = false
                         vm.endRecording()
                         logDebug("→ end   phase=\(phaseKey(vm.phase))")
-                    }
+                    },
+                    onLog: { msg in logDebug(msg) }
                 )
                 .frame(width: 210, height: 210)
             }

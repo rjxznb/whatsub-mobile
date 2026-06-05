@@ -1,92 +1,129 @@
 import SwiftUI
 import UIKit
 
-/// Raw-touch UIView wrapper for push-to-talk. **Bypasses every higher
-/// abstraction layer in iOS** — no `UIGestureRecognizer`, no SwiftUI
-/// `Button`, no `DragGesture`. Just `UIResponder`'s
-/// `touchesBegan/Ended/Cancelled` overrides.
+/// `UIControl`-based push-to-talk hit area. **8th** attempt at the
+/// LiveScene orb gesture — all previous 7 attempts (incl. raw
+/// `touchesBegan/Ended/Cancelled` overrides on a plain UIView in #7)
+/// have had iOS silently swallow the release event. Debug logs confirmed
+/// in `9693e41` that during the entire 4.6-second hold NOT ONE touch
+/// event fired on our view between BEGAN and the user's eventual second
+/// tap.
 ///
-/// Why this is the final, can-not-fail attempt at the LiveScene orb
-/// gesture (6 prior attempts all hit "release event silently swallowed
-/// by SwiftUI's gesture machinery"):
+/// `UIControl` has its OWN target-action touch tracking system,
+/// independent of `UIGestureRecognizer`. `UIButton`, `UISwitch`,
+/// `UISlider` all use this — `.touchDown` fires at touch arrival,
+/// `.touchUpInside`/`.touchUpOutside`/`.touchCancel`/`.touchDragExit`
+/// fire on release. These are dispatched via `UIControl`'s own
+/// `beginTracking/continueTracking/endTracking/cancelTracking`
+/// machinery, which doesn't go through SwiftUI's gesture coordinator.
 ///
-/// iOS dispatches touch events to the first responder of the touch's
-/// hit-test result. `touchesBegan` arrives in YOUR view. The OS then
-/// **guarantees** that either `touchesEnded` OR `touchesCancelled` will
-/// be sent to the same view before the touch sequence ends — no
-/// gesture recognizer, scroll view, or framework can suppress these
-/// callbacks. We handle both as "release" so the press/release pair
-/// is always balanced.
+/// Also added comprehensive lifecycle logging via an `onLog` callback
+/// so we can SEE if the UIView is being torn down mid-press (which
+/// would explain why even raw touch overrides go silent).
 ///
-/// Compare with the failed attempts:
-///   • SwiftUI DragGesture / LongPressGesture: SwiftUI's gesture
-///     coordinator can drop a gesture mid-stream without notification.
-///   • SwiftUI Button + ButtonStyle: Button internally uses a tap
-///     gesture; same dispatcher problem (the .isPressed transitions
-///     stop firing during long holds for the same reason).
-///   • UILongPressGestureRecognizer overlay: gesture recognizer state
-///     can transition .began → .failed silently if another recognizer
-///     claims the touch — even with `cancelsTouchesInView = false`.
-///
-/// `touchesBegan/Ended/Cancelled` are below all of that. The OS sends
-/// them. We can't be silently bypassed.
-///
-/// Pairs with `.allowsHitTesting(false)` on the VoiceOrbView underneath
-/// so the SwiftUI view doesn't even register for hit-testing → our
-/// raw UIView is the unambiguous topmost hit target at the touch
-/// location.
-///
-/// 2026-06-05 (attempt #7, finally below SwiftUI).
+/// 2026-06-05.
 struct PushToTalkOverlay: UIViewRepresentable {
     let onPress: () -> Void
     let onRelease: () -> Void
+    let onLog: ((String) -> Void)?
 
-    func makeUIView(context: Context) -> PushToTalkView {
-        let view = PushToTalkView()
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = true
-        view.onPress = onPress
-        view.onRelease = onRelease
-        return view
+    init(
+        onPress: @escaping () -> Void,
+        onRelease: @escaping () -> Void,
+        onLog: ((String) -> Void)? = nil
+    ) {
+        self.onPress = onPress
+        self.onRelease = onRelease
+        self.onLog = onLog
     }
 
-    func updateUIView(_ view: PushToTalkView, context: Context) {
-        // Closures may capture fresh state on each parent render —
-        // re-bind every update so the latest closure is fired.
-        view.onPress = onPress
-        view.onRelease = onRelease
+    func makeUIView(context: Context) -> PushToTalkControl {
+        let control = PushToTalkControl()
+        control.backgroundColor = .clear
+        control.isUserInteractionEnabled = true
+        // Make us greedy with touches — no sibling view in this view
+        // hierarchy should fight us.
+        control.isExclusiveTouch = true
+        control.isMultipleTouchEnabled = false
+        control.onPress = onPress
+        control.onRelease = onRelease
+        control.onLog = onLog
+        return control
     }
 
-    /// Custom UIView with raw touch overrides. NOT private so the
-    /// UIViewRepresentable's typed `makeUIView/updateUIView` signatures
-    /// can refer to it.
-    final class PushToTalkView: UIView {
+    func updateUIView(_ control: PushToTalkControl, context: Context) {
+        // Re-bind closures on each parent render so the latest captured
+        // state is in effect.
+        control.onPress = onPress
+        control.onRelease = onRelease
+        control.onLog = onLog
+    }
+
+    final class PushToTalkControl: UIControl {
         var onPress: (() -> Void)?
         var onRelease: (() -> Void)?
-        /// Per-touch latch so we never fire onRelease twice for the
-        /// same touch sequence (e.g. if both touchesEnded AND
-        /// touchesCancelled somehow land for the same touch).
-        private var touchActive: Bool = false
+        var onLog: ((String) -> Void)?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            wire()
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            wire()
+        }
+
+        private func wire() {
+            // UIControl's target-action: every conceivable touch
+            // termination event hooks to handleUp. Belt + suspenders.
+            addTarget(self, action: #selector(handleDown), for: .touchDown)
+            addTarget(self, action: #selector(handleUp),
+                      for: [.touchUpInside,
+                            .touchUpOutside,
+                            .touchCancel,
+                            .touchDragExit])
+        }
+
+        @objc private func handleDown() {
+            onLog?("UIC touchDown")
+            onPress?()
+        }
+
+        @objc private func handleUp() {
+            onLog?("UIC touchUp/Cancel")
+            onRelease?()
+        }
+
+        // MARK: - Belt + suspenders: also override raw touch methods.
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesBegan(touches, with: event)
-            guard !touchActive else { return }
-            touchActive = true
-            onPress?()
+            onLog?("RAW touchesBegan")
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesEnded(touches, with: event)
-            guard touchActive else { return }
-            touchActive = false
-            onRelease?()
+            onLog?("RAW touchesEnded")
         }
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesCancelled(touches, with: event)
-            guard touchActive else { return }
-            touchActive = false
-            onRelease?()
+            onLog?("RAW touchesCancelled")
+        }
+
+        // MARK: - View lifecycle — confirms the view stays alive while
+        // the user holds. If we see willMove(toSuperview: nil) mid-press
+        // then SwiftUI is destroying the view and that's our culprit.
+
+        override func willMove(toSuperview newSuperview: UIView?) {
+            super.willMove(toSuperview: newSuperview)
+            onLog?("LIFE willMove \(newSuperview == nil ? "→nil" : "→super")")
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            onLog?("LIFE didMove \(superview == nil ? "(detached)" : "(attached)")")
         }
     }
 }
