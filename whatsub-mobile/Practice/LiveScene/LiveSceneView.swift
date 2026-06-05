@@ -40,12 +40,18 @@ struct LiveSceneView: View {
     ///    SAME gesture instance alive across view re-renders. If we
     ///    instead built it inline inside a function each render (as I
     ///    did in d7e501a / 0b5e6ca), SwiftUI swaps gesture instances mid-
-    ///    press and the original instance's `.onEnded` never fires —
-    ///    that's the "release doesn't end recording" bug the user hit.
+    ///    press and the original instance's `.onEnded` never fires.
     /// 2. Using a @State Bool as the latch (read AND written inside the
     ///    same closure) keeps press/release semantics explicit + lets
     ///    onChanged be idempotent without depending on vm phase timing.
     @State private var isOrbPressed: Bool = false
+
+    /// Rolling on-screen log of the last few gesture/recorder events,
+    /// rendered as a tiny pill at the top of the view (so the user can
+    /// see what's happening WITHOUT plugging into Xcode / Console.app).
+    /// Stops growing after ~6 lines so the overlay stays a single short
+    /// strip. Strip out once the orb is provably stable.
+    @State private var debugLog: [String] = []
     enum HintLevel: Int, Comparable {
         case none = 0, zh = 1, zhAndSample = 2
         static func < (lhs: HintLevel, rhs: HintLevel) -> Bool {
@@ -61,10 +67,26 @@ struct LiveSceneView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             Color.whatsubBg.ignoresSafeArea()
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Debug overlay (TEMPORARY — strip with the @State debugLog +
+            // logDebug() once the orb gesture is provably stable). Sits
+            // at the very top in a tiny mono font so events are visible
+            // on-device without plugging into Xcode / Console.app.
+            if !debugLog.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(debugLog.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.whatsubInkMuted)
+                    }
+                }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.whatsubBgElev.opacity(0.85), in: RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 12).padding(.top, 4)
+            }
         }
         .sheet(isPresented: $showCamera) {
             PhotoCameraPicker(image: $cameraImage)
@@ -366,6 +388,7 @@ struct LiveSceneView: View {
     private var orbPressGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { _ in
+                logDebug("onChanged pressed=\(isOrbPressed) phase=\(phaseKey(vm.phase))")
                 // Touch-down transition only — onChanged also fires on
                 // movement during a hold, so we gate via the latch so
                 // startRecording fires exactly once per press.
@@ -373,28 +396,43 @@ struct LiveSceneView: View {
                       case .ready = vm.phase else { return }
                 isOrbPressed = true
                 vm.startRecording()
+                logDebug("→ start  phase=\(phaseKey(vm.phase))")
             }
             .onEnded { _ in
+                logDebug("onEnded pressed=\(isOrbPressed) phase=\(phaseKey(vm.phase))")
                 guard isOrbPressed else { return }
                 isOrbPressed = false
                 vm.endRecording()
+                logDebug("→ end    phase=\(phaseKey(vm.phase))")
             }
     }
 
+    /// Append a line to the debug overlay, trim to last 6 lines. Strip
+    /// this + the overlay rendering once the gesture is provably stable.
+    private func logDebug(_ msg: String) {
+        let stamp = String(format: "%.3f", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 100))
+        debugLog.append("[\(stamp)] \(msg)")
+        if debugLog.count > 6 {
+            debugLog.removeFirst(debugLog.count - 6)
+        }
+    }
+
     /// Reuses VoiceOrbView from QuickChat — Liquid-Glass shader on iOS 17+,
-    /// material fallback on iOS 16. `.scaleEffect(0.55)` shrinks both
-    /// core + halo proportionally (~333pt → ~183pt visual) so the orb
-    /// doesn't overlap the live transcript / vocab chips above. Layout
-    /// slot stays ~333pt so safeAreaInset reserves enough room above.
+    /// material fallback on iOS 16. Shrunk via the new VoiceOrbView
+    /// `baseSize` parameter (NOT `.scaleEffect(...)`) — scaleEffect was
+    /// observed to break the DragGesture's release dispatch in builds
+    /// 0b5e6ca and 41a97f0, leaving the user unable to end recording
+    /// without a second tap. baseSize 110pt halves the default 180pt
+    /// for a footprint that comfortably clears the transcript above.
     @ViewBuilder
     private func orbBlock(isRecording: Bool) -> some View {
         VStack(spacing: 4) {
             VoiceOrbView(
                 state: isOrbPressed ? .recording : .idle,
                 audioLevel: vm.audioLevel,
-                isPressed: isOrbPressed
+                isPressed: isOrbPressed,
+                baseSize: 110
             )
-            .scaleEffect(0.55)
             .contentShape(Circle())
             .gesture(orbPressGesture)
             Text(isOrbPressed ? "松开结束" : "按住说英语")

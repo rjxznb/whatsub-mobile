@@ -32,7 +32,15 @@ struct VoiceOrbView: View {
     /// to give immediate visual confirmation that the press registered.
     var isPressed: Bool = false
 
-    private let baseSize: CGFloat = 180
+    /// Core orb diameter in points. Default 180 (the size QuickChat
+    /// uses as its centerpiece). LiveScene wants something smaller
+    /// (~110) because the orb shares the screen with prompt text +
+    /// thumbnail + transcript above. NOTE: do **NOT** wrap the orb in
+    /// `.scaleEffect(...)` to shrink it — that corrupts the gesture
+    /// coordinate space and the orb's DragGesture stops firing onEnded
+    /// on release (confirmed in builds d7e501a/0b5e6ca/41a97f0). Use
+    /// this parameter instead.
+    var baseSize: CGFloat = 180
     /// Outer ZStack's reported layout size — kept moderate so the orb doesn't
     /// shove sibling views around. Halo layers RENDER larger than this via
     /// their own internal frames; SwiftUI .frame() doesn't clip, so the halo
