@@ -14,6 +14,10 @@ struct MeView: View {
     @State private var showSubscribe = false
     @State private var showPendingPhrases = false
     @State private var showPhotoCapture = false
+    /// Temporary entry for 实景口语练习 — commit B moves this into the
+    /// 眼前 tab alongside 拍照翻译 + share-from-YouTube hint, at which point
+    /// this State + the Button below + the sheet binding all go away.
+    @State private var showLiveScene = false
     @ObservedObject private var pendingStore = PendingPhraseStore.shared
 
     private var versionString: String {
@@ -109,6 +113,19 @@ struct MeView: View {
                         Button { showPhotoCapture = true } label: {
                             HStack {
                                 Label("拍照识别短语", systemImage: "camera.viewfinder")
+                                    .foregroundStyle(.whatsubInk)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.whatsubInkFaint)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        // 2026-06-05 实景口语练习 — temp entry; commit B
+                        // moves it to the new 眼前 tab.
+                        Button { showLiveScene = true } label: {
+                            HStack {
+                                Label("实景口语练习", systemImage: "eye.circle")
                                     .foregroundStyle(.whatsubInk)
                                 Spacer()
                                 Image(systemName: "chevron.right")
@@ -219,6 +236,9 @@ struct MeView: View {
             }
             .sheet(isPresented: $showPhotoCapture) {
                 PhotoReviewView()
+            }
+            .sheet(isPresented: $showLiveScene) {
+                LiveSceneView()
             }
         }
     }
