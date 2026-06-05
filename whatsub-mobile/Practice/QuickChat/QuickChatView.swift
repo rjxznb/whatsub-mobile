@@ -308,14 +308,21 @@ struct QuickChatView: View {
                       !micPermissionDenied else { return }
                 isOrbPressed = true
                 pressHaptic.impactOccurred(intensity: 1.0)        // sharp thunk
-                continuousHaptic.start()                          // sustained rumble
+                // continuousHaptic.start() removed 2026-06-05 — users
+                // (both QuickChat and Roleplay via the reused init)
+                // reported the sustained rumble felt "too long" / "kept
+                // vibrating" through the entire hold. Single-thunk
+                // press feedback + matching release thunk reads more
+                // naturally for a push-to-talk control.
                 startPushToTalk()
             }
             .onEnded { _ in
                 guard isOrbPressed else { return }
                 isOrbPressed = false
                 releaseHaptic.impactOccurred(intensity: 0.55)     // gentle release
-                continuousHaptic.stop()
+                // continuousHaptic.stop() removed alongside .start()
+                // above — no rumble to stop. Field retained as dead
+                // weight for now; can be deleted in a follow-up cleanup.
                 endPushToTalk()
             }
     }

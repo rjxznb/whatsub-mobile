@@ -64,6 +64,14 @@ struct PushToTalkOverlay: UIViewRepresentable {
         var onRelease: (() -> Void)?
         var onLog: ((String) -> Void)?
 
+        /// Single-tap haptic on press + release. Same UIImpactFeedbackGenerator
+        /// pattern QuickChat uses. (LiveScene was previously missing any
+        /// haptic feedback — user-reported 2026-06-05 "实景口语练习根本
+        /// 没有震动".) NOT a continuous rumble — single thunks only,
+        /// matching QuickChat's revised UX.
+        private let pressHaptic = UIImpactFeedbackGenerator(style: .rigid)
+        private let releaseHaptic = UIImpactFeedbackGenerator(style: .light)
+
         override init(frame: CGRect) {
             super.init(frame: frame)
             wire()
@@ -95,6 +103,7 @@ struct PushToTalkOverlay: UIViewRepresentable {
 
         override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
             onLog?("UIC beginTracking")
+            pressHaptic.impactOccurred(intensity: 1.0)
             onPress?()
             return true   // stay tracking
         }
@@ -109,6 +118,7 @@ struct PushToTalkOverlay: UIViewRepresentable {
 
         override func endTracking(_ touch: UITouch?, with event: UIEvent?) {
             onLog?("UIC endTracking")
+            releaseHaptic.impactOccurred(intensity: 0.55)
             onRelease?()
             // NOT calling super — super.endTracking would fire
             // .touchUpInside/.touchUpOutside which we don't observe
@@ -118,6 +128,9 @@ struct PushToTalkOverlay: UIViewRepresentable {
 
         override func cancelTracking(with event: UIEvent?) {
             onLog?("UIC cancelTracking")
+            // Skip the release haptic on cancellation — cancellation is
+            // a "stolen by system" event, not a user release, so
+            // simulating the release feedback would be misleading.
             onRelease?()
             // Same rationale as endTracking — skip super.
         }
