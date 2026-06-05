@@ -241,48 +241,62 @@ struct LiveSceneView: View {
 
     @ViewBuilder
     private func promptView(prompt: SpeakingPrompt, isRecording: Bool, livePartial: String) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Top row: difficulty stars on the left, photo thumbnail
-                // on the right so the user keeps "what they were asked
-                // about" visible alongside the prompt text.
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        difficultyRow(prompt.difficulty)
-                        Text(prompt.promptEn)
-                            .font(.title3.weight(.semibold))
+        // ScrollView + orb are SIBLINGS in a VStack — NOT nested via
+        // .safeAreaInset(edge: .bottom). That nesting (used in builds
+        // d7e501a → 78fd1a9) had ScrollView's pan recognizer competing
+        // with the orb's DragGesture: a long press without movement is
+        // exactly what ScrollView watches for to "claim" a future
+        // scroll, and once it claims, our DragGesture gets CANCELLED
+        // without onEnded firing — that's the "release didn't end
+        // recording" bug. QuickChat doesn't hit this because its orb
+        // sits in a plain VStack with no ScrollView ancestor.
+        //
+        // Sibling layout: ScrollView takes the upper remaining space
+        // (flex grow), orb is fixed-height at the bottom. The orb has
+        // no scroll-recognizer ancestor, so its DragGesture owns the
+        // touch lifecycle outright.
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Top row: difficulty stars on the left, photo thumbnail
+                    // on the right so the user keeps "what they were asked
+                    // about" visible alongside the prompt text.
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            difficultyRow(prompt.difficulty)
+                            Text(prompt.promptEn)
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.whatsubInk)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                        if let img = vm.capturedImage {
+                            Image(uiImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 76, height: 76)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+
+                    // 提示 button + progressive reveal cards. Hidden by
+                    // default; user opts in when stuck.
+                    hintBlock(prompt: prompt)
+
+                    if !prompt.targetVocab.isEmpty {
+                        vocabChips(prompt.targetVocab)
+                    }
+                    if isRecording && !livePartial.isEmpty {
+                        Text(livePartial)
+                            .font(.subheadline)
                             .foregroundStyle(.whatsubInk)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
-                    if let img = vm.capturedImage {
-                        Image(uiImage: img)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 76, height: 76)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
-
-                // 提示 button + progressive reveal cards. Hidden by
-                // default; user opts in when stuck.
-                hintBlock(prompt: prompt)
-
-                if !prompt.targetVocab.isEmpty {
-                    vocabChips(prompt.targetVocab)
-                }
-                if isRecording && !livePartial.isEmpty {
-                    Text(livePartial)
-                        .font(.subheadline)
-                        .foregroundStyle(.whatsubInk)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 10))
-                }
+                .padding(20)
             }
-            .padding(20)
-        }
-        .safeAreaInset(edge: .bottom) {
             orbBlock(isRecording: isRecording)
                 .padding(.bottom, 24)
         }
