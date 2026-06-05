@@ -17,6 +17,25 @@ final class DTOTests: XCTestCase {
         XCTAssertNil(resp.isAdmin)
     }
 
+    // A cross-platform web (Alipay) subscriber: no StoreKit sub, but the
+    // server-combined hasActiveSubscription is true. The badge + upsell gating
+    // keys off this field so the user isn't mislabeled 免费版 or double-charged.
+    func testMeResponseWebSubscriberHasActiveSubscriptionButNotIosSub() throws {
+        let json = #"{"email":"a@b.com","hasActiveLicense":false,"iosSubActive":false,"hasActiveSubscription":true}"#
+            .data(using: .utf8)!
+        let resp = try JSONDecoder().decode(MeResponse.self, from: json)
+        XCTAssertFalse(resp.hasActiveLicense)
+        XCTAssertEqual(resp.iosSubActive, false)
+        XCTAssertEqual(resp.hasActiveSubscription, true)
+    }
+
+    // An older backend that omits the field → nil (treated as not-subscribed).
+    func testMeResponseDecodesWithoutHasActiveSubscription() throws {
+        let json = #"{"email":"a@b.com","hasActiveLicense":false}"#.data(using: .utf8)!
+        let resp = try JSONDecoder().decode(MeResponse.self, from: json)
+        XCTAssertNil(resp.hasActiveSubscription)
+    }
+
     func testSessionValidity() {
         let future = Int64(Date().timeIntervalSince1970 * 1000) + 60_000
         let past = Int64(Date().timeIntervalSince1970 * 1000) - 60_000

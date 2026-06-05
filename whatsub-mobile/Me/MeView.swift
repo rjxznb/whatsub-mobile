@@ -68,15 +68,27 @@ struct MeView: View {
                             LabeledContent("个人语料库", value: "\(cq.used)/\(cq.limit)")
                                 .foregroundStyle(.whatsubInk)
                         }
-                        // iOS unlocks via IAP only — no website-purchase steering
-                        // (App Store 3.1.1). Subscription is offered to anyone not
-                        // already iOS-subscribed; the backend grants 50 to any active
-                        // subscription (hasActiveSubscription).
-                        if appState.currentUser?.iosSubActive == true {
-                            Label("已订阅 · \(subPlanName)", systemImage: "checkmark.seal.fill")
-                                .foregroundStyle(.whatsubAccent)
-                            Button("管理订阅") { showManageSubscriptions = true }
-                                .foregroundStyle(.whatsubAccent)
+                        // Suppress the upsell for ANY active subscriber — iOS
+                        // StoreKit OR a website/plugin Alipay 时段会员 (same email).
+                        // Gating on hasActiveSubscription (not iosSubActive) stops a
+                        // cross-platform web subscriber from being shown the 订阅 Pro
+                        // button and double-charging via StoreKit. The 管理订阅
+                        // (StoreKit) button only applies to an iOS-originated sub;
+                        // a web sub is managed on the web/插件, so we just show the
+                        // subscribed badge. We do NOT add any "buy on web" steering
+                        // here (App Store 3.1.1).
+                        if appState.currentUser?.hasActiveSubscription == true {
+                            Label(
+                                appState.currentUser?.iosSubActive == true
+                                    ? "已订阅 · \(subPlanName)"
+                                    : "已订阅 Pro",
+                                systemImage: "checkmark.seal.fill"
+                            )
+                            .foregroundStyle(.whatsubAccent)
+                            if appState.currentUser?.iosSubActive == true {
+                                Button("管理订阅") { showManageSubscriptions = true }
+                                    .foregroundStyle(.whatsubAccent)
+                            }
                         } else {
                             // Inline blurb removed 2026-06-04 per user feedback —
                             // the full feature list lives inside SubscribeSheet,
@@ -221,7 +233,10 @@ struct MeView: View {
             if let user = appState.currentUser {
                 if user.hasActiveLicense {
                     statusLabel("网站授权 · 有效", "checkmark.seal.fill", .green)
-                } else if user.iosSubActive == true {
+                } else if user.hasActiveSubscription == true {
+                    // Any active subscription — iOS StoreKit OR web/插件 Alipay
+                    // 时段会员 (same email). Was iosSubActive, which mislabeled a
+                    // cross-platform web subscriber as 免费版.
                     statusLabel("已订阅 Pro", "checkmark.seal.fill", .whatsubAccent)
                 } else {
                     statusLabel("免费版", "person.crop.circle", .whatsubInkMuted)

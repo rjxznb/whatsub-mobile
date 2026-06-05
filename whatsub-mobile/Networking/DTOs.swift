@@ -25,6 +25,15 @@ struct MeResponse: Decodable {
     // modes now (免费版 / 已订阅 Pro).
     let iosSubActive: Bool?
     let subProductId: String?
+    // Combined, server-authoritative entitlement: true when the user has ANY
+    // active subscription — iOS StoreKit (`iosSubActive`) OR a website/plugin
+    // Alipay 时段会员 (`web_subscriptions`). A user who subscribed on the web
+    // and logs in here with the same email has iosSubActive=false but
+    // hasActiveSubscription=true. Drives the "已订阅 Pro" badge and suppresses
+    // the in-app upsell, so a cross-platform subscriber isn't mislabeled 免费版
+    // or tempted into a second StoreKit charge. Optional — an older backend
+    // that omits it decodes to nil (treated as not-subscribed).
+    let hasActiveSubscription: Bool?
 }
 
 /// POST body for /api/license/iap/verify.
