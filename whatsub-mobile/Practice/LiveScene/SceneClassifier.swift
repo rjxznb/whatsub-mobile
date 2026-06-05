@@ -51,10 +51,12 @@ struct SceneClassifier {
     ) -> SceneClassifyOutcome {
         let classify = VNClassifyImageRequest()
         let humans = VNDetectHumanRectanglesRequest()
-        // iOS-only Animal request: covers cats + dogs as of iOS 17. On
-        // older OSes the request still runs but returns an empty list,
-        // which is fine — animalCount falls back to 0.
-        let animals = VNDetectAnimalRectanglesRequest()
+        // VNRecognizeAnimalsRequest (NOT VNDetectAnimalRectangles —
+        // that's a name I hallucinated; CI 26990209830 caught it).
+        // iOS 13+, returns VNRecognizedObjectObservation per spotted
+        // cat/dog; we use .count only — bounding boxes + species labels
+        // are inside the results but we don't need them for prompt-gen.
+        let animals = VNRecognizeAnimalsRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation)
         do {
             try handler.perform([classify, humans, animals])
