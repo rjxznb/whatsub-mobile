@@ -114,11 +114,14 @@ struct QuickChatView: View {
                     turnCounter   // hidden in phrase-drill mode (no-op view)
                     headerChips.padding(.top, 6)
                     Spacer(minLength: 0)
-                    VoiceOrbView(state: orbState,
-                                 audioLevel: vadCoordinator.audioLevel,
-                                 isPressed: isOrbPressed)
-                        .contentShape(Circle())
-                        .gesture(orbPressGesture)
+                    Button {
+                        orbToggleTapped()
+                    } label: {
+                        VoiceOrbView(state: orbState,
+                                     audioLevel: vadCoordinator.audioLevel,
+                                     isPressed: isOrbPressed)
+                    }
+                    .buttonStyle(.plain)
                     Spacer().frame(height: 18)
                     LyricTickerView(
                         onTranslate: { translatePresented = TranslationTarget(text: $0) },
@@ -289,42 +292,29 @@ struct QuickChatView: View {
         .onDisappear { vadCoordinator.cancel() }
     }
 
-    // ---- push-to-talk orchestration (builds 237+) ----
+    // ---- tap-to-toggle orchestration (was push-to-talk; switched
+    //      2026-06-05 after 9 push-to-talk variants on LiveScene all
+    //      hit silent-cancellation. User asked for the consistency,
+    //      so QuickChat + Roleplay tracked the change too.) ----
 
-    /// Long-press DragGesture on the orb. minimumDistance 0 so it fires
-    /// the instant the user touches the orb (no drag required); `.onChanged`
-    /// detects the touch-down on the first invocation and `.onEnded` the
-    /// release. We track our own `isOrbPressed` flag instead of relying on
-    /// gesture state because: (1) we need to ignore touches during AI's
-    /// reply (vm.phase != .idle); (2) the haptic + recorder start should
-    /// only fire on the TRANSITION from not-pressed to pressed, not every
-    /// poll.
-    private var orbPressGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { _ in
-                guard !isOrbPressed,
-                      vm.phase == .idle,
-                      !vm.turns.isEmpty,
-                      !micPermissionDenied else { return }
-                isOrbPressed = true
-                pressHaptic.impactOccurred(intensity: 1.0)        // sharp thunk
-                // continuousHaptic.start() removed 2026-06-05 — users
-                // (both QuickChat and Roleplay via the reused init)
-                // reported the sustained rumble felt "too long" / "kept
-                // vibrating" through the entire hold. Single-thunk
-                // press feedback + matching release thunk reads more
-                // naturally for a push-to-talk control.
-                startPushToTalk()
-            }
-            .onEnded { _ in
-                guard isOrbPressed else { return }
-                isOrbPressed = false
-                releaseHaptic.impactOccurred(intensity: 0.55)     // gentle release
-                // continuousHaptic.stop() removed alongside .start()
-                // above — no rumble to stop. Field retained as dead
-                // weight for now; can be deleted in a follow-up cleanup.
-                endPushToTalk()
-            }
+    /// Called on each orb tap. Toggles between recording and idle.
+    /// Same gating as the old gesture (must be in .idle phase, with
+    /// turns started + mic permission granted) for the START transition;
+    /// STOP transition is always allowed once we're recording.
+    private func orbToggleTapped() {
+        pressHaptic.impactOccurred(intensity: 1.0)
+        if isOrbPressed {
+            // STOP
+            isOrbPressed = false
+            endPushToTalk()
+        } else {
+            // START
+            guard vm.phase == .idle,
+                  !vm.turns.isEmpty,
+                  !micPermissionDenied else { return }
+            isOrbPressed = true
+            startPushToTalk()
+        }
     }
 
     private func startPushToTalk() {
@@ -400,7 +390,7 @@ struct QuickChatView: View {
         case .idle:
             if vm.turns.isEmpty { return "准备开始…" }
             if micPermissionDenied { return "未授权麦克风，去 设置 → whatSub 打开" }
-            return "按住球说话"
+            return "点击球开始说话"
         }
     }
 

@@ -91,16 +91,15 @@ struct VoiceOrbView: View {
                     softHalo(scale: frame.pulse, opacity: frame.haloOpacity)
                 }
 
-                // "press me" prompt — hides during press so the orb visual
-                // is uncluttered while talking. Sits in the shader's dark
-                // central region.
-                if !isPressed {
-                    pushMeLabel(time: timeline.date)
-                        .frame(width: baseSize, height: baseSize)
-                        .scaleEffect(frame.pulse)
-                        .transition(.opacity)
-                        .animation(.easeOut(duration: 0.18), value: isPressed)
-                }
+                // Inline label that swaps with state. "click" when idle
+                // invites the user to start; "stop" when recording
+                // signals "tap again to end" (user-requested 2026-06-05
+                // when all three orbs went tap-to-toggle). Always shown
+                // — was previously hidden while pressed, but now we WANT
+                // the stop hint visible during the recording state too.
+                pushMeLabel(time: timeline.date, text: isPressed ? "stop" : "click")
+                    .frame(width: baseSize, height: baseSize)
+                    .scaleEffect(frame.pulse)
             }
             .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
             // (A) Press-pop. Spring scale on top of the breath/voice pulse.
@@ -225,13 +224,11 @@ struct VoiceOrbView: View {
     /// across the text every 2.4 s. Material foreground style gives the
     /// text itself a frosted-glass appearance to match the orb body.
     @ViewBuilder
-    private func pushMeLabel(time: Date) -> some View {
+    private func pushMeLabel(time: Date, text: String = "click") -> some View {
         // Scale font with baseSize so the label fits in small orbs too.
         // At default baseSize=180 → 44pt (the original tuning). At a
         // smaller LiveScene baseSize=110 it shrinks to ~27pt and stays
-        // a single word instead of truncating to "press…".
-        let labelSize = baseSize * (44.0 / 180.0)
-        let text = "press"
+        // a single word instead of truncating.
         // 0..1 sweep phase, loop every 2.4 s.
         let phase = time.timeIntervalSinceReferenceDate
             .truncatingRemainder(dividingBy: 2.4) / 2.4

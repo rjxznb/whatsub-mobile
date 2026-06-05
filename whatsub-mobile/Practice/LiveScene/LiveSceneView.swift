@@ -35,24 +35,12 @@ struct LiveSceneView: View {
     /// .onChange below) — past hints shouldn't leak across exercises.
     @State private var hintLevel: HintLevel = .none
 
-    /// Live press latch for the orb gesture (NOT vm.phase). Two reasons
-    /// QuickChat uses this same pattern + we MUST match it:
-    /// 1. The gesture is a computed property below so SwiftUI keeps the
-    ///    SAME gesture instance alive across view re-renders. If we
-    ///    instead built it inline inside a function each render (as I
-    ///    did in d7e501a / 0b5e6ca), SwiftUI swaps gesture instances mid-
-    ///    press and the original instance's `.onEnded` never fires.
-    /// 2. Using a @State Bool as the latch (read AND written inside the
-    ///    same closure) keeps press/release semantics explicit + lets
-    ///    onChanged be idempotent without depending on vm phase timing.
-    @State private var isOrbPressed: Bool = false
-
-    /// Rolling on-screen log of the last few gesture/recorder events,
-    /// rendered as a tiny pill at the top of the view (so the user can
-    /// see what's happening WITHOUT plugging into Xcode / Console.app).
-    /// Stops growing after ~6 lines so the overlay stays a single short
-    /// strip. Strip out once the orb is provably stable.
-    @State private var debugLog: [String] = []
+    /// Single sharp impact on each orb tap. Same `UIImpactFeedbackGenerator`
+    /// pattern QuickChat uses (intensity 0.85 — a touch lighter than
+    /// QuickChat's 1.0 since LiveScene's orb has no separate
+    /// release-haptic to balance against). Built lazily; iOS owns the
+    /// engine lifecycle.
+    private let pressHaptic = UIImpactFeedbackGenerator(style: .rigid)
     enum HintLevel: Int, Comparable {
         case none = 0, zh = 1, zhAndSample = 2
         static func < (lhs: HintLevel, rhs: HintLevel) -> Bool {
@@ -68,26 +56,10 @@ struct LiveSceneView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack {
             Color.whatsubBg.ignoresSafeArea()
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Debug overlay (TEMPORARY — strip with the @State debugLog +
-            // logDebug() once the orb gesture is provably stable). Sits
-            // at the very top in a tiny mono font so events are visible
-            // on-device without plugging into Xcode / Console.app.
-            if !debugLog.isEmpty {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(debugLog.enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .font(.system(size: 9, weight: .regular, design: .monospaced))
-                            .foregroundStyle(.whatsubInkMuted)
-                    }
-                }
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(Color.whatsubBgElev.opacity(0.85), in: RoundedRectangle(cornerRadius: 6))
-                .padding(.horizontal, 12).padding(.top, 4)
-            }
         }
         // .fullScreenCover (NOT .sheet) for the camera picker —
         // UIImagePickerController is designed to take the whole screen
@@ -118,17 +90,8 @@ struct LiveSceneView: View {
         // Reset the 提示 reveal level whenever the user lands on a fresh
         // prompt (new pick → new derivation). Past hints shouldn't carry
         // across exercises and prejudice the next attempt.
-        //
-        // Also safety-reset the orb-press latch if phase moved AWAY from
-        // .recording for any reason that wasn't a clean user-release (e.g.
-        // the recorder hit its 30s hardCap while the user was still
-        // holding). Without this the orb would stay visually pressed
-        // forever after the recorder finished on its own.
-        .onChange(of: phaseKey(vm.phase)) { newKey in
+        .onChange(of: phaseKey(vm.phase)) { _ in
             hintLevel = .none
-            if newKey != "recording" && isOrbPressed {
-                isOrbPressed = false
-            }
         }
         // Don't tear down on .onDisappear — tab switches fire it too, and
         // we want the prompt + captured image to persist when the user
@@ -412,72 +375,52 @@ struct LiveSceneView: View {
         }
     }
 
-    // MARK: - orb (push-to-talk)
+    // MARK: - orb (tap-to-toggle)
 
-    // (SwiftUI orbPressGesture removed 2026-06-05 — 4 attempts at
-    // making SwiftUI DragGesture / LongPressGesture work all hit a
-    // silent-cancellation bug. UIKit `PushToTalkOverlay` (in orbBlock
-    // below) handles touches directly via UILongPressGestureRecognizer
-    // and works first try.)
+    // (9 prior attempts at making push-to-talk work — DragGesture
+    // inline / closure-vm-phase / computed-property+@State / no-
+    // ScrollView / UILongPressGestureRecognizer / Button+ButtonStyle /
+    // raw touchesBegan/Ended/Cancelled / UIControl target-action /
+    // UIControl manual tracking — all hit "release event silently
+    // swallowed" in some layer. User asked for tap-to-toggle 2026-06-05
+    // and it works first try; the entire push-to-talk apparatus
+    // including PushToTalkOverlay.swift is now dead but kept for
+    // forensic value.)
 
-    /// Append a line to the debug overlay, trim to last 6 lines. Strip
-    /// this + the overlay rendering once the gesture is provably stable.
-    private func logDebug(_ msg: String) {
-        let stamp = String(format: "%.3f", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 100))
-        debugLog.append("[\(stamp)] \(msg)")
-        // Bumped to 12 (was 6) — the lifecycle + UIControl + raw-touch
-        // overrides emit 3-4 events per press cycle on average, and a
-        // 6-line cap was rotating out earlier events too fast for
-        // diagnosis.
-        if debugLog.count > 12 {
-            debugLog.removeFirst(debugLog.count - 12)
-        }
-    }
-
-    /// Push-to-talk orb. **7th** attempt — finally below SwiftUI's
-    /// gesture system entirely. PushToTalkOverlay overrides
-    /// UIResponder's touchesBegan/Ended/Cancelled directly; the OS
-    /// guarantees a paired ENDED-or-CANCELLED for every BEGAN, so
-    /// release is reliable. The 6 prior attempts (DragGesture inline /
-    /// closure-vm-phase / computed+@State / no-ScrollView /
-    /// UILongPressGestureRecognizer / Button+ButtonStyle) all had
-    /// release silently swallowed by SwiftUI's gesture coordinator at
-    /// various layers; user confirmed the symptom every time.
+    /// Tap-to-toggle orb. After 9 failed attempts at making the
+    /// push-to-talk touch lifecycle reliable in this view tree (every
+    /// SwiftUI gesture and every UIKit recogniser/touch override got
+    /// killed by something between the audio session activation and
+    /// the SwiftUI/UIControl re-layout), switched to a SIMPLE
+    /// discrete-tap UX: tap once to start, tap again to end.
     ///
-    /// Layout: VoiceOrbView is the visual layer with
-    /// `.allowsHitTesting(false)` so SwiftUI doesn't even consider it
-    /// for hit testing. PushToTalkOverlay is the topmost hit target
-    /// — its raw UIView reliably receives touches at the orb's
-    /// position.
+    /// Why this works where 9 push-to-talk variants failed: SwiftUI
+    /// Button's action callback handles ONE discrete tap event end
+    /// to end — no separate press/release lifecycle for the OS or
+    /// gesture coordinator to silently de-sync. Recording itself
+    /// then runs uninterrupted between the two taps; the audio
+    /// session pre-warm on .onAppear means there's no mid-session
+    /// reroute either.
     @ViewBuilder
     private func orbBlock(isRecording: Bool) -> some View {
         VStack(spacing: 4) {
-            ZStack {
+            Button {
+                pressHaptic.impactOccurred(intensity: 0.85)
+                if isRecording {
+                    vm.endRecording()
+                } else if case .ready = vm.phase {
+                    vm.startRecording()
+                }
+            } label: {
                 VoiceOrbView(
-                    state: isOrbPressed ? .recording : .idle,
+                    state: isRecording ? .recording : .idle,
                     audioLevel: vm.audioLevel,
-                    isPressed: isOrbPressed,
+                    isPressed: isRecording,
                     baseSize: 110
                 )
-                .allowsHitTesting(false)   // hand all touches to overlay
-                PushToTalkOverlay(
-                    onPress: {
-                        guard !isOrbPressed, case .ready = vm.phase else { return }
-                        isOrbPressed = true
-                        vm.startRecording()
-                        logDebug("→ start phase=\(phaseKey(vm.phase))")
-                    },
-                    onRelease: {
-                        guard isOrbPressed else { return }
-                        isOrbPressed = false
-                        vm.endRecording()
-                        logDebug("→ end   phase=\(phaseKey(vm.phase))")
-                    },
-                    onLog: { msg in logDebug(msg) }
-                )
-                .frame(width: 210, height: 210)
             }
-            Text(isOrbPressed ? "松开结束" : "按住说英语")
+            .buttonStyle(.plain)
+            Text(isRecording ? "点击结束" : "点击说英语")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.whatsubInkMuted)
         }
