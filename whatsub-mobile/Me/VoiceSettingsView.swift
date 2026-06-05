@@ -28,10 +28,6 @@ struct VoiceSettingsView: View {
                 piperRow
             } header: {
                 Text("内置神经语音").foregroundStyle(.whatsubInkMuted)
-            } footer: {
-                Text("Whatsub 内置 Piper · LJSpeech 美式女声 (~64MB,已随 app 打包,无需下载)。神经 TTS,离线运行,点击右侧 🔊 试听。")
-                    .font(.caption)
-                    .foregroundStyle(.whatsubInkMuted)
             }
             Section {
                 autoRow
