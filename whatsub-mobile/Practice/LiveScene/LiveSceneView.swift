@@ -333,18 +333,33 @@ struct LiveSceneView: View {
     // MARK: - orb (push-to-talk)
 
     /// Reuses VoiceOrbView from QuickChat — Liquid-Glass shader on iOS 17+,
-    /// material fallback on iOS 16. Press gesture is the same shape as
-    /// QuickChat's: DragGesture(minimumDistance: 0) onChanged/onEnded so
-    /// we get reliable press AND release signals (a TapGesture only fires
-    /// on release).
+    /// material fallback on iOS 16.
+    ///
+    /// **Why a local `isOrbPressed` @State instead of the recording param**
+    /// (bug fix 2026-06-05): gesture closures capture the function param
+    /// by value at gesture-creation time, so the closure created on the
+    /// FIRST render (when isRecording=false) was still seeing
+    /// isRecording=false on release — `if isRecording { endRecording() }`
+    /// silently no-op'd, and the user had to tap a SECOND time (which
+    /// rebuilt the gesture with the now-true value). Reading from a
+    /// @State binding (or vm.phase) inside the closure avoids the
+    /// stale-capture trap entirely. Same pattern QuickChat uses.
+    ///
+    /// **Why .scaleEffect(0.55)**: the orb's default size (`baseSize 180`
+    /// × `haloMultiplier 1.85` = ~333pt) was overlapping the live
+    /// transcript above. Scaling proportionally shrinks both core + halo
+    /// without forking VoiceOrbView. The layout slot stays at ~333pt so
+    /// the safeAreaInset reserves enough room above for content to
+    /// breathe.
     @ViewBuilder
     private func orbBlock(isRecording: Bool) -> some View {
         let press = DragGesture(minimumDistance: 0)
             .onChanged { _ in
-                if !isRecording { vm.startRecording() }
+                // Read live vm.phase, NOT the captured isRecording param.
+                if case .ready = vm.phase { vm.startRecording() }
             }
             .onEnded { _ in
-                if isRecording { vm.endRecording() }
+                if case .recording = vm.phase { vm.endRecording() }
             }
 
         VStack(spacing: 4) {
@@ -353,6 +368,7 @@ struct LiveSceneView: View {
                 audioLevel: vm.audioLevel,
                 isPressed: isRecording
             )
+            .scaleEffect(0.55)
             .contentShape(Circle())
             .gesture(press)
             Text(isRecording ? "松开结束" : "按住说英语")
