@@ -55,14 +55,23 @@ targets:
       - whatsub-mobile/Resources/ecdict-cn.json
       - whatsub-mobile/Resources/correct.wav
       - whatsub-mobile/Resources/Caveat-Bold.ttf
+      # `type: folder` alone wasn't producing Copy-Bundle-Resources
+      # entries in the generated pbxproj — CI Archive log (c549807)
+      # showed only ipa-en-us.json / ecdict-cn.json / correct.wav /
+      # Caveat-Bold.ttf being copied. NEEDS `buildPhase: resources`
+      # to force XcodeGen to attach the folder reference to the
+      # "Copy Bundle Resources" build phase. Without that, the folder
+      # ref exists in the project but is dead weight.
       - path: whatsub-mobile/Resources/espeak-ng-data
         type: folder
-      # Bundled Piper voice model (~64MB) — was previously downloaded
-      # at runtime from huggingface.co (GFW-flaky); CI now extracts
-      # straight from the sherpa-onnx Piper tarball. Adds ~64MB to
-      # the IPA but removes runtime download + silent "测试" bug.
-      - path: whatsub-mobile/Resources/piper-ljspeech
-        type: folder
+        buildPhase: resources
+      # Piper voice model bundled as 3 individual file resources
+      # (not folder reference) — same reason as espeak above, but
+      # easier since it's only 3 files. They land at the bundle ROOT
+      # (Bundle.main.bundleURL), so PiperTTS.modelDir resolves there.
+      - whatsub-mobile/Resources/piper-ljspeech/en_US-ljspeech-medium.onnx
+      - whatsub-mobile/Resources/piper-ljspeech/tokens.txt
+      - whatsub-mobile/Resources/piper-ljspeech/en_US-ljspeech-medium.onnx.json
     info:
       path: whatsub-mobile/Info.plist
       properties:

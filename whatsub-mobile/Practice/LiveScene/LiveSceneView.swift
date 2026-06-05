@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import AVFoundation
 
 /// 实景口语练习 surface. Phase-driven content tree: picker → Vision →
 /// LLM prompt → press-and-hold record → LLM grade → review.
@@ -136,6 +137,22 @@ struct LiveSceneView: View {
         // leaks nothing. (If the user is HOLDING the orb during a tab
         // switch — rare — the recorder's 30s hardCap or the next press's
         // teardown cleans up; not worth special-casing.)
+        //
+        // **Pre-warm the AVAudioSession on view appear** — every prior
+        // orb attempt (#7-#9) showed the UIControl/UIView gesture
+        // getting killed within ~50-150ms of recorder.start(), which
+        // is when the audio session activates `.playAndRecord` mode.
+        // Activating the session here, BEFORE the user presses, means
+        // recorder.start()'s session calls become no-ops (already in
+        // the right state), and there's no mid-press audio reroute to
+        // disrupt the touch.
+        .onAppear {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playAndRecord,
+                                     mode: .measurement,
+                                     options: [.defaultToSpeaker, .allowBluetooth])
+            try? session.setActive(true, options: [])
+        }
     }
 
     /// Reduce Phase to a small key string for onChange — Phase isn't

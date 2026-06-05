@@ -83,12 +83,19 @@ struct LibraryView: View {
             ProgressView().tint(.whatsubAccent)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let err = vm.errorMessage, vm.entries.isEmpty {
-            VStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.whatsubInkMuted)
-                Text(err).font(.callout).foregroundStyle(.whatsubInkMuted).multilineTextAlignment(.center)
-                Text("下拉重试").font(.footnote).foregroundStyle(.whatsubInkFaint)
-            }.padding(32)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Wrap in ScrollView so .refreshable on the parent fires
+            // pull-to-refresh — a bare VStack has no scrollable
+            // container for the gesture to anchor to. Same trick the
+            // empty state below uses.
+            ScrollView {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.whatsubInkMuted)
+                    Text(err).font(.callout).foregroundStyle(.whatsubInkMuted).multilineTextAlignment(.center)
+                    Text("下拉重试").font(.footnote).foregroundStyle(.whatsubInkFaint)
+                }
+                .padding(32)
+                .frame(maxWidth: .infinity, minHeight: 400)
+            }
         } else if vm.entries.isEmpty {
             // 2026-06-05: enriched empty state with the three import paths
             // (was previously a single line pointing only to the desktop
@@ -99,26 +106,35 @@ struct LibraryView: View {
             // Only shown on empty Library — once the user has any video
             // here, the "+" button alone is enough discoverability; we
             // don't add a persistent footer to non-empty lists.
-            VStack(spacing: 14) {
-                Image(systemName: "play.rectangle")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.whatsubAccent)
-                Text("还没有视频")
-                    .font(.headline)
-                    .foregroundStyle(.whatsubInk)
-                VStack(alignment: .leading, spacing: 10) {
-                    importHintRow(icon: "plus.circle.fill",
-                                  text: "点击右上角「+」粘贴 YouTube、B 站等链接")
-                    importHintRow(icon: "square.and.arrow.up",
-                                  text: "在视频 app 里点分享 → whatSub")
-                    importHintRow(icon: "icloud.and.arrow.down",
-                                  text: "桌面端点 ☁️ 同步,这里下拉刷新")
+            // ScrollView wrap so .refreshable on the parent ENABLES
+            // pull-to-refresh — bare VStack has no scrollable container
+            // for the gesture to attach to (user-reported 2026-06-05:
+            // "没有任何视频时下拉没有刷新事件"). minHeight forces the
+            // ScrollView's content tall enough that the gesture is
+            // actually available (pull-to-refresh needs SOME scrollable
+            // space to bounce).
+            ScrollView {
+                VStack(spacing: 14) {
+                    Image(systemName: "play.rectangle")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.whatsubAccent)
+                    Text("还没有视频")
+                        .font(.headline)
+                        .foregroundStyle(.whatsubInk)
+                    VStack(alignment: .leading, spacing: 10) {
+                        importHintRow(icon: "plus.circle.fill",
+                                      text: "点击右上角「+」粘贴 YouTube、B 站等链接")
+                        importHintRow(icon: "square.and.arrow.up",
+                                      text: "在视频 app 里点分享 → whatSub")
+                        importHintRow(icon: "icloud.and.arrow.down",
+                                      text: "桌面端点 ☁️ 同步,这里下拉刷新")
+                    }
+                    .padding(.top, 4)
+                    .padding(.horizontal, 12)
                 }
-                .padding(.top, 4)
-                .padding(.horizontal, 12)
+                .padding(32)
+                .frame(maxWidth: .infinity, minHeight: 400)
             }
-            .padding(32)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(vm.entries) { entry in
                 NavigationLink(value: entry.id) {

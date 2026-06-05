@@ -75,24 +75,28 @@ struct PushToTalkOverlay: UIViewRepresentable {
         }
 
         private func wire() {
-            // UIControl's target-action.
-            // **NOT** including .touchDragExit — UIControl by default stops
-            // tracking the moment the finger drags outside the control's
-            // bounds, even by a pixel. Finger pressure on a touchscreen
-            // ALWAYS has micro-movement; the build 1db6f6c debug log
-            // confirmed UIC touchUp firing 145ms after touchDown despite
-            // the user holding (user-reported "立即结束" symptom). For
-            // push-to-talk we want the touch to remain "active" until
-            // the user actually LIFTS the finger.
+            // No addTarget — we override beginTracking/endTracking/
+            // cancelTracking directly. Build c549807's log showed UIC
+            // touchUp firing only 55ms after start phase changed,
+            // with NO RAW touchesEnded/Cancelled in between — that's
+            // SOMETHING calling endTracking()/cancelTracking() on us
+            // externally (suspected: audio session activation in
+            // recorder.start() triggers a UI redraw that flips
+            // UIControl's tracking state).
             //
-            // Combined with the continueTracking override below, this
-            // keeps the press alive through any amount of finger
-            // movement until physical release.
-            addTarget(self, action: #selector(handleDown), for: .touchDown)
-            addTarget(self, action: #selector(handleUp),
-                      for: [.touchUpInside,
-                            .touchUpOutside,
-                            .touchCancel])
+            // Bypassing addTarget + driving onPress/onRelease from
+            // begin/end/cancel-Tracking gives us:
+            //   1. Logs showing WHICH callback was triggered.
+            //   2. Independence from .touchUpInside/etc events that
+            //      can be re-triggered by view layout changes.
+        }
+
+        // MARK: - UIControl tracking overrides (manual, no addTarget)
+
+        override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+            onLog?("UIC beginTracking")
+            onPress?()
+            return true   // stay tracking
         }
 
         /// Always keep tracking — don't let UIControl auto-cancel the
@@ -101,6 +105,21 @@ struct PushToTalkOverlay: UIViewRepresentable {
         /// physical release ends it.
         override func continueTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
             return true
+        }
+
+        override func endTracking(_ touch: UITouch?, with event: UIEvent?) {
+            onLog?("UIC endTracking")
+            onRelease?()
+            // NOT calling super — super.endTracking would fire
+            // .touchUpInside/.touchUpOutside which we don't observe
+            // and the default behaviour can also re-enter our
+            // callbacks.
+        }
+
+        override func cancelTracking(with event: UIEvent?) {
+            onLog?("UIC cancelTracking")
+            onRelease?()
+            // Same rationale as endTracking — skip super.
         }
 
         @objc private func handleDown() {

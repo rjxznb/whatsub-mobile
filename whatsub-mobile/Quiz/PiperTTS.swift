@@ -177,22 +177,25 @@ final class PiperTTS {
         Bundle.main.path(forResource: "espeak-ng-data", ofType: nil)
     }
 
-    /// Where the Piper voice model lives. Prefers the bundled copy at
-    /// `Bundle.main/piper-ljspeech/` (added 2026-06-05 — CI extracts the
-    /// .onnx + tokens + .onnx.json from the sherpa-onnx Piper tarball
-    /// straight into Resources so there's nothing to download at
-    /// runtime). Falls back to the downloaded copy in Documents/ if the
-    /// bundle path is missing (covers a defensive case: someone runs an
-    /// old build that still has a downloaded model + a fresh build
-    /// without the bundle hadn't been regenerated).
+    /// Where the Piper voice model lives. The 3 files (.onnx + tokens
+    /// + .onnx.json) are bundled at the app bundle ROOT (not in a
+    /// subfolder) because project.yml lists them as individual
+    /// resources, not a folder reference — the folder-reference path
+    /// (`type: folder` alone) silently dropped them from the IPA in
+    /// build c549807. Falls back to the legacy Documents download
+    /// directory only if the bundle doesn't have the .onnx (covers
+    /// the upgrade case for users who had downloaded before bundling).
     static var modelDir: URL? {
-        if let bundled = Bundle.main.path(forResource: "piper-ljspeech", ofType: nil) {
-            return URL(fileURLWithPath: bundled)
+        let bundleRoot = Bundle.main.bundleURL
+        let bundledOnnx = bundleRoot.appendingPathComponent("en_US-ljspeech-medium.onnx")
+        if FileManager.default.fileExists(atPath: bundledOnnx.path) {
+            return bundleRoot
         }
-        // Fallback to legacy Documents download path.
+        // Legacy fallback — older builds where PiperModelDownloader did
+        // the work + stashed the files in Documents/piper-ljspeech.
         let dl = PiperModelDownloader.ljspeechDir
-        let onnx = dl.appendingPathComponent("en_US-ljspeech-medium.onnx")
-        return FileManager.default.fileExists(atPath: onnx.path) ? dl : nil
+        let dlOnnx = dl.appendingPathComponent("en_US-ljspeech-medium.onnx")
+        return FileManager.default.fileExists(atPath: dlOnnx.path) ? dl : nil
     }
 
     /// Minimal float32 PCM WAV writer. Output: 32-bit float, mono, sampleRate.
