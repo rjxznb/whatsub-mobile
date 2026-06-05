@@ -29,7 +29,7 @@ struct VoiceSettingsView: View {
             } header: {
                 Text("内置神经语音").foregroundStyle(.whatsubInkMuted)
             } footer: {
-                Text("Whatsub 内置 Piper · LJSpeech 美式女声。离线运行 (~64MB 一次性下载)；首次启用要联网下载语音模型，国内优先走 hf-mirror 镜像源 (秒下),失败自动回退 HuggingFace。下载完成后无需网络,直接生成。")
+                Text("Whatsub 内置 Piper · LJSpeech 美式女声 (~64MB,已随 app 打包,无需下载)。神经 TTS,离线运行,点击右侧 🔊 试听。")
                     .font(.caption)
                     .foregroundStyle(.whatsubInkMuted)
             }
@@ -139,33 +139,21 @@ struct VoiceSettingsView: View {
         .listRowBackground(Color.whatsubBgElev)
     }
 
-    /// Returns true if the model is ready to use.
+    /// Returns true if the model is ready to use. With the 2026-06-05+
+    /// bundled-model build, `PiperTTS.canSpeak` returns true straight
+    /// from a fresh install — the Documents-based downloader is now
+    /// just a legacy fallback for builds that predate the bundling.
     private var piperReady: Bool {
+        if PiperTTS.shared.canSpeak { return true }
         if case .ready = piperDownloader.status { return true }
         return false
     }
 
     @ViewBuilder
     private var piperRightAction: some View {
-        switch piperDownloader.status {
-        case .notDownloaded, .error:
-            Button {
-                Task { await piperDownloader.download() }
-            } label: {
-                Text("下载 ~64MB")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Color.whatsubAccent, in: Capsule())
-            }
-            .buttonStyle(.plain)
-        case .downloading(let p):
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small).tint(.whatsubAccent)
-                Text("\(Int(p * 100))%")
-                    .font(.caption2).foregroundStyle(.whatsubInkMuted)
-            }
-        case .ready:
+        if PiperTTS.shared.canSpeak {
+            // Bundled OR previously downloaded — both lead here. Just
+            // offer the preview-speaker button; nothing else to do.
             Button {
                 previewPiper()
             } label: {
@@ -175,6 +163,38 @@ struct VoiceSettingsView: View {
                     .background(Color.whatsubBg, in: Circle())
             }
             .buttonStyle(.borderless)
+        } else {
+            // Legacy fallback — shouldn't fire on a 2026-06-05+ build
+            // because the model is bundled. Kept for graceful degrade.
+            switch piperDownloader.status {
+            case .notDownloaded, .error:
+                Button {
+                    Task { await piperDownloader.download() }
+                } label: {
+                    Text("下载 ~64MB")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color.whatsubAccent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            case .downloading(let p):
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small).tint(.whatsubAccent)
+                    Text("\(Int(p * 100))%")
+                        .font(.caption2).foregroundStyle(.whatsubInkMuted)
+                }
+            case .ready:
+                Button {
+                    previewPiper()
+                } label: {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .foregroundStyle(.whatsubAccent)
+                        .padding(10)
+                        .background(Color.whatsubBg, in: Circle())
+                }
+                .buttonStyle(.borderless)
+            }
         }
     }
 

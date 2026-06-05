@@ -32,19 +32,18 @@ final class PiperTTS {
 
     /// True iff model files are present on disk + espeak-ng-data bundle exists.
     var canSpeak: Bool {
-        guard PiperModelDownloader.isLjspeechReady() else { return false }
-        return Self.espeakDataPath != nil
+        guard Self.modelDir != nil, Self.espeakDataPath != nil else { return false }
+        return true
     }
 
     /// Loads the model (idempotent). Heavy first-call latency expected.
     /// Returns true if the wrapper is now available, false otherwise.
     func loadIfNeeded() -> Bool {
         if ttsWrapper != nil { return true }
-        guard canSpeak else { return false }
+        guard canSpeak, let dir = Self.modelDir else { return false }
         if loadAttempted, ttsWrapper == nil { return false }
         loadAttempted = true
 
-        let dir = PiperModelDownloader.ljspeechDir
         let onnx = dir.appendingPathComponent("en_US-ljspeech-medium.onnx").path
         let tokens = dir.appendingPathComponent("tokens.txt").path
         guard let espeak = Self.espeakDataPath else { return false }
@@ -176,6 +175,24 @@ final class PiperTTS {
     /// resource directory inside the app bundle.
     private static var espeakDataPath: String? {
         Bundle.main.path(forResource: "espeak-ng-data", ofType: nil)
+    }
+
+    /// Where the Piper voice model lives. Prefers the bundled copy at
+    /// `Bundle.main/piper-ljspeech/` (added 2026-06-05 — CI extracts the
+    /// .onnx + tokens + .onnx.json from the sherpa-onnx Piper tarball
+    /// straight into Resources so there's nothing to download at
+    /// runtime). Falls back to the downloaded copy in Documents/ if the
+    /// bundle path is missing (covers a defensive case: someone runs an
+    /// old build that still has a downloaded model + a fresh build
+    /// without the bundle hadn't been regenerated).
+    static var modelDir: URL? {
+        if let bundled = Bundle.main.path(forResource: "piper-ljspeech", ofType: nil) {
+            return URL(fileURLWithPath: bundled)
+        }
+        // Fallback to legacy Documents download path.
+        let dl = PiperModelDownloader.ljspeechDir
+        let onnx = dl.appendingPathComponent("en_US-ljspeech-medium.onnx")
+        return FileManager.default.fileExists(atPath: onnx.path) ? dl : nil
     }
 
     /// Minimal float32 PCM WAV writer. Output: 32-bit float, mono, sampleRate.

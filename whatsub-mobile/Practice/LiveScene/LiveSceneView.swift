@@ -88,7 +88,14 @@ struct LiveSceneView: View {
                 .padding(.horizontal, 12).padding(.top, 4)
             }
         }
-        .sheet(isPresented: $showCamera) {
+        // .fullScreenCover (NOT .sheet) for the camera picker —
+        // UIImagePickerController is designed to take the whole screen
+        // (shutter + flip + flash all positioned assuming full-screen
+        // bounds). In a SwiftUI .sheet (iOS 16+ form-sheet style by
+        // default) the shutter button gets clipped or hidden under
+        // the sheet chrome. User reported "拍照按钮消失了" on the
+        // build 1db6f6c camera picker.
+        .fullScreenCover(isPresented: $showCamera) {
             PhotoCameraPicker(image: $cameraImage)
                 .ignoresSafeArea()
         }

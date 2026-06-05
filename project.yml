@@ -47,6 +47,7 @@ targets:
           - "Info.plist"
           - "PrivacyInfo.xcprivacy"
           - "Resources/espeak-ng-data/**"
+          - "Resources/piper-ljspeech/**"
     resources:
       - whatsub-mobile/Assets.xcassets
       - whatsub-mobile/PrivacyInfo.xcprivacy
@@ -55,6 +56,12 @@ targets:
       - whatsub-mobile/Resources/correct.wav
       - whatsub-mobile/Resources/Caveat-Bold.ttf
       - path: whatsub-mobile/Resources/espeak-ng-data
+        type: folder
+      # Bundled Piper voice model (~64MB) — was previously downloaded
+      # at runtime from huggingface.co (GFW-flaky); CI now extracts
+      # straight from the sherpa-onnx Piper tarball. Adds ~64MB to
+      # the IPA but removes runtime download + silent "测试" bug.
+      - path: whatsub-mobile/Resources/piper-ljspeech
         type: folder
     info:
       path: whatsub-mobile/Info.plist

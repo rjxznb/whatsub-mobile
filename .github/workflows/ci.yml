@@ -72,13 +72,16 @@ jobs:
           test -d frameworks/sherpa-onnx.xcframework || (echo "sherpa-onnx.xcframework missing"; exit 1)
           test -d frameworks/onnxruntime.xcframework || (echo "onnxruntime.xcframework missing"; exit 1)
           # espeak-ng-data is NOT in the framework tarball — it's bundled with
-          # the Piper VOICE MODEL tarball. Download a small piper bundle and
-          # extract just espeak-ng-data from it for IPA bundling. The full
-          # .onnx model itself is downloaded at runtime by PiperModelDownloader.
+          # the Piper VOICE MODEL tarball. Also bundle the model itself
+          # (.onnx + tokens.txt + .onnx.json) so PiperTTS works offline
+          # from first launch — saves the user from a 64MB runtime
+          # download + sidesteps the GFW issue with huggingface.co
+          # (2026-06-05: per user, the runtime download path showed
+          # "测试" silent on success, easier to just bundle).
           MODEL_TARBALL="vits-piper-en_US-ljspeech-medium.tar.bz2"
           MODEL_CACHE="$HOME/sherpa-onnx-cache/${MODEL_TARBALL}"
           if [ ! -f "$MODEL_CACHE" ]; then
-            echo "Downloading ${MODEL_TARBALL} (for espeak-ng-data)…"
+            echo "Downloading ${MODEL_TARBALL} (for espeak-ng-data + voice model)…"
             curl -fL -o "$MODEL_CACHE" "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${MODEL_TARBALL}"
           fi
           PIPER_EXTRACT=$(mktemp -d)
@@ -92,7 +95,22 @@ jobs:
           mkdir -p whatsub-mobile/Resources
           rm -rf whatsub-mobile/Resources/espeak-ng-data
           cp -R "$ESPEAK_SRC" whatsub-mobile/Resources/
-          echo "Copied espeak-ng-data ($(du -sh whatsub-mobile/Resources/espeak-ng-data | cut -f1)) to bundle resources"
+          echo "Copied espeak-ng-data ($(du -sh whatsub-mobile/Resources/espeak-ng-data | cut -f1))"
+          # Bundle the voice model: .onnx + tokens.txt + .onnx.json
+          MODEL_DST=whatsub-mobile/Resources/piper-ljspeech
+          rm -rf "$MODEL_DST"
+          mkdir -p "$MODEL_DST"
+          ONNX_SRC=$(find "$PIPER_EXTRACT" -name "en_US-ljspeech-medium.onnx" | head -1)
+          TOKENS_SRC=$(find "$PIPER_EXTRACT" -name "tokens.txt" | head -1)
+          JSON_SRC=$(find "$PIPER_EXTRACT" -name "en_US-ljspeech-medium.onnx.json" | head -1)
+          for f in "$ONNX_SRC" "$TOKENS_SRC" "$JSON_SRC"; do
+            if [ -z "$f" ] || [ ! -f "$f" ]; then
+              echo "Piper model file missing: $f"
+              exit 1
+            fi
+            cp "$f" "$MODEL_DST/"
+          done
+          echo "Copied piper-ljspeech ($(du -sh "$MODEL_DST" | cut -f1)) — bundled voice model"
           rm -rf "$PIPER_EXTRACT"
 
       - name: Generate .xcodeproj

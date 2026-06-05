@@ -75,14 +75,32 @@ struct PushToTalkOverlay: UIViewRepresentable {
         }
 
         private func wire() {
-            // UIControl's target-action: every conceivable touch
-            // termination event hooks to handleUp. Belt + suspenders.
+            // UIControl's target-action.
+            // **NOT** including .touchDragExit — UIControl by default stops
+            // tracking the moment the finger drags outside the control's
+            // bounds, even by a pixel. Finger pressure on a touchscreen
+            // ALWAYS has micro-movement; the build 1db6f6c debug log
+            // confirmed UIC touchUp firing 145ms after touchDown despite
+            // the user holding (user-reported "立即结束" symptom). For
+            // push-to-talk we want the touch to remain "active" until
+            // the user actually LIFTS the finger.
+            //
+            // Combined with the continueTracking override below, this
+            // keeps the press alive through any amount of finger
+            // movement until physical release.
             addTarget(self, action: #selector(handleDown), for: .touchDown)
             addTarget(self, action: #selector(handleUp),
                       for: [.touchUpInside,
                             .touchUpOutside,
-                            .touchCancel,
-                            .touchDragExit])
+                            .touchCancel])
+        }
+
+        /// Always keep tracking — don't let UIControl auto-cancel the
+        /// touch when the finger drags outside the control's bounds.
+        /// Push-to-talk has no concept of "drag-cancelled" press; only
+        /// physical release ends it.
+        override func continueTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+            return true
         }
 
         @objc private func handleDown() {
