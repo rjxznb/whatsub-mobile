@@ -229,6 +229,7 @@ struct VoiceOrbView: View {
         // At default baseSize=180 → 44pt (the original tuning). At a
         // smaller LiveScene baseSize=110 it shrinks to ~27pt and stays
         // a single word instead of truncating.
+        let labelSize = baseSize * (44.0 / 180.0)
         // 0..1 sweep phase, loop every 2.4 s.
         let phase = time.timeIntervalSinceReferenceDate
             .truncatingRemainder(dividingBy: 2.4) / 2.4
