@@ -79,13 +79,13 @@ targets:
           else
             echo "[piper] WARN: $SRC/espeak-ng-data missing — Piper TTS will silently fail"
           fi
-          if [ -d "$SRC/piper-ljspeech" ]; then
-            cp -f "$SRC/piper-ljspeech/en_US-ljspeech-medium.onnx" "$APP/"
-            cp -f "$SRC/piper-ljspeech/tokens.txt" "$APP/"
-            cp -f "$SRC/piper-ljspeech/en_US-ljspeech-medium.onnx.json" "$APP/"
-            echo "[piper] copied voice model files → .app (.onnx $(du -h "$APP/en_US-ljspeech-medium.onnx" | cut -f1))"
+          if [ -d "$SRC/matcha-ljspeech" ]; then
+            cp -f "$SRC/matcha-ljspeech/model-steps-3.onnx" "$APP/"
+            cp -f "$SRC/matcha-ljspeech/hifigan_v2.onnx" "$APP/"
+            cp -f "$SRC/matcha-ljspeech/tokens.txt" "$APP/"
+            echo "[tts] copied Matcha voice model → .app (.onnx $(du -h "$APP/model-steps-3.onnx" | cut -f1))"
           else
-            echo "[piper] WARN: $SRC/piper-ljspeech missing — Piper TTS will silently fail"
+            echo "[tts] WARN: $SRC/matcha-ljspeech missing — TTS will silently fail"
           fi
     info:
       path: whatsub-mobile/Info.plist

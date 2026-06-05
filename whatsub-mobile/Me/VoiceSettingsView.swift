@@ -112,7 +112,7 @@ struct VoiceSettingsView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text("Piper · LJSpeech 英文")
+                        Text("Matcha · LJSpeech 英文")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.whatsubInk)
                         Text("内置")
@@ -122,7 +122,7 @@ struct VoiceSettingsView: View {
                             .background(Color.purple.opacity(0.15), in: Capsule())
                             .overlay(Capsule().strokeBorder(Color.purple.opacity(0.5), lineWidth: 0.8))
                     }
-                    Text("离线 · 神经 TTS · 无需联网")
+                    Text("离线 · 扩散神经 TTS · 自然连读")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.whatsubInkFaint)
                 }

@@ -44,17 +44,24 @@ final class PiperTTS {
         if loadAttempted, ttsWrapper == nil { return false }
         loadAttempted = true
 
-        let onnx = dir.appendingPathComponent("en_US-ljspeech-medium.onnx").path
+        // Matcha-icefall LJSpeech (swapped in 2026-06-05 — was Piper
+        // LJSpeech medium, user reported it sounded "平、不连读". Matcha
+        // is a diffusion-based TTS with native prosody + liaison; the
+        // SherpaOnnxOfflineTtsMatchaModelConfig takes an acoustic model
+        // + vocoder pair instead of Piper's single .onnx).
+        let acoustic = dir.appendingPathComponent("model-steps-3.onnx").path
+        let vocoder = dir.appendingPathComponent("hifigan_v2.onnx").path
         let tokens = dir.appendingPathComponent("tokens.txt").path
         guard let espeak = Self.espeakDataPath else { return false }
 
-        let vits = sherpaOnnxOfflineTtsVitsModelConfig(
-            model: onnx,
+        let matcha = sherpaOnnxOfflineTtsMatchaModelConfig(
+            acousticModel: acoustic,
+            vocoder: vocoder,
             lexicon: "",
             tokens: tokens,
             dataDir: espeak
         )
-        let modelConfig = sherpaOnnxOfflineTtsModelConfig(vits: vits)
+        let modelConfig = sherpaOnnxOfflineTtsModelConfig(matcha: matcha)
         var ttsConfig = sherpaOnnxOfflineTtsConfig(model: modelConfig)
         let wrapper = SherpaOnnxOfflineTtsWrapper(config: &ttsConfig)
         ttsWrapper = wrapper
@@ -177,25 +184,19 @@ final class PiperTTS {
         Bundle.main.path(forResource: "espeak-ng-data", ofType: nil)
     }
 
-    /// Where the Piper voice model lives. The 3 files (.onnx + tokens
-    /// + .onnx.json) are bundled at the app bundle ROOT (not in a
-    /// subfolder) because project.yml lists them as individual
-    /// resources, not a folder reference — the folder-reference path
-    /// (`type: folder` alone) silently dropped them from the IPA in
-    /// build c549807. Falls back to the legacy Documents download
-    /// directory only if the bundle doesn't have the .onnx (covers
-    /// the upgrade case for users who had downloaded before bundling).
+    /// Where the TTS model files live. The 3 files (acoustic +
+    /// vocoder + tokens) are bundled at the app bundle ROOT —
+    /// project.yml's postBuildScripts copies them there directly
+    /// after build, before codesign. Legacy fallback to the
+    /// Documents downloader path is gone too — the old PiperModelDownloader
+    /// runtime download path is dead since 2026-06-05.
     static var modelDir: URL? {
         let bundleRoot = Bundle.main.bundleURL
-        let bundledOnnx = bundleRoot.appendingPathComponent("en_US-ljspeech-medium.onnx")
-        if FileManager.default.fileExists(atPath: bundledOnnx.path) {
-            return bundleRoot
-        }
-        // Legacy fallback — older builds where PiperModelDownloader did
-        // the work + stashed the files in Documents/piper-ljspeech.
-        let dl = PiperModelDownloader.ljspeechDir
-        let dlOnnx = dl.appendingPathComponent("en_US-ljspeech-medium.onnx")
-        return FileManager.default.fileExists(atPath: dlOnnx.path) ? dl : nil
+        // Detect via the acoustic model file. Was the Piper-style
+        // "en_US-ljspeech-medium.onnx" file; swapped to Matcha's
+        // "model-steps-3.onnx" on 2026-06-05.
+        let acoustic = bundleRoot.appendingPathComponent("model-steps-3.onnx")
+        return FileManager.default.fileExists(atPath: acoustic.path) ? bundleRoot : nil
     }
 
     /// Minimal float32 PCM WAV writer. Output: 32-bit float, mono, sampleRate.

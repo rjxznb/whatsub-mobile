@@ -81,9 +81,9 @@ jobs:
           # them into the .app deterministically.
           test -d whatsub-mobile/Resources/espeak-ng-data || \
             (echo "espeak-ng-data missing from repo — re-run extraction"; exit 1)
-          test -f whatsub-mobile/Resources/piper-ljspeech/en_US-ljspeech-medium.onnx || \
-            (echo "Piper .onnx missing from repo — re-run extraction"; exit 1)
-          echo "Piper resources in-repo: $(du -sh whatsub-mobile/Resources/espeak-ng-data whatsub-mobile/Resources/piper-ljspeech | tr '\n' ' ')"
+          test -f whatsub-mobile/Resources/matcha-ljspeech/model-steps-3.onnx || \
+            (echo "Matcha .onnx missing from repo"; exit 1)
+          echo "TTS resources in-repo: $(du -sh whatsub-mobile/Resources/espeak-ng-data whatsub-mobile/Resources/matcha-ljspeech | tr '\n' ' ')"
 
       - name: Generate .xcodeproj
         run: xcodegen generate --quiet

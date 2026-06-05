@@ -68,11 +68,14 @@ final class VoiceActivityRecorder {
     /// 1.2 s matches what Siri/Google Assistant use empirically.
     private let partialStableSec: Double = 1.2
 
-    /// Safety cap for push-to-talk: even if the user keeps the finger on the
-    /// orb (or accidentally puts the phone face-down while pressing), end the
-    /// turn after this many seconds. 30 s is plenty of headroom for any
-    /// realistic English-practice utterance.
-    private let hardCapSec: Double = 30
+    /// Safety cap for tap-to-toggle recording: if the user taps to
+    /// start but never taps to stop (forgot, app backgrounded, etc),
+    /// end the recording after this many seconds so we don't burn
+    /// audio + ASR forever. 90 s comfortably covers a LiveScene
+    /// scene-description session where the user is thinking out
+    /// loud; was 30s in the push-to-talk era when finger releases
+    /// were the primary end signal.
+    private let hardCapSec: Double = 90
 
     // MARK: - Runtime state
 
