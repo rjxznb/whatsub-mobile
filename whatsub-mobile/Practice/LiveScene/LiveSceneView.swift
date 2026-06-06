@@ -36,10 +36,11 @@ struct LiveSceneView: View {
     @State private var hintLevel: HintLevel = .none
 
     /// Single sharp impact on each orb tap. Same `UIImpactFeedbackGenerator`
-    /// pattern QuickChat uses (intensity 0.85 — a touch lighter than
-    /// QuickChat's 1.0 since LiveScene's orb has no separate
-    /// release-haptic to balance against). Built lazily; iOS owns the
-    /// engine lifecycle.
+    /// pattern QuickChat uses. Bumped intensity 0.85 → 1.0 to match
+    /// QuickChat — user reported the orb tap was "no haptic feedback"
+    /// on the 0.85 setting (2026-06-06). UIImpactFeedbackGenerator
+    /// needs `prepare()` called before the first actual impact for
+    /// low-latency hardware activation; we do that in `.onAppear`.
     private let pressHaptic = UIImpactFeedbackGenerator(style: .rigid)
     enum HintLevel: Int, Comparable {
         case none = 0, zh = 1, zhAndSample = 2
@@ -115,6 +116,11 @@ struct LiveSceneView: View {
                                      mode: .measurement,
                                      options: [.defaultToSpeaker, .allowBluetooth])
             try? session.setActive(true, options: [])
+            // Warm up the Taptic Engine so the very first orb tap fires
+            // with low latency. UIImpactFeedbackGenerator goes "cold"
+            // after a few seconds of inactivity; we re-prepare after
+            // each tap too (see orbBlock).
+            pressHaptic.prepare()
         }
     }
 
@@ -405,7 +411,8 @@ struct LiveSceneView: View {
     private func orbBlock(isRecording: Bool) -> some View {
         VStack(spacing: 4) {
             Button {
-                pressHaptic.impactOccurred(intensity: 0.85)
+                pressHaptic.impactOccurred(intensity: 1.0)
+                pressHaptic.prepare()   // warm up for the NEXT tap
                 if isRecording {
                     vm.endRecording()
                 } else if case .ready = vm.phase {
