@@ -81,7 +81,14 @@ struct VoiceOrbView: View {
                 // already-complete React-Bits visual. Stripped to the
                 // shader + the press-me label.
                 if #available(iOS 17.0, *) {
-                    shaderGlow(time: t, level: frame.smoothedLevel, pressed: isPressed)
+                    // pressed: false always — was passing isPressed in,
+                    // which caused the metal shader to switch its
+                    // press-warp uniform discontinuously (0→1) on tap.
+                    // That contributed to the "tap = jolt" UX user
+                    // complained about 2026-06-07. Shader animation
+                    // now stays in its idle/recording mode driven only
+                    // by `level`.
+                    shaderGlow(time: t, level: frame.smoothedLevel, pressed: false)
                         .scaleEffect(frame.pulse)
                 } else {
                     // iOS 16 path — no Metal stitchables on this version.
@@ -102,13 +109,14 @@ struct VoiceOrbView: View {
                     .scaleEffect(frame.pulse)
             }
             .frame(width: baseSize * haloMultiplier, height: baseSize * haloMultiplier)
-            // (A) Press-pop. Spring scale on top of the breath/voice pulse.
-            // User feedback 2026-06-03: previous values (1.12 scale, 250ms
-            // response, dampingFraction 0.6) felt too "shu-li" (over-windup)
-            // — too big, too long, too bouncy. Toned to a snappier 1.06 /
-            // 150ms / 0.85 damping: subtle confirm-only nudge, no theatrics.
-            .scaleEffect(isPressed ? 1.06 : 1.0)
-            .animation(.spring(response: 0.15, dampingFraction: 0.85), value: isPressed)
+            // (A) Press-pop REMOVED 2026-06-07. User feedback: "点击的
+            // 时候他都会卡一下,然后突然猛的转一下". The spring scaleEffect
+            // (1.0 → 1.06) created a brief stutter on tap that broke the
+            // continuous rotation animation. Press feedback now comes from
+            // (1) the press haptic in the parent view's Button action,
+            // (2) the orb's internal "click" → "stop" text swap, and
+            // (3) the state-driven halo opacity / breath change as
+            // OrbState transitions to .recording. All three are smooth.
         }
     }
 
@@ -425,10 +433,12 @@ struct VoiceOrbView: View {
 
             // Backdrop rotation: base 4°/s + up to +6°/s on loud voice =
             // ~one full revolution every 90 s at rest, ~36 s at full voice.
-            // Press multiplier toned 4× → 2× to match the rest of the
-            // press-reaction de-escalation (user feedback 2026-06-03).
-            var degPerSec = 4.0 + smoothedLevel * 6.0
-            if isPressed { degPerSec *= 2.0 }
+            // Press multiplier removed 2026-06-07 — the sudden 2× speed
+            // bump on press was perceived as a "猛转" jolt that broke the
+            // continuous rotation animation. The user's voice itself
+            // drives the speed-up via smoothedLevel once recording is
+            // underway, which is the smoother path.
+            let degPerSec = 4.0 + smoothedLevel * 6.0
             backdropRotation += dt * degPerSec
             // Keep the value bounded so it doesn't drift toward floating-
             // point precision loss over a long session.
