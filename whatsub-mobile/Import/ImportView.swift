@@ -106,7 +106,14 @@ struct ImportView: View {
             .padding(.horizontal)
             .disabled(isEmpty)
 
-            if isYouTube {
+            // 「手机解析」 always visible but disabled when the URL isn't
+            // YouTube. Was conditionally rendered (only shown for YT URLs)
+            // — user feedback 2026-06-06: "弹出页面只有推送到桌面端,没有
+            // 手机端解析按钮了". Hiding it confused users: they thought it
+            // was a missing feature rather than a gated one. Now both
+            // surfaces are always visible; non-YT URLs see the button
+            // greyed with a one-line explanation.
+            VStack(spacing: 4) {
                 Button(action: startImport) {
                     Label("手机解析（看时需挂 VPN）", systemImage: "iphone")
                         .fontWeight(.semibold)
@@ -114,14 +121,21 @@ struct ImportView: View {
                         .padding()
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.whatsubAccent, lineWidth: 1.5)
+                                .stroke(isYouTube ? Color.whatsubAccent : Color.whatsubInkFaint,
+                                        lineWidth: 1.5)
                         )
-                        .foregroundStyle(.whatsubAccent)
+                        .foregroundStyle(isYouTube ? Color.whatsubAccent : Color.whatsubInkFaint)
                         .cornerRadius(12)
                 }
-                .padding(.horizontal)
-                .disabled(isEmpty)
+                .disabled(isEmpty || !isYouTube)
+
+                if !isEmpty && !isYouTube {
+                    Text("仅支持 YouTube 链接 (B 站/其它请用「推送到桌面端」)")
+                        .font(.caption2)
+                        .foregroundStyle(.whatsubInkMuted)
+                }
             }
+            .padding(.horizontal)
 
             Spacer()
         }
