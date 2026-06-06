@@ -47,21 +47,22 @@ struct SpeakingPrompt: Equatable {
     /// text. Example: "Describe the bikes you see and what time of day
     /// it might be. Try to use 2-3 of the suggested phrases."
     let promptEn: String
-    /// One-sentence Chinese hint shown beneath the English prompt for
-    /// scaffolding. Example: "用 2-3 句英文描述这个场景,试着用上下面建议的短语。"
-    /// Hidden by default in the UI now; revealed via the 提示 button's
-    /// first click (build 2026-06-05+).
-    let promptZh: String
     /// English reference answer pre-computed at prompt-derivation time
     /// (NOT post-grading). A 25-50 word native-style description of THIS
     /// scene that naturally uses the targetVocab. Two uses:
-    ///   1. Revealed via the 提示 button's second click — progressive
-    ///      scaffolding for users who don't know where to start.
+    ///   1. Revealed via the 提示 button's SECOND click.
     ///   2. Shown in the review screen as "参考答案".
     /// Pre-computing once (vs. asking the grader to also produce one)
     /// keeps the LLM cost at 2 calls per session (derive + grade)
     /// instead of 3.
     let sampleAnswer: String
+    /// Chinese translation of sampleAnswer — what a native would mean
+    /// in plain Chinese. Revealed by the 提示 button's FIRST click
+    /// (user 2026-06-06 feedback: "希望直接给出中文的参考答案,而不是
+    /// 把题目描述转换为中文"). The previous promptZh field — which held
+    /// an abstract task instruction in Chinese — was removed; the new
+    /// progressive reveal is 中文答案 → 英文答案 → hide.
+    let sampleAnswerZh: String
     /// 3-5 English target phrases the LLM expects to surface naturally
     /// in a good answer. Used both as scaffolding (visible chips) AND
     /// as the verdict keys handed to the grader on the next round-trip.

@@ -25,8 +25,8 @@ enum LiveScenePrompts {
         硬约束:
         - **只输出 JSON**,不要任何前后缀文字、不要 markdown 围栏。
         - `promptEn`: 1-2 句英文,描述用户要做什么(e.g. "Describe what you see in this scene — focus on the bicycles and what time of day it might be."),自然不要僵硬。**全英文**,不要中英混合。
-        - `promptZh`: 一句中文,大约 20-30 字,告诉用户「请用英语描述...」+ 鼓励用上 vocab。这是给中文母语学习者卡壳时看的中文场景描述线索。
-        - `sampleAnswer`: **25-50 词**的英文示范答案,native 风格,自然贯穿 targetVocab 里的 **至少 3 个**短语。不要堆砌单词、要像真人在 1 分钟内随口描述这个场景。**全英文**,不要双语对照。这是「提示」按钮第二级、和复盘时的参考答案。
+        - `sampleAnswer`: **25-50 词**的英文示范答案,native 风格,自然贯穿 targetVocab 里的 **至少 3 个**短语。不要堆砌单词、要像真人在 1 分钟内随口描述这个场景。**全英文**,不要双语对照。这是「提示」按钮的第二次点击 + 复盘时的参考答案。
+        - `sampleAnswerZh`: 上面 `sampleAnswer` 的**中文翻译**——意思对应、自然中文表达,不要逐字直译。30-60 字。**全中文**,不要双语对照。这是「提示」按钮的第一次点击,目的是让中文母语学习者先在中文里把意思想清楚,再去说英语。
         - `targetVocab`: **严格 3-5 个** English phrases(绝不超过 5;多了客户端会截掉),全部小写、保留完整 phrasal 形态("lean against" 而非 "lean"),从图片标签里自然引出 + 适配难度。
         - `difficulty`: 1=A2(常见物简单形容词)、2=B1(组合 + 一两个介词短语)、3=B2(时态、情境推断、不直观搭配)。根据标签复杂度判断,不确定就 2。
         - 不要假装看到 Vision 没识别出的东西(没标签里有"sunset" 就不要写 "describe the sunset")。
@@ -35,8 +35,8 @@ enum LiveScenePrompts {
         输出格式(exactly):
         {
           "promptEn": "...",
-          "promptZh": "...",
           "sampleAnswer": "...",
+          "sampleAnswerZh": "...",
           "targetVocab": ["...", "..."],
           "difficulty": 2
         }

@@ -141,8 +141,13 @@ enum RoleplayPrompts {
         <<<END>>>
 
         verdicts 必须包含上面列出的 \(hints.count) 个 vocab hints（数组长度与列表完全一致）。
-        - `attempted` 指**仅本轮**用户最近一句话里有没有尝试使用该短语；不要把之前轮次的成功带进来。
-        - `correct` 指尝试且 grammar/搭配/语境都正确。
+        - `attempted` 指**仅本轮、仅用户最近一句话**里有没有尝试使用该短语。
+          **极其重要**:
+          · 只看用户的英语输入,**不看你 AI 自己 in-character 的对白**。
+            你扮演 "\(scenario.agentRole)" 时用了这些短语**不算**
+            `attempted=true`——评判的是用户的练习,不是你的演技。
+          · 之前轮次里用户的尝试也不算,只看**这一轮 user 的话**。
+        - `correct` 指用户尝试且 grammar/搭配/语境都正确。
         - `note` 用中文写一句简短纠正，没有错就留空字符串。
         """
     }

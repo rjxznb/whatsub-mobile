@@ -26,10 +26,10 @@ struct LiveSceneView: View {
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var cameraImage: UIImage?
 
-    /// Progressive-scaffolding 提示 cycle (build 2026-06-05+):
+    /// Progressive-scaffolding 提示 cycle (build 2026-06-06+):
     ///   .none           → only the English prompt + vocab chips visible
-    ///   .zh             → also reveal the Chinese hint (promptZh)
-    ///   .zhAndSample    → also reveal the English sample answer
+    ///   .zh             → reveal the Chinese reference answer
+    ///   .zhAndSample    → also reveal the English reference answer
     /// Cycles back to .none on the 4th tap so the user can hide hints
     /// and try fresh. Reset to .none whenever a new prompt loads (see
     /// .onChange below) — past hints shouldn't leak across exercises.
@@ -315,8 +315,14 @@ struct LiveSceneView: View {
             }
             .buttonStyle(.plain)
 
-            if hintLevel >= .zh, !prompt.promptZh.isEmpty {
-                hintCard(title: "中文提示", body: prompt.promptZh)
+            // Cycle: none → 中文参考答案 → 中文+英文参考答案 → none.
+            // Was: 中文任务提示 (promptZh) → 英文参考答案 — user 2026-06-06
+            // feedback was that "中文提示" was just rephrasing the task in
+            // Chinese, not actually a hint. They wanted to see the
+            // CHINESE ANSWER first (so they know what they're aiming
+            // to say), then the ENGLISH ANSWER (so they know HOW).
+            if hintLevel >= .zh, !prompt.sampleAnswerZh.isEmpty {
+                hintCard(title: "参考答案 (中文)", body: prompt.sampleAnswerZh)
             }
             if hintLevel >= .zhAndSample, !prompt.sampleAnswer.isEmpty {
                 hintCard(title: "参考答案 (英文)", body: prompt.sampleAnswer)
@@ -326,8 +332,8 @@ struct LiveSceneView: View {
 
     private var hintButtonLabel: String {
         switch hintLevel {
-        case .none: return "提示"
-        case .zh: return "更多提示 (示范答案)"
+        case .none: return "提示 (中文参考答案)"
+        case .zh: return "看英文参考答案"
         case .zhAndSample: return "隐藏提示"
         }
     }
