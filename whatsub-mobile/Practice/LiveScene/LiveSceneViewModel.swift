@@ -39,6 +39,14 @@ final class LiveSceneViewModel: ObservableObject {
     /// view binds to this to animate. 0..1 normalized.
     @Published private(set) var audioLevel: Float = 0
 
+    /// Surfaces a one-shot "刚才没听清" banner above the orb when the
+    /// previous recording attempt came back with an empty transcript
+    /// (user-reported 2026-06-07: empty-speech path used to send the
+    /// user to the error screen with "重新选图片", forcing a full
+    /// picker re-entry just to retry one missed sentence). Cleared
+    /// the moment the user taps orb to record again.
+    @Published var noSpeechWarning: Bool = false
+
     /// The image the user picked or shot — kept so the prompt view can
     /// render a thumbnail next to the English task text (build 2026-06-05
     /// UX request). Cleared on `restart()` / `tearDown()`. Outside the
@@ -86,6 +94,8 @@ final class LiveSceneViewModel: ObservableObject {
     /// returns immediately; we drive UI via `phase` + `audioLevel`.
     func startRecording() {
         guard case let .ready(scene, prompt) = phase else { return }
+        // Fresh attempt — clear the "刚才没听清" banner if it's up.
+        noSpeechWarning = false
         let rec = VoiceActivityRecorder()
         rec.onLevelUpdate = { [weak self] level in
             Task { @MainActor in self?.audioLevel = level }
@@ -134,9 +144,14 @@ final class LiveSceneViewModel: ObservableObject {
         let cleaned = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         // Empty transcript = user didn't actually say anything (or ASR
         // failed entirely). Skip the grading LLM call (waste of token)
-        // and surface a re-record path.
+        // and bounce back to .ready WITHOUT abandoning the scene +
+        // prompt — the orb is still on screen, the user taps it again
+        // to retry. A one-shot banner above the orb (noSpeechWarning)
+        // tells them WHY the previous attempt didn't grade. Cleared
+        // the next time they press orb to start a fresh attempt.
         if cleaned.isEmpty {
-            phase = .error("没听清你说什么,再按住按钮说一遍")
+            noSpeechWarning = true
+            phase = .ready(scene: scene, prompt: prompt)
             return
         }
         phase = .grading(scene: scene, prompt: prompt, transcript: cleaned)

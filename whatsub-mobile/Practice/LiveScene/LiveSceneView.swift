@@ -251,6 +251,16 @@ struct LiveSceneView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    // One-shot "刚才没听清" banner above the prompt — set by
+                    // vm.didFinishRecording when the last attempt's transcript
+                    // came back empty. Auto-cleared the moment user taps orb
+                    // to record again (see vm.startRecording). User tap →
+                    // record → done with content → banner gone. User tap →
+                    // record → silence → bounce back here with banner up.
+                    if vm.noSpeechWarning {
+                        noSpeechBanner
+                    }
+
                     // Top row: difficulty stars on the left, photo thumbnail
                     // on the right so the user keeps "what they were asked
                     // about" visible alongside the prompt text.
@@ -351,6 +361,24 @@ struct LiveSceneView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// "刚才没听清" pill. Shown above the prompt when the last recording
+    /// attempt's ASR transcript came back empty (set on
+    /// vm.didFinishRecording, cleared on vm.startRecording).
+    private var noSpeechBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.bubble.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.yellow)
+            Text("刚才没听清你说什么 · 点击下方话筒再说一次")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.whatsubInk)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.yellow.opacity(0.35), lineWidth: 0.8))
     }
 
     // MARK: - difficulty + vocab chips

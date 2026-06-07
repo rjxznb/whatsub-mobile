@@ -79,10 +79,18 @@ struct ImportView: View {
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
 
-            Text("推送到桌面端：桌面下载+转写后，手机免 VPN 流畅观看（需桌面在线，可离线排队）。手机解析：直接在手机抽取字幕，但观看走 YouTube 需挂 VPN。（仅 YouTube 支持手机解析；B站/其它仅支持推送桌面。）")
-                .font(.caption)
-                .foregroundStyle(.whatsubInkMuted)
-                .multilineTextAlignment(.center)
+            // Concise two-line summary — was a paragraph with parens that
+            // users found too dense (2026-06-07 feedback). Bold the
+            // requirements that block the path so they're scannable.
+            VStack(spacing: 4) {
+                Text("**「推送到桌面」需保持电脑端 whatSub 开启**")
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkMuted)
+                Text("**「手机解析」仅支持 YouTube 链接**")
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkMuted)
+            }
+            .multilineTextAlignment(.center)
 
             TextField("https://… 或 YouTube 11 位 ID", text: $urlInput)
                 .textFieldStyle(.roundedBorder)
