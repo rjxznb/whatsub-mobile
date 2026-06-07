@@ -12,11 +12,12 @@ struct MeView: View {
     @State private var deletingAccount = false
     @State private var deleteAccountError: String?
     @State private var showSubscribe = false
-    @State private var showPendingPhrases = false
     // (showPhotoCapture / showLiveScene removed 2026-06-05 — the 拍照翻译
     // (was 拍照识别短语) + 实景口语练习 entries moved to the new 「眼前」
-    // tab. 导入视频 also gone — now a "+" button on the Library tab.)
-    @ObservedObject private var pendingStore = PendingPhraseStore.shared
+    // tab. 导入视频 also gone — now a "+" button on the Library tab.
+    // showPendingPhrases removed 2026-06-07 — the pending-staging area
+    // is now shown inline in each video's 收藏 tab with per-row ☁️
+    // upload buttons; a global list view + sheet was redundant.)
 
     private var versionString: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -129,28 +130,13 @@ struct MeView: View {
                             Label("导入队列", systemImage: "tray.and.arrow.down")
                                 .foregroundStyle(.whatsubInk)
                         }
-                        Button {
-                            showPendingPhrases = true
-                        } label: {
-                            HStack {
-                                Label("待同步暂存", systemImage: "tray.full")
-                                    .foregroundStyle(.whatsubInk)
-                                Spacer()
-                                let n = pendingStore.total
-                                if n > 0 { Text("\(n)").foregroundStyle(.whatsubInkMuted) }
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.whatsubInkFaint)
-                            }
-                        }
-                        .buttonStyle(.plain)
                     }
                     .listRowBackground(Color.whatsubBgElev)
-                    // (Local 词汇暂存区 entry removed build 248 — the on-device
-                    // vocab notebook has been retired. Long-press a Library
-                    // subtitle now writes straight to the personal corpus,
-                    // which has its own quota line + grouped-by-video view.)
-                    // Build 250+ added 待同步暂存 above — different store
-                    // (PendingPhraseStore) backing a different flow: collect
-                    // freely first, then sync the picked-ones to cloud corpus.
+                    // (Local 词汇暂存区 entry removed build 248. Pending
+                    // 暂存 entry removed 2026-06-07 — the pending phrases
+                    // are now shown inline in each video's 收藏 tab with
+                    // per-row ☁️ upload buttons; a global cross-video list
+                    // turned out redundant.)
 
                     Section {
                         Button(role: .destructive) {
@@ -214,10 +200,8 @@ struct MeView: View {
                 SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
                     .environmentObject(store)
             }
-            .sheet(isPresented: $showPendingPhrases) {
-                PendingPhrasesView(filterEntryId: nil)
-            }
-            // (photo + live-scene sheets moved to CameraTabView 2026-06-05)
+            // (photo + live-scene sheets moved to CameraTabView 2026-06-05;
+            //  待同步暂存 sheet removed 2026-06-07.)
         }
     }
 

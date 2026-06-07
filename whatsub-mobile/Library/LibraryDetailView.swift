@@ -33,13 +33,10 @@ struct LibraryDetailView: View {
     /// this entry (corpus phrases tagged with libraryEntryId == entryId).
     @State private var contentTab: ContentTab = .subtitles
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
-    /// 2026-06-03 build 250+: presented when the user taps the "待同步 N 条"
-    /// banner. Filtered to THIS entry so they can sync just this video's
-    /// pending phrases without scrolling through the global queue.
-    @State private var showPendingSheet: Bool = false
-    /// Backing store for the banner's pending count — observed so the count
-    /// re-renders the moment the user collects (or syncs).
-    @ObservedObject private var pendingStore = PendingPhraseStore.shared
+    // (showPendingSheet + 「待同步 N 条」 banner removed 2026-06-07.
+    // PendingPhraseStore is still used — observed inside
+    // EntryCollectionsList now, where each pending phrase has its own
+    // ☁️ upload button.)
 
     private var isLandscape: Bool { vSize == .compact }
 
@@ -299,43 +296,11 @@ struct LibraryDetailView: View {
                                 }
                             }
                     )
-                pendingBanner
+                // (pendingBanner removed 2026-06-07 — pending phrases are
+                // now rendered inline inside the 收藏 tab below, with a
+                // per-row ☁️ upload button. A top-of-page banner +
+                // separate sheet was redundant.)
                 contentArea(entry)
-            }
-        }
-    }
-
-    /// Pending-staging affordance — visible only when this entry has phrases
-    /// waiting in the local queue. Tap presents `PendingPhrasesView` filtered
-    /// to this entry. Observed via `@ObservedObject` on the shared store so
-    /// the count refreshes as soon as the user dismisses a CollectSheet
-    /// (and disappears the moment the bucket is fully synced).
-    @ViewBuilder
-    private var pendingBanner: some View {
-        let count = pendingStore.count(entryId: entryId)
-        if count > 0 {
-            Button {
-                showPendingSheet = true
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "tray.full.fill")
-                        .foregroundStyle(.whatsubAccent)
-                    Text("待同步 \(count) 条 · 同步到云端语料库")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.whatsubInk)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.whatsubInkMuted)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 10))
-                .padding(.horizontal, 12)
-                .padding(.top, 4)
-            }
-            .buttonStyle(.plain)
-            .sheet(isPresented: $showPendingSheet) {
-                PendingPhrasesView(filterEntryId: entryId)
             }
         }
     }
@@ -356,9 +321,11 @@ struct LibraryDetailView: View {
             case .subtitles:
                 subtitleList(entry)
             case .collections:
-                EntryCollectionsList(entryId: entryId) { sec in
-                    vm.seekTo(seconds: sec)
-                }
+                EntryCollectionsList(
+                    entryId: entryId,
+                    youtubeId: vm.entry?.youtubeId,
+                    onTapPhrase: { sec in vm.seekTo(seconds: sec) }
+                )
             case .roleplay:
                 // Pause the underlying video the moment the user opens a
                 // roleplay session — the orb wants the user's mic free of
