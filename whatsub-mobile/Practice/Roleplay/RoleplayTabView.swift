@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// The 角色扮演 tab inside `LibraryDetailView`. Renders the LLM-derived
-/// scene cards; tap a card → presents `RoleplaySessionView` as a sheet.
+/// scene cards; tap a card → presents `RoleplaySessionView` as a fullscreen
+/// cover (iPad-friendly: a regular `.sheet(item:)` would render as a
+/// formSheet floating modal — see issue 2026-06-07 user report).
 ///
 /// Corpus phrases for this video are loaded once on appear via the same
 /// API call `EntryCollectionsList` uses. We don't share a fetcher between
@@ -19,9 +21,14 @@ struct RoleplayTabView: View {
     var onSessionStart: (() -> Void)? = nil
 
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var store: StoreManager
     @StateObject private var vm: RoleplayTabViewModel
     @State private var loadedCorpusPhrases: [String] = []
     @State private var corpusLoaded = false
+    /// 订阅 Pro sheet, shown when the LLM relay rejected scene derivation
+    /// for tier-related reasons. Attached at view root so phase transitions
+    /// don't tear it down.
+    @State private var showSubscribe = false
 
     init(entry: LibraryEntryDetail, onSessionStart: (() -> Void)? = nil) {
         self.entry = entry
@@ -43,12 +50,12 @@ struct RoleplayTabView: View {
                 // leave the picker visible underneath so dismiss returns to
                 // a familiar surface.
                 pickerList
-            case .error(let msg):
+            case .error(let f):
                 // Even on error we render the fallback scenario card so
                 // the user can still play with something. The error banner
                 // shows above.
                 VStack(spacing: 12) {
-                    errorBanner(msg)
+                    errorBanner(f)
                     pickerList
                 }
             }
@@ -57,10 +64,25 @@ struct RoleplayTabView: View {
             await loadCorpusPhrasesIfNeeded()
             await vm.loadIfNeeded()
         }
-        .sheet(item: $vm.picked) { scenario in
+        // fullScreenCover (NOT sheet) for the session — the orb dialogue
+        // is the focal experience, and on iPad a regular sheet renders as
+        // a floating formSheet (~700x550pt centered) which feels wrong
+        // for the "I'm in a conversation" mental model. Same orientation
+        // shift QuickChat got 2026-06-07.
+        .fullScreenCover(item: $vm.picked) { scenario in
             RoleplaySessionView(scenario: scenario)
                 .onAppear { onSessionStart?() }
                 .onDisappear { vm.dismissSession() }
+        }
+        .sheet(isPresented: $showSubscribe) {
+            SubscribeSheet(onPurchased: {
+                Task {
+                    await appState.refreshMe()
+                    // Retry the LLM-gated path immediately.
+                    await vm.regenerate()
+                }
+            })
+            .environmentObject(store)
         }
     }
 
@@ -123,15 +145,30 @@ struct RoleplayTabView: View {
         }
     }
 
-    private func errorBanner(_ msg: String) -> some View {
+    /// Compact banner above the (always-rendered) picker list. When the
+    /// failure is `.subscribeUpsell` we add a trailing 「订阅 Pro」 button
+    /// so the user can fix the gate without leaving the tab.
+    private func errorBanner(_ failure: RemoteFailure) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
-            Text(msg)
+            Text(failure.message)
                 .font(.caption)
                 .foregroundStyle(.whatsubInkMuted)
                 .lineLimit(3)
             Spacer()
+            if failure.kind == .subscribeUpsell {
+                Button {
+                    showSubscribe = true
+                } label: {
+                    Text("订阅")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.whatsubAccent, in: Capsule())
+                        .foregroundStyle(.black)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 8))

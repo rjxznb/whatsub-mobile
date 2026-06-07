@@ -28,12 +28,12 @@ struct LiveScenePromptClient {
         let raw: String
         do {
             raw = try await chat(messages)
-        } catch let e as ChatCompletionsClient.LlmError {
-            return .failure(e.errorDescription ?? "LLM 调用失败")
-        } catch let e as APIError {
-            return .failure(e.chinese)
         } catch {
-            return .failure("LLM 调用失败:\(error.localizedDescription)")
+            // Unified taxonomy mapping — see RemoteFailure.from for the policy /
+            // notConfigured / generic routing logic. The throw site doesn't need
+            // to know about `subscribeUpsell`; it just hands the error to the
+            // funnel.
+            return .failure(RemoteFailure.from(error, fallback: "AI 给出题目时出了点状况"))
         }
         return parse(raw)
     }
@@ -41,14 +41,15 @@ struct LiveScenePromptClient {
     func parse(_ raw: String) -> PromptDerivationOutcome {
         let body = stripFences(raw)
         guard let data = body.data(using: .utf8) else {
-            return .failure("LLM 返回无法解码")
+            return .failure(.message("AI 返回的内容没读懂，稍后再试。"))
         }
         do {
             let wire = try JSONDecoder().decode(WireSpeakingPrompt.self, from: data)
             return .success(wire.toModel())
         } catch {
-            let head = body.prefix(200)
-            return .failure("JSON 解析失败 · head=\(head)")
+            // The head=... is for our forensic logs; the user only sees the
+            // message string in the banner.
+            return .failure(.message("AI 返回的内容没读懂，再试一次。"))
         }
     }
 

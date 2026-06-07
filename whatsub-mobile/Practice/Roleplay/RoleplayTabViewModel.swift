@@ -90,11 +90,16 @@ final class RoleplayTabViewModel: ObservableObject {
     private func derive(persistOnSuccess: Bool) async {
         phase = .loading
 
-        // Fast-path guard: if the user hasn't configured an LLM key, there's
-        // no point making the call — surface the same error the orb would.
+        // Fast-path guard: if the user hasn't configured an LLM key (AND
+        // isn't on the managed-relay tier), there's no point making the
+        // call — surface a configureLLM-kind error so the UI can deep-link
+        // 我的 → LLM 设置 if it wants to.
         let settings = LlmSettingsStore.load()
         guard settings.isConfigured else {
-            phase = .error("先到「我的 → LLM 设置」填好 API Key，再回来生成场景")
+            phase = .error(RemoteFailure(
+                message: "想生成专属场景需要先配置 AI——打开「我的 → LLM 设置」填好 API Key 再回来。",
+                kind: .configureLLM
+            ))
             return
         }
 
@@ -113,7 +118,7 @@ final class RoleplayTabViewModel: ObservableObject {
                 lastGeneratedAt = Date().timeIntervalSince1970
             }
             phase = .picker
-        case .failure(let msg):
+        case .failure(let f):
             // The fallback scene keeps the tab usable even when the LLM
             // refused. We surface the error message but ALSO inject the
             // stock so the user has something to tap. We do NOT persist
@@ -124,7 +129,7 @@ final class RoleplayTabViewModel: ObservableObject {
             if scenarios.isEmpty {
                 scenarios = [stock]
             }
-            phase = .error(msg)
+            phase = .error(f)
         }
     }
 }

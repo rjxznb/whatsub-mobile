@@ -8,6 +8,7 @@ import PhotosUI
 /// 2026-06-04 (拍照识别短语).
 struct PhotoReviewView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var store: StoreManager
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = PhotoReviewViewModel()
 
@@ -15,6 +16,10 @@ struct PhotoReviewView: View {
     @State private var showCamera = false
     @State private var pickedImage: UIImage?
     @State private var galleryPick: PhotosPickerItem?
+    /// 订阅 Pro sheet — shown when an LLM error came back with
+    /// `.subscribeUpsell` kind. Sheet attached at view root so phase
+    /// churn underneath doesn't tear it down.
+    @State private var showSubscribe = false
 
     var body: some View {
         NavigationStack {
@@ -72,8 +77,8 @@ struct PhotoReviewView: View {
             spinnerState(label: progress)
         case .done(let added, let failed):
             doneState(added: added, failed: failed)
-        case .error(let msg):
-            errorState(msg: msg)
+        case .error(let failure):
+            errorState(failure: failure)
         }
     }
 
@@ -282,26 +287,54 @@ struct PhotoReviewView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func errorState(msg: String) -> some View {
+    /// Kind-driven error state. `.subscribeUpsell` shows a 「订阅 Pro」 CTA
+    /// + secondary 重新开始 link; others just get 重新开始.
+    private func errorState(failure: RemoteFailure) -> some View {
         VStack(spacing: 14) {
             Spacer()
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.yellow)
-            Text(msg)
+            Text(failure.message)
                 .font(.footnote)
                 .foregroundStyle(.whatsubInkMuted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
             Spacer()
-            Button("重新开始") { resetToEmpty() }
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 22).padding(.vertical, 10)
-                .foregroundStyle(.white)
-                .background(Color.whatsubAccent, in: Capsule())
-                .padding(.bottom, 36)
+            VStack(spacing: 12) {
+                if failure.kind == .subscribeUpsell {
+                    Button {
+                        showSubscribe = true
+                    } label: {
+                        Label("订阅 Pro", systemImage: "star.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 22).padding(.vertical, 10)
+                            .foregroundStyle(.black)
+                            .background(Color.whatsubAccent, in: Capsule())
+                    }
+                    Button("重新开始") { resetToEmpty() }
+                        .font(.footnote)
+                        .foregroundStyle(.whatsubInkMuted)
+                } else {
+                    Button("重新开始") { resetToEmpty() }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 22).padding(.vertical, 10)
+                        .foregroundStyle(.white)
+                        .background(Color.whatsubAccent, in: Capsule())
+                }
+            }
+            .padding(.bottom, 36)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showSubscribe) {
+            SubscribeSheet(onPurchased: {
+                Task {
+                    await appState.refreshMe()
+                    resetToEmpty()
+                }
+            })
+            .environmentObject(store)
+        }
     }
 
     // MARK: - helpers

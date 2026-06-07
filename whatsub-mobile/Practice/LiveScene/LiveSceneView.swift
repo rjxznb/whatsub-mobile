@@ -19,12 +19,18 @@ import AVFoundation
 /// 2026-06-05.
 struct LiveSceneView: View {
     @StateObject private var vm = LiveSceneViewModel()
+    @EnvironmentObject private var store: StoreManager
+    @EnvironmentObject private var appState: AppState
 
     // Picker presentation state — local to the view, kept out of vm
     // because they're pure UI surfaces, not business state.
     @State private var showCamera = false
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var cameraImage: UIImage?
+    /// 订阅 Pro upsell sheet — only shown when an LLM error came back with
+    /// `.subscribeUpsell` kind (see RemoteFailure). The 重新选图片 button
+    /// stays available alongside; this is opt-in, not blocking.
+    @State private var showSubscribe = false
 
     /// Progressive-scaffolding 提示 cycle (build 2026-06-06+):
     ///   .none           → only the English prompt + vocab chips visible
@@ -160,8 +166,8 @@ struct LiveSceneView: View {
             loadingView(text: "正在评分…")
         case let .review(_, prompt, transcript, grade):
             reviewView(prompt: prompt, transcript: transcript, grade: grade)
-        case let .error(msg):
-            errorView(msg)
+        case let .error(failure):
+            errorView(failure)
         }
     }
 
@@ -575,27 +581,87 @@ struct LiveSceneView: View {
 
     // MARK: - error
 
-    private func errorView(_ msg: String) -> some View {
+    /// Renders the error with kind-driven CTA:
+    ///   - `.subscribeUpsell` → prominent 「订阅 Pro」 button opens
+    ///     `SubscribeSheet`, plus a secondary 「重新选图片」 link.
+    ///   - `.configureLLM` → primary 「去设置 API Key」 deep-link, plus
+    ///     a secondary 「重新选图片」 link. (Routes to MeView / LLM 设置
+    ///     via an alert — we don't have a global router yet.)
+    ///   - `.generic` → just 「重新选图片」 (the original button).
+    ///
+    /// The icon stays the friendly yellow triangle in all cases — softer
+    /// than red, signals "fixable" instead of "broken".
+    private func errorView(_ failure: RemoteFailure) -> some View {
         VStack(spacing: 16) {
             Spacer()
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.yellow)
-            Text(msg)
+            Text(failure.message)
                 .font(.subheadline)
                 .foregroundStyle(.whatsubInk)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
-            Button {
-                vm.dismissError()
-            } label: {
-                Text("重新选图片")
-                    .padding(.horizontal, 32).padding(.vertical, 12)
-                    .background(Color.whatsubAccent, in: Capsule())
-                    .foregroundStyle(.black)
-                    .font(.body.weight(.semibold))
+            VStack(spacing: 12) {
+                switch failure.kind {
+                case .subscribeUpsell:
+                    Button {
+                        showSubscribe = true
+                    } label: {
+                        Label("订阅 Pro", systemImage: "star.circle.fill")
+                            .padding(.horizontal, 32).padding(.vertical, 12)
+                            .background(Color.whatsubAccent, in: Capsule())
+                            .foregroundStyle(.black)
+                            .font(.body.weight(.semibold))
+                    }
+                    Button("换一张照片") { vm.dismissError() }
+                        .font(.subheadline)
+                        .foregroundStyle(.whatsubInkMuted)
+
+                case .configureLLM:
+                    // No global router — user opens 我的 → LLM 设置
+                    // themselves. We just point at it; primary button still
+                    // restarts the flow.
+                    Button {
+                        vm.dismissError()
+                    } label: {
+                        Text("换一张照片")
+                            .padding(.horizontal, 32).padding(.vertical, 12)
+                            .background(Color.whatsubAccent, in: Capsule())
+                            .foregroundStyle(.black)
+                            .font(.body.weight(.semibold))
+                    }
+                    Text("提示：去「我的 → LLM 设置」填入 API Key 后再回来")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+
+                case .generic:
+                    Button {
+                        vm.dismissError()
+                    } label: {
+                        Text("重新选图片")
+                            .padding(.horizontal, 32).padding(.vertical, 12)
+                            .background(Color.whatsubAccent, in: Capsule())
+                            .foregroundStyle(.black)
+                            .font(.body.weight(.semibold))
+                    }
+                }
             }
             Spacer()
+        }
+        // SubscribeSheet attached at the view root so a phase transition
+        // (.error → .picker) mid-sheet doesn't tear it down — same pattern
+        // CorpusView / MeView use.
+        .sheet(isPresented: $showSubscribe) {
+            SubscribeSheet(onPurchased: {
+                Task {
+                    await appState.refreshMe()
+                    // Drop the error and bounce back to the picker so the
+                    // user can immediately retry the action that was gated.
+                    vm.dismissError()
+                }
+            })
+            .environmentObject(store)
         }
     }
 }

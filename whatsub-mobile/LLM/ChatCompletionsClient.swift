@@ -100,10 +100,16 @@ struct ChatCompletionsClient {
         catch { throw LlmError.network(error.localizedDescription) }
         guard let http = resp as? HTTPURLResponse else { throw LlmError.network("no http") }
         guard (200..<300).contains(http.statusCode) else {
+            // Relay returns structured policy errors (`{error:"license_blocked",
+            // message: "<friendly zh>"}`) for the 4 known fix-it-by-paying
+            // states. We promote those to `.policy` so the UI can render a
+            // 订阅 Pro CTA next to the message instead of just text. Unknown
+            // bodies fall through to `.api` which dumps the first 400 bytes
+            // — see also Self.parsePolicy.
+            if let policy = Self.parsePolicy(body: data, status: http.statusCode) {
+                throw policy
+            }
             let bodyText = String(data: data, encoding: .utf8)?.prefix(400).description ?? ""
-            // Relay surfaces structured errors (`{error:"quota_exceeded",...}`)
-            // that the caller may want to render specifically. Pass them
-            // through verbatim; LlmError.api is already string-only.
             throw LlmError.api(http.statusCode, bodyText)
         }
 
@@ -215,23 +221,88 @@ struct ChatCompletionsClient {
         }
     }
 
-    // MARK: - errors (unchanged)
+    // MARK: - errors
 
     enum LlmError: Error, LocalizedError {
-        case notConfigured, network(String), api(Int, String), badResponse
+        case notConfigured
+        case network(String)
+        /// Unknown / unstructured non-2xx — `detail` is the first 400 bytes
+        /// of the body for engineer-side debugging. The user-facing string
+        /// from `errorDescription` does NOT include `detail` (the cryptic JSON
+        /// dump was the original "用户看不懂" complaint).
+        case api(Int, String)
+        case badResponse
+        /// Backend policy error with a known shape: `{error, message}`. The
+        /// `message` is the friendly Chinese string we WANT to show; `code`
+        /// drives the call-to-action (subscribe vs. configure LLM).
+        case policy(code: PolicyCode, message: String, httpStatus: Int)
+
+        /// Known backend error codes that mean "this is a payable problem,
+        /// not a bug". Stays an enum so `RemoteFailure.from(_:)` can pattern
+        /// match without stringly-typed checks.
+        enum PolicyCode: String {
+            case licenseBlocked = "license_blocked"
+            case freeUsedUp = "free_used_up"
+            case trialUsedUp = "trial_used_up"
+            case quotaExceeded = "quota_exceeded"
+        }
+
         var errorDescription: String? {
             switch self {
-            case .notConfigured: return "请先在「我的 → LLM 设置」填入 API Key"
-            case .network(let d): return "网络失败：\(d)"
-            // Include the diagnostic detail — caller often packs useful info
-            // (server error body, "content 字段空字符串", etc.) and dropping it
-            // forced us to chase ghosts the first time QuickChat went silent.
-            case .api(let c, let detail):
-                return detail.isEmpty
-                    ? "LLM 接口错误（\(c)）"
-                    : "LLM 接口错误（\(c)）：\(detail)"
-            case .badResponse: return "LLM 返回格式异常"
+            case .notConfigured:
+                return "AI 还没配置好。打开「我的 → LLM 设置」，填入一个 API Key 就能用啦。"
+            case .network(let d):
+                // Strip URLSession's verbose framing — users see "网络断了"
+                // not "The Internet connection appears to be offline. (NSURL…"
+                return "网络好像断开了，检查一下连接再试。（\(d)）"
+            case .api(let c, _):
+                // Never include the raw body in the user-facing string —
+                // that's what showed "LLM 接口错误 (403): {raw JSON}" in
+                // the first place. Engineer can still grep the .api(c, detail)
+                // payload via LocalizedError → Console for debugging.
+                return "AI 服务返回了错误（\(c)），稍后再试一次试试。"
+            case .badResponse:
+                return "AI 返回的内容没看懂，再试一次试试。"
+            case .policy(_, let message, _):
+                return message
             }
+        }
+    }
+
+    // MARK: - policy parsing
+
+    /// Try to decode a backend policy error from the response body. Returns
+    /// `nil` when the body isn't a recognised `{error, message}` shape — the
+    /// caller then falls back to `.api` with the raw bytes.
+    ///
+    /// Kept static + non-throwing so the hot-path 4xx branch reads as a
+    /// single `if let policy = … { throw policy }`.
+    static func parsePolicy(body: Data, status: Int) -> LlmError? {
+        guard let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let errorStr = obj["error"] as? String,
+              let code = LlmError.PolicyCode(rawValue: errorStr) else {
+            return nil
+        }
+        let serverMessage = (obj["message"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Prefer our own friendlier copy. The server message can be technical
+        // ("¥59.9 买断" / "200K tokens" math) and isn't always what we want a
+        // user staring at an LLM error to read. The server one is the
+        // fallback when our static copy hasn't caught up to a new code.
+        let friendly = Self.friendlyMessage(for: code, fallback: serverMessage)
+        return .policy(code: code, message: friendly, httpStatus: status)
+    }
+
+    private static func friendlyMessage(for code: LlmError.PolicyCode, fallback: String) -> String {
+        switch code {
+        case .licenseBlocked:
+            return "你目前是「网站买断」用户。想用 whatSub 内置 AI 需要订阅 Pro——或者去「我的 → LLM 设置」填一个自己的 API Key 也可以。"
+        case .freeUsedUp:
+            return "本月免费 AI 体验额度已经用完啦。订阅 Pro 解锁完整月度配额，或者去「我的 → LLM 设置」填自己的 Key 继续用。"
+        case .trialUsedUp:
+            return "桌面端试用额度已经用完。订阅 Pro 即可继续使用 AI 功能。"
+        case .quotaExceeded:
+            return "本月 AI 额度已经用完。下个月 1 号自动重置——想现在继续，可以升级套餐。"
         }
     }
 }

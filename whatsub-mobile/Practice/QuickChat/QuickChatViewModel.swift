@@ -238,26 +238,29 @@ final class QuickChatViewModel: ObservableObject {
         // text routed to the verdict buffer) so the cause is immediately visible.
         if turns[turnIdx].assistantText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            turns[turnIdx].verdict == nil {
-            var msg = isOpening
-                ? "AI 没有给出开场。"
-                : "AI 这一轮没有回复。"
+            // User-facing message stays short + warm. The detailed
+            // diagnosis (parser tag + first 400 chars of raw LLM output)
+            // is dropped from the banner — it was a developer-debug
+            // crutch that bled raw model output into the UI. We still
+            // emit it to the Xcode console / Console.app via os_log for
+            // the cases we're actively debugging; users only see the
+            // friendly line.
             let raw = driver.lastRawText().trimmingCharacters(in: .whitespacesAndNewlines)
+            let userMessage: String
             if raw.isEmpty {
-                msg += " 服务端返回空内容，检查「我的 → LLM 设置」里的 API Key 和 baseUrl，或换个网络重试。"
+                userMessage = isOpening
+                    ? "AI 这次没开场，再来一次试试？也可以去「我的 → LLM 设置」检查一下 Key 和网络。"
+                    : "AI 这一轮没回话，再说一次试试。"
             } else {
-                // Tag obvious causes inline so the user / I can read the banner
-                // and know what to fix.
-                var diagnosis = ""
-                if raw.contains("<<<VERDICT>>>") && !raw.contains("<<<END>>>") {
-                    diagnosis = "[parser 卡在 verdict — LLM 发了 <<<VERDICT>>> 但没 <<<END>>>，可能 token 上限切断]"
-                } else if raw.contains("<<<VERDICT>>>") && !raw.contains("\n") {
-                    diagnosis = "[LLM 只输出了 verdict 块没写 dialog]"
-                } else {
-                    diagnosis = "[LLM 返回内容未走 dialog 路径，可能格式不符 prompt]"
-                }
-                msg += "\n\n\(diagnosis)\n\n[LLM 实际返回] \(raw.prefix(400))"
+                userMessage = isOpening
+                    ? "AI 这次没开场。再来一次试试？"
+                    : "AI 这一轮的回复没走通。再说一次试试。"
             }
-            phase = .error(msg)
+            // Forensic log — kept off the user-facing string.
+            #if DEBUG
+            print("[QuickChat] verdict-missing raw head=\(raw.prefix(400))")
+            #endif
+            phase = .error(userMessage)
             return
         }
 

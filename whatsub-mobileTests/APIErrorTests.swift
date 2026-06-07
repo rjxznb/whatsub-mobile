@@ -3,9 +3,11 @@ import XCTest
 
 final class APIErrorTests: XCTestCase {
     func testServerErrorMapping() {
-        XCTAssertEqual(APIError.server(400, "wrong_code").chinese, "验证码错误")
-        XCTAssertEqual(APIError.server(400, "too_many_attempts").chinese, "尝试次数过多，请重新获取验证码")
-        XCTAssertEqual(APIError.unauthorized.chinese, "登录已过期，请重新登录")
+        // Warmth pass 2026-06-07: error strings rewritten to sound friendly
+        // (audit-all-error-messages). Asserts pinned to the new copy.
+        XCTAssertEqual(APIError.server(400, "wrong_code").chinese, "验证码不对，再确认一下。")
+        XCTAssertEqual(APIError.server(400, "too_many_attempts").chinese, "尝试次数有点多了，重新获取一次验证码吧。")
+        XCTAssertEqual(APIError.unauthorized.chinese, "登录信息过期了，重新登录一下就好。")
     }
 
     func testUnknownServerErrorFallsBackToCode() {

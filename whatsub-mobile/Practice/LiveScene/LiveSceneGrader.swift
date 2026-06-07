@@ -23,12 +23,8 @@ struct LiveSceneGrader {
         let raw: String
         do {
             raw = try await chat(messages)
-        } catch let e as ChatCompletionsClient.LlmError {
-            return .failure(e.errorDescription ?? "LLM 评分失败")
-        } catch let e as APIError {
-            return .failure(e.chinese)
         } catch {
-            return .failure("LLM 评分失败:\(error.localizedDescription)")
+            return .failure(RemoteFailure.from(error, fallback: "AI 给你打分时出了点状况"))
         }
         return parse(raw, expectedVocab: prompt.targetVocab)
     }
@@ -36,14 +32,13 @@ struct LiveSceneGrader {
     func parse(_ raw: String, expectedVocab: [String]) -> GradingOutcome {
         let body = stripFences(raw)
         guard let data = body.data(using: .utf8) else {
-            return .failure("LLM 返回无法解码")
+            return .failure(.message("AI 返回的内容没读懂，稍后再试。"))
         }
         do {
             let wire = try JSONDecoder().decode(WireGrade.self, from: data)
             return .success(wire.toModel(expectedVocab: expectedVocab))
         } catch {
-            let head = body.prefix(200)
-            return .failure("JSON 解析失败 · head=\(head)")
+            return .failure(.message("AI 返回的内容没读懂，再试一次。"))
         }
     }
 

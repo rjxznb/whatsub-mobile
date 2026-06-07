@@ -33,14 +33,45 @@ final class StoreManager: ObservableObject {
 
     private var updatesTask: Task<Void, Never>?
 
-    /// Load products + start the transaction-updates listener. Idempotent.
+    /// Load products + start the transaction-updates listener + RE-REPORT
+    /// any existing iOS entitlements to the backend. Idempotent.
+    ///
+    /// The re-report step was added 2026-06-07 to fix "我的 page shows 未订阅
+    /// after app update". `Transaction.updates` only fires for NEW
+    /// transactions — an existing subscription that survived an app update
+    /// would never emit through that channel, so the backend (which is the
+    /// source of truth `MeView` reads via `/me.hasActiveSubscription`) never
+    /// learned that the device still had the entitlement on this build.
+    /// Iterating `Transaction.currentEntitlements` once on every cold start
+    /// and POSTing each verified JWS to `/iap/verify` keeps the backend in
+    /// sync without requiring user interaction (StoreKit's `AppStore.sync()`
+    /// requires a tap and is reserved for `restore()`). `/iap/verify` is
+    /// idempotent server-side, so re-reporting on every launch is cheap and
+    /// correct.
     func start() {
         Task { await loadProducts() }
         Task { await refreshLocalEntitlements() }
+        Task { await reportCurrentEntitlements() }
         guard updatesTask == nil else { return }
         updatesTask = Task { [weak self] in
             for await update in Transaction.updates {
                 await self?.process(update)
+            }
+        }
+    }
+
+    /// Re-report any verified subscription/buyout entitlement on this
+    /// device to the backend. Safe to call repeatedly — `/iap/verify` is
+    /// idempotent and the backend de-dupes by transaction id.
+    ///
+    /// Called automatically by `start()` (cold-launch path) and exposed
+    /// publicly so `MeView`'s pull-to-refresh can also force it without
+    /// going through StoreKit's UI-blocking `AppStore.sync()`.
+    func reportCurrentEntitlements() async {
+        guard let report = reportVerifiedJWS else { return }
+        for await result in Transaction.currentEntitlements {
+            if case .verified = result {
+                await report(result.jwsRepresentation)
             }
         }
     }

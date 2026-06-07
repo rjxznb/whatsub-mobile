@@ -22,7 +22,10 @@ final class PhotoReviewViewModel: ObservableObject {
         case reviewing
         case syncing(progress: String)
         case done(addedCount: Int, failedCount: Int)
-        case error(String)
+        /// Payload upgraded from `String` to `RemoteFailure` 2026-06-07 so
+        /// the error state can render kind-driven CTAs (订阅 Pro for
+        /// upsell-class errors, "重新开始" for generic).
+        case error(RemoteFailure)
     }
 
     @Published private(set) var phase: Phase = .empty
@@ -66,7 +69,7 @@ final class PhotoReviewViewModel: ObservableObject {
             ocrText = result.fullText
             phase = .ocred
         } catch {
-            phase = .error("OCR 识别失败:\(error.localizedDescription)")
+            phase = .error(.message("识别照片里的文字时出了点状况，换一张试试。（\(error.localizedDescription)）"))
         }
     }
 
@@ -78,7 +81,7 @@ final class PhotoReviewViewModel: ObservableObject {
     /// Called by the "AI 提取重点短语" button.
     func analyze() async {
         guard !ocrText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            phase = .error("OCR 文本为空,先拍一张含英文的清楚图片")
+            phase = .error(.message("没读到英文文字呢——先拍一张含英文的清楚照片吧。"))
             return
         }
         phase = .analyzing
@@ -89,8 +92,8 @@ final class PhotoReviewViewModel: ObservableObject {
             // Pre-select nothing — user explicitly opts in.
             selected.removeAll()
             phase = .reviewing
-        case .failure(let msg):
-            phase = .error(msg)
+        case .failure(let f):
+            phase = .error(f)
         }
     }
 

@@ -27,12 +27,13 @@ struct PhotoAnalyzer {
     }
 
     /// Outcome of one analyze call. Custom enum (not Swift's `Result`)
-    /// because `Result<S, F>` requires `F: Error`; we want a plain
-    /// Chinese string for the UI banner without inventing a one-case
-    /// error type. Same shape used by `RoleplayScenarioClient`.
+    /// because `Result<S, F>` requires `F: Error`; failure payload uses
+    /// `RemoteFailure` so the view can route subscribe-upsell errors to a
+    /// 「订阅 Pro」 CTA — see `RemoteFailure.swift`. Same shape used by
+    /// `RoleplayScenarioClient`.
     enum AnalysisOutcome {
         case success(PhotoAnalysisResult)
-        case failure(String)
+        case failure(RemoteFailure)
     }
 
     /// `ocrText` is the joined OCR output (newline-separated lines).
@@ -41,19 +42,15 @@ struct PhotoAnalyzer {
     func analyze(ocrText: String) async -> AnalysisOutcome {
         let trimmed = ocrText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return .failure("OCR 文本为空,先拍一张含英文的清楚图片")
+            return .failure(.message("没读到英文文字呢——先拍一张含英文的清楚照片吧。"))
         }
 
         let messages = PhotoPrompts.messages(ocrText: trimmed)
         let raw: String
         do {
             raw = try await chat(messages)
-        } catch let e as ChatCompletionsClient.LlmError {
-            return .failure(e.errorDescription ?? "LLM 调用失败")
-        } catch let e as APIError {
-            return .failure(e.chinese)
         } catch {
-            return .failure("LLM 调用失败:\(error.localizedDescription)")
+            return .failure(RemoteFailure.from(error, fallback: "AI 提取短语时出了点状况"))
         }
 
         return parse(raw)
@@ -64,7 +61,7 @@ struct PhotoAnalyzer {
     func parse(_ raw: String) -> AnalysisOutcome {
         let body = Self.stripFences(raw)
         guard let data = body.data(using: .utf8) else {
-            return .failure("LLM 返回无法解码")
+            return .failure(.message("AI 返回的内容没读懂，稍后再试。"))
         }
         do {
             let resp = try JSONDecoder().decode(WireResult.self, from: data)
@@ -78,8 +75,7 @@ struct PhotoAnalyzer {
                 phrases: phrases
             ))
         } catch {
-            let head = body.prefix(200)
-            return .failure("JSON 解析失败 · head=\(head)")
+            return .failure(.message("AI 返回的内容没读懂，再试一次。"))
         }
     }
 

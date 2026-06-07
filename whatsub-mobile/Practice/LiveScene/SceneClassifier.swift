@@ -28,12 +28,12 @@ struct SceneClassifier {
     /// inventory ("bicycle, brick wall, sunlight, two people, …").
     private static let labelTopK: Int = 8
 
-    /// Returns a `SceneContext` or a Chinese error string on failure.
+    /// Returns a `SceneContext` or a `RemoteFailure` on failure.
     /// Runs on a background queue (Vision handler is sync + CPU-bound);
     /// callers should `await` from the main actor.
     static func classify(_ image: UIImage) async -> SceneClassifyOutcome {
         guard let cgImage = image.cgImage else {
-            return .failure("无法读取图片")
+            return .failure(.message("这张图片读不出来，换一张再试。"))
         }
         let orientation = cgOrientation(from: image.imageOrientation)
 
@@ -61,7 +61,7 @@ struct SceneClassifier {
         do {
             try handler.perform([classify, humans, animals])
         } catch {
-            return .failure("图像识别失败:\(error.localizedDescription)")
+            return .failure(.message("识别这张图片时出了点状况，换一张再试。（\(error.localizedDescription)）"))
         }
 
         let labels: [SceneLabel] = (classify.results ?? [])
@@ -78,7 +78,7 @@ struct SceneClassifier {
         // of silently shipping a void context to the LLM (which would
         // then hallucinate a prompt about "an empty scene").
         if labels.isEmpty && humanCount == 0 && animalCount == 0 {
-            return .failure("画面里没有识别出明显的物体或人,换一张试试")
+            return .failure(.message("这张图片里没看到明显的物体或人，换一张内容更丰富的试试。"))
         }
 
         return .success(SceneContext(

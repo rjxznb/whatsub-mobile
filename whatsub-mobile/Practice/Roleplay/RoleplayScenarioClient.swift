@@ -22,11 +22,12 @@ struct RoleplayScenarioClient {
     }
 
     /// Outcome of one derivation call. Custom enum (not `Result`) because
-    /// `Result<S, F>` requires `F: Error`; we want to keep the failure
-    /// channel a plain human-readable string for the UI banner.
+    /// `Result<S, F>` requires `F: Error`; failure payload is `RemoteFailure`
+    /// so the view banner can show a 订阅 Pro CTA when the relay rejected
+    /// the call for tier-related reasons (see `RemoteFailure.swift`).
     enum DerivationOutcome {
         case success([RoleplayScenario])
-        case failure(String)
+        case failure(RemoteFailure)
     }
 
     /// Derive scenarios from a Library entry. `corpusPhrases` are the user's
@@ -50,10 +51,8 @@ struct RoleplayScenarioClient {
         let raw: String
         do {
             raw = try await chat(messages)
-        } catch let e as ChatCompletionsClient.LlmError {
-            return .failure(e.errorDescription ?? "LLM 调用失败")
         } catch {
-            return .failure("LLM 调用失败:\(error.localizedDescription)")
+            return .failure(RemoteFailure.from(error, fallback: "AI 设计场景时出了点状况"))
         }
 
         // The LLM sometimes wraps the JSON in markdown fences despite our
@@ -61,21 +60,18 @@ struct RoleplayScenarioClient {
         // before decoding.
         let body = Self.stripFences(raw)
         guard let data = body.data(using: .utf8) else {
-            return .failure("LLM 返回无法解码")
+            return .failure(.message("AI 返回的内容没读懂，稍后再试一次。"))
         }
 
         do {
             let resp = try JSONDecoder().decode(ScenarioDerivationResponse.self, from: data)
             let scenarios = Array(resp.toScenarios().prefix(3))
             if scenarios.isEmpty {
-                return .failure("LLM 没能生成有效场景，再试一次？")
+                return .failure(.message("AI 没能给出合适的场景，再试一次试试。"))
             }
             return .success(scenarios)
         } catch {
-            // Surface enough of the body to debug in TestFlight without
-            // leaking the whole reply — first 200 chars is plenty.
-            let head = body.prefix(200)
-            return .failure("场景 JSON 解析失败 · head=\(head)")
+            return .failure(.message("AI 返回的内容没读懂，稍后再试。"))
         }
     }
 

@@ -113,19 +113,24 @@ struct SceneGrade: Equatable {
 /// `RoleplayScenarioClient.DerivationOutcome` — `Result<S, F>` requires
 /// `F: Error` which `String` doesn't satisfy. CI catches this every time
 /// we forget. See feedback_swift_result_string_compile.
+///
+/// `failure` payload was upgraded from `String` to `RemoteFailure` in the
+/// warmth-pass refactor (2026-06-07) so the error UI can distinguish a
+/// "subscribe-to-fix" 403 from a generic Vision miss and render the right
+/// CTA. See `RemoteFailure.swift`.
 enum SceneClassifyOutcome {
     case success(SceneContext)
-    case failure(String)
+    case failure(RemoteFailure)
 }
 
 /// Outcome of the prompt-derivation LLM call.
 enum PromptDerivationOutcome {
     case success(SpeakingPrompt)
-    case failure(String)
+    case failure(RemoteFailure)
 }
 
 /// Outcome of the grading LLM call.
 enum GradingOutcome {
     case success(SceneGrade)
-    case failure(String)
+    case failure(RemoteFailure)
 }

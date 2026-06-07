@@ -15,42 +15,44 @@ enum APIError: Error, Equatable {
     /// `retryAfterSec` is also echoed in the `Retry-After` header.
     case rateLimited(scope: String, retryAfterSec: Int, message: String)
 
-    /// Chinese message for display in the UI.
+    /// Chinese message for display in the UI. Warmth pass 2026-06-07 — every
+    /// branch should sound like a friend telling you what happened + how to
+    /// fix it, not a stack trace. NEVER include raw error bodies, code dumps,
+    /// or English error keys (e.g. "license_blocked") in the output string.
     var chinese: String {
         switch self {
         case .network(let detail):
-            return "网络连接失败：\(detail)"
+            return "网络好像断开了，检查一下连接再试。（\(detail)）"
         case .unauthorized:
-            return "登录已过期，请重新登录"
+            return "登录信息过期了，重新登录一下就好。"
         case .server(let code, let err):
             switch err {
-            case "invalid_email": return "邮箱格式不对"
-            case "invalid_input": return "输入有误"
-            case "no_code": return "请先获取验证码"
-            case "wrong_code": return "验证码错误"
-            case "too_many_attempts": return "尝试次数过多，请重新获取验证码"
-            // LLM relay-specific (2026-06-04). Backend distinguishes these
-            // so the UI can offer the right next step instead of a generic
-            // "服务器错误". Order matters — "quota_exceeded" exists on both
-            // /library/sync (413) and /llm/v1 (429); the 429 branch must
-            // come BEFORE the generic library line below.
+            case "invalid_email": return "邮箱格式好像不太对，再检查一下。"
+            case "invalid_input": return "信息有点不对，再核对一下。"
+            case "no_code": return "先获取一次验证码吧。"
+            case "wrong_code": return "验证码不对，再确认一下。"
+            case "too_many_attempts": return "尝试次数有点多了，重新获取一次验证码吧。"
+            // LLM-policy 4xx — same shape the relay returns. Order matters:
+            // "quota_exceeded" exists on /library/sync (413) AND /llm/v1 (429),
+            // so the 429 branch must come BEFORE the generic library branch.
             case "license_blocked":
-                return "你已购买永久网站授权（¥59.9 买断），按现行政策需 BYOK 自填 LLM key，或单独订阅 Pro 才能用 whatsub 托管 LLM。下方关闭「使用 whatsub 托管」即可改用自己的 key。"
+                return "你目前是「网站买断」用户。想用 whatSub 内置 AI 需要订阅 Pro——或者去「我的 → LLM 设置」填一个自己的 API Key 也可以。"
             case "free_used_up":
-                return "免费体验额度（200K tokens）已用完。请关闭 toggle 走 BYOK，或升级 Pro 解锁完整月度配额。"
+                return "本月免费 AI 体验额度已经用完啦。订阅 Pro 解锁完整月度配额，或者去「我的 → LLM 设置」填自己的 Key 继续用。"
             case "trial_used_up":
-                return "桌面试用额度已用完，请升级 Pro 继续使用。"
+                return "桌面端试用额度已经用完。订阅 Pro 即可继续使用 AI 功能。"
             case "quota_exceeded" where code == 429:
-                return "本月 LLM 额度已用完，下月 1 日重置或升级配额。"
-            case "quota_exceeded": return "云端视频已达上限，先在 Library 删一个，或购买授权解锁更多"
+                return "本月 AI 额度已经用完。下个月 1 号自动重置——想现在继续，可以升级套餐。"
+            case "quota_exceeded":
+                return "云端视频已经满了。先到 Library 删一个，或者升级 Pro 解锁更多空间。"
             default: return "服务器错误（\(code)）"
             }
         case .decoding(let detail):
-            return "数据解析失败：\(detail)"
+            return "解析返回数据时出了点状况，再试一次试试。（\(detail)）"
         case .badInput(let detail):
             return detail
         case .quotaExceeded(let used, let limit):
-            return "云端视频已达上限（\(used)/\(limit)）"
+            return "云端视频已经满了（\(used)/\(limit)）。先到 Library 删一个，或升级 Pro 解锁更多空间。"
         case .rateLimited(_, _, let message):
             // Server-supplied Chinese message already accounts for scope.
             return message

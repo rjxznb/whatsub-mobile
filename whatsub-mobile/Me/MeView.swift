@@ -33,7 +33,16 @@ struct MeView: View {
         return "已订阅"
     }
 
+    /// Pulled on first appear AND on pull-to-refresh. The
+    /// `store.reportCurrentEntitlements()` step (added 2026-06-07) catches
+    /// the "post-update shows 未订阅" case: an existing iOS subscription
+    /// that survived an app update never fires through `Transaction.updates`,
+    /// so the backend's `/me.hasActiveSubscription` can lag the device.
+    /// Re-reporting verified JWSes to `/iap/verify` (idempotent) before
+    /// calling `refreshMe()` makes the pulled-down page snap to the right
+    /// state every time.
     private func reloadQuota() async {
+        await store.reportCurrentEntitlements()
         await appState.refreshMe()
         if let t = appState.session?.sessionToken {
             quota = try? await WhatsubAPI.shared.libraryQuota(token: t)
@@ -186,6 +195,11 @@ struct MeView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
+                // Pull-to-refresh added 2026-06-07. Same loader as the
+                // first-appear `.task`: re-report entitlements → refreshMe →
+                // re-pull quotas. Lets the user resolve "刚续费了为什么还显示
+                // 未订阅" themselves without restarting the app.
+                .refreshable { await reloadQuota() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Color.whatsubBg.ignoresSafeArea())

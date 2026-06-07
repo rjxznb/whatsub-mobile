@@ -112,16 +112,19 @@ struct CorpusView: View {
                 })
                 .environmentObject(store)
             }
-            .sheet(item: $quickChatPick) { pick in
+            // fullScreenCover (NOT sheet) — on iPad a regular .sheet renders as
+            // a centered formSheet (~700x550pt floating modal), which feels
+            // wrong for an immersive orb dialogue. User reported 2026-06-07
+            // that the AI dialogue page didn't fill the iPad screen. iPhone
+            // is unaffected (sheet ~= fullScreen there visually).
+            //
+            // The original swipe-down-disable concern (2026-06-03) no longer
+            // applies — fullScreenCover doesn't support swipe-to-dismiss
+            // at all, so the keyboard-dismiss gesture and the chat lifecycle
+            // can't fight over the same touch.
+            .fullScreenCover(item: $quickChatPick) { pick in
                 QuickChatView(phrases: pick.phrases, suggestedTag: pick.suggestedTag, maxTurns: pendingTurnCap)
                     .environmentObject(appState)
-                    // Prevent system swipe-down-to-dismiss on the chat sheet
-                    // (2026-06-03): the chat is mid-session when the user is
-                    // mid-utterance; an accidental down-swipe shouldn't kill
-                    // the AI's reply. ALSO: our own down-swipe gesture is for
-                    // dismissing the keyboard — without this, BOTH fire and
-                    // the sheet wins. Exit is now exclusively the 关闭 button.
-                    .interactiveDismissDisabled(true)
             }
             .sheet(isPresented: $showQuickChatLauncher) {
                 QuickChatLauncherView(mine: vm.mine) { pick, turnCap in

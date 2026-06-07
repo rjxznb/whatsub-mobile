@@ -29,8 +29,11 @@ final class LiveSceneViewModel: ObservableObject {
         case grading(scene: SceneContext, prompt: SpeakingPrompt, transcript: String)
         /// Final result + 再来一次 / 完成 buttons.
         case review(scene: SceneContext, prompt: SpeakingPrompt, transcript: String, grade: SceneGrade)
-        /// Recoverable error — UI shows banner + 重试 / 取消.
-        case error(String)
+        /// Recoverable error — UI shows banner + 重新选图片 / 订阅 Pro (kind-driven).
+        /// Payload upgraded from `String` to `RemoteFailure` 2026-06-07 so the
+        /// error view can render a `subscribeUpsell` CTA when the LLM relay
+        /// rejected the call for tier-related reasons.
+        case error(RemoteFailure)
     }
 
     @Published private(set) var phase: Phase = .picker
@@ -74,15 +77,15 @@ final class LiveSceneViewModel: ObservableObject {
         phase = .classifying
         let classifyResult = await SceneClassifier.classify(image)
         switch classifyResult {
-        case .failure(let msg):
-            phase = .error(msg)
+        case .failure(let f):
+            phase = .error(f)
             return
         case .success(let scene):
             phase = .prompting
             let promptResult = await promptClient.derive(scene: scene)
             switch promptResult {
-            case .failure(let msg):
-                phase = .error(msg)
+            case .failure(let f):
+                phase = .error(f)
             case .success(let prompt):
                 phase = .ready(scene: scene, prompt: prompt)
             }
@@ -120,10 +123,10 @@ final class LiveSceneViewModel: ObservableObject {
             // silently failing; they can tap again.
             switch e {
             case .audioHardwareNotReady:
-                phase = .error("麦克风未就绪,稍等一下再按住")
+                phase = .error(.message("麦克风还没准备好，稍等一下再点话筒。"))
             }
         } catch {
-            phase = .error("录音启动失败:\(error.localizedDescription)")
+            phase = .error(.message("录音启动出了点状况：\(error.localizedDescription)"))
         }
     }
 
@@ -161,8 +164,8 @@ final class LiveSceneViewModel: ObservableObject {
     private func runGrader(scene: SceneContext, prompt: SpeakingPrompt, transcript: String) async {
         let result = await grader.grade(prompt: prompt, userTranscript: transcript)
         switch result {
-        case .failure(let msg):
-            phase = .error(msg)
+        case .failure(let f):
+            phase = .error(f)
         case .success(let grade):
             phase = .review(scene: scene, prompt: prompt, transcript: transcript, grade: grade)
         }

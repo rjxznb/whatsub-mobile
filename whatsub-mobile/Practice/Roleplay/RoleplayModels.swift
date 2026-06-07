@@ -124,5 +124,7 @@ enum RoleplayPhase: Equatable {
     case loading        // scene-derivation call in flight
     case picker         // scenarios ready, waiting for user pick
     case inSession      // user picked, session sheet is up
-    case error(String)
+    /// Payload upgraded from `String` to `RemoteFailure` 2026-06-07 so the
+    /// error banner can show 订阅 Pro for subscribe-upsell failures.
+    case error(RemoteFailure)
 }
