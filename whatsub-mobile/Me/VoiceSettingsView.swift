@@ -6,7 +6,12 @@ import AVFoundation
 /// persisted in UserDefaults (`Speaker.pinnedVoiceDefaultsKey`) and honored by
 /// `Speaker.pickVoice` before its auto-pick logic.
 struct VoiceSettingsView: View {
-    @AppStorage(Speaker.pinnedVoiceDefaultsKey) private var pinnedIdentifier: String = ""
+    // Default is `Speaker.defaultPinIdentifier` (= Piper-Matcha) — chosen
+    // 2026-06-07 so fresh installs get a natural-sounding voice without
+    // requiring users to know about Apple Premium voice downloads. Users
+    // who tap the 「自动」 row store `""` (explicit Apple auto-pick) which
+    // is preserved. See Speaker.pinnedVoiceDefaultsKey docs.
+    @AppStorage(Speaker.pinnedVoiceDefaultsKey) private var pinnedIdentifier: String = Speaker.defaultPinIdentifier
     /// The list is fetched once on appear. Voices are stable across the lifetime
     /// of this view (they only change when the user visits System Settings).
     @State private var voices: [AVSpeechSynthesisVoice] = []

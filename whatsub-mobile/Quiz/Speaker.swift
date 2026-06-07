@@ -55,14 +55,31 @@ enum Speaker {
         "Karen", "Moira", "Tessa", "Serena", "Fiona", "Zoe",
     ]
 
-    /// UserDefaults key for the optional pinned voice identifier. Set by
-    /// VoiceSettingsView. When nil (empty string), Speaker auto-picks the best
-    /// installed voice.
+    /// UserDefaults key for the user-pinned voice identifier. Three possible
+    /// stored values:
+    ///   - missing (no entry) → `defaultPinIdentifier` applies (Piper)
+    ///   - `""` empty string  → explicit "Apple auto-pick" (user tapped 自动)
+    ///   - `piperLjspeechIdentifier` → Piper-Matcha pinned
+    ///   - any AVSpeechSynthesisVoice.identifier → that Apple voice pinned
     static let pinnedVoiceDefaultsKey = "speaker.pinned-voice-identifier.v1"
 
-    /// True when the user has pinned the Piper LJSpeech voice in VoiceSettings.
+    /// What we treat as the "user hasn't picked one yet" default. Set to
+    /// Piper-Matcha on 2026-06-07 — previously the default was Apple
+    /// auto-pick (empty string), which on a fresh install with no Premium
+    /// voice downloaded meant the user heard Samantha (机器音). Matcha
+    /// LJSpeech is bundled in the .app since 2026-06-05 (see project.yml
+    /// postBuildScript), so it's available immediately on first launch.
+    /// If PiperTTS isn't ready yet (model still loading, missing on a
+    /// pre-bundling build), Speaker.speak/.enqueue transparently fall
+    /// through to AVSpeechSynthesizer auto-pick — no regression.
+    static let defaultPinIdentifier = piperLjspeechIdentifier
+
+    /// True when the EFFECTIVE choice (user-pinned OR default-for-unpinned)
+    /// is Piper-Matcha. Used by speak()/enqueue() to route to PiperTTS
+    /// instead of AVSpeechSynthesizer.
     static var isPiperPinned: Bool {
-        UserDefaults.standard.string(forKey: pinnedVoiceDefaultsKey) == piperLjspeechIdentifier
+        let stored = UserDefaults.standard.string(forKey: pinnedVoiceDefaultsKey) ?? defaultPinIdentifier
+        return stored == piperLjspeechIdentifier
     }
 
     /// Quiz-card flow (unchanged contract): interrupts any in-flight speech.
