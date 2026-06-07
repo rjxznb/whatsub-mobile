@@ -12,9 +12,14 @@ struct CorpusView: View {
     /// 2026-06-03 Stage 4: persisted choice between flat (each phrase a row) and
     /// grouped (each video a card with its phrases nested). UserDefaults so it
     /// survives app launches.
-    @AppStorage("corpus.mine.layout") private var mineLayoutRaw: String = MineLayout.flat.rawValue
+    ///
+    /// 2026-06-07: default flipped from .flat → .byVideo (user feedback —
+    /// most people think of their saved phrases scoped to "which video did
+    /// I collect this from", so seeing them grouped by video is the more
+    /// natural landing view).
+    @AppStorage("corpus.mine.layout") private var mineLayoutRaw: String = MineLayout.byVideo.rawValue
     private var mineLayout: MineLayout {
-        get { MineLayout(rawValue: mineLayoutRaw) ?? .flat }
+        get { MineLayout(rawValue: mineLayoutRaw) ?? .byVideo }
     }
     enum MineLayout: String { case flat, byVideo }
     @State private var quickChatPick: PhraseSelector.Pick?
