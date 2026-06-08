@@ -25,6 +25,11 @@ struct AIConsentGate: View {
     @ObservedObject private var store = AIConsentStore.shared
 
     var body: some View {
+        // 文案大幅精简(2026-06-09 round 2):用户反馈"描述太多用词太专业,
+        // 没耐心看完也看不懂"。原版四块卡片合并成三块,每块一句话,
+        // 删去元解释(为什么需要这个授权)和"token / OCR / BYOK"等术语,
+        // 保留 Apple Guideline 5.1.2(i) 的三项硬要求:发什么内容、发给谁、
+        // 怎么处理。整页可以在 10 秒内读完。
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
@@ -33,35 +38,26 @@ struct AIConsentGate: View {
                     section(
                         title: "会发送什么内容",
                         body:
-                            "• 字幕和短语文本(双语字幕翻译、AI 标黄重点词、AI 重译)\n" +
-                            "• 你录的英文语音转出来的文字(对话陪练、实景口语跟读 — 录音不会上传,转文字在本机完成)\n" +
-                            "• 你用 whatSub 拍照或从相册选择的图片经本机 OCR 识别出来的英文文字(拍照翻译、图片提取短语 — 照片本身不会上传)\n" +
-                            "• 你在「语料库」里添加的英文短语和上下文句子"
+                            "视频字幕和你收藏的英文短语、对话陪练时你说的话(在本机转为文字后)、" +
+                            "拍照翻译时识别出的文字。\n\n" +
+                            "录音和照片本身不会上传,只发送转写或识别后的文字。"
                     )
 
                     section(
-                        title: "会发送给谁",
+                        title: "发送给谁",
                         body:
-                            "默认使用 whatSub 托管的 AI 服务(由 whatSub 在国内服务器中转,接入合规的大模型服务商)。\n" +
-                            "你也可以在「我的 → LLM 设置」关掉托管,改用自己注册的第三方大模型服务商账号(BYOK)— 这时数据会直接从你的设备发到你选的那家服务商。"
+                            "默认通过 whatSub 国内服务器中转,再发给合规的大模型服务商。\n\n" +
+                            "也可在「我的 → LLM 设置」改用你自己的 API Key,数据将直接从设备发给你选择的服务商,不经过 whatSub 服务器。"
                     )
 
                     section(
-                        title: "我们的服务器会做什么",
+                        title: "如何保管",
                         body:
-                            "中转通道只在请求转发的瞬间触达字幕/语音/OCR 文本,处理完即丢弃,不长期存储你的输入内容。我们只为计费记录保留 token 用量统计(不含你输入的具体文字)。"
-                    )
-
-                    section(
-                        title: "为什么需要这个授权",
-                        body:
-                            "翻译和 AI 分析的本质就是把文本发给一个大模型再拿回结果。Apple 要求我们必须在你按下「翻译 / AI 标黄 / 对话陪练」按钮之前,先告诉你这件事并征得你的同意。"
+                            "中转服务器只在转发那一刻接触你的内容,处理完后不再保留,也不会用于其他用途。\n\n" +
+                            "仅保留每月调用次数用于计费,不含具体文字内容。"
                     )
                 }
 
-                // Buttons — primary "同意并继续", secondary "退出 app"
-                // (no AI use without consent; user can still browse Library
-                // but AI features won't work).
                 VStack(spacing: 10) {
                     Button {
                         store.accept()
@@ -74,14 +70,9 @@ struct AIConsentGate: View {
                     }
                     .buttonStyle(.borderedProminent).tint(.whatsubAccent)
 
-                    HStack(spacing: 16) {
-                        Link("查看隐私政策", destination: URL(string: "https://whatsub.eversay.cc/privacy")!)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.whatsubAccent)
-                        Link("管理 AI 服务来源", destination: URL(string: "https://whatsub.eversay.cc/mobile#pro")!)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.whatsubAccent)
-                    }
+                    Link("查看完整隐私政策", destination: URL(string: "https://whatsub.eversay.cc/privacy")!)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.whatsubAccent)
                 }
                 .padding(.top, 8)
             }
@@ -96,10 +87,10 @@ struct AIConsentGate: View {
             Image(systemName: "checkmark.shield.fill")
                 .font(.system(size: 36))
                 .foregroundStyle(.whatsubAccent)
-            Text("关于 AI 功能的数据使用")
+            Text("AI 功能数据使用说明")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.whatsubInk)
-            Text("使用 whatSub 的 AI 翻译、AI 标黄、对话陪练、拍照翻译等功能前,请阅读并确认下面这些数据使用细节:")
+            Text("使用翻译、AI 标黄、对话陪练、拍照翻译等功能前,请阅读并确认以下数据处理方式。")
                 .font(.subheadline)
                 .foregroundStyle(.whatsubInkMuted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -108,7 +99,7 @@ struct AIConsentGate: View {
 
     @ViewBuilder
     private func section(title: String, body: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.whatsubInk)
