@@ -103,6 +103,31 @@ struct ContentView: View {
             gateReady = true
             Task { await appState.refreshMe() }
         }
+        // AI consent — presented at the OUTER body level (not inside
+        // mainTabs) so the sheet modifier is mounted on a view that's
+        // always present, regardless of gateReady / isAuthenticated. The
+        // earlier version (build 294) hooked .onChange(of: gateReady)
+        // INSIDE mainTabs, but mainTabs only renders when gateReady is
+        // already true — so the false→true transition happened before
+        // the listener was bound, and the sheet never showed.
+        //
+        // The .task below runs on every cold launch (no id, so it fires
+        // once per view lifetime) and right after `gateReady` flips on.
+        // The condition is "has the user accepted yet?" — if not, show
+        // the sheet. Once they tap "同意并继续", AIConsentStore.accept()
+        // sets the flag, AIConsentGate sets `presenting = false`, sheet
+        // dismisses. Apple's Guideline 5.1.1(i) / 5.1.2(i) doesn't say
+        // WHEN exactly the consent must show; "before sending data" is
+        // the rule, and pre-mainTabs is well before any AI button is
+        // tappable.
+        .task(id: gateReady) {
+            if gateReady && !consentStore.hasAccepted {
+                showAIConsent = true
+            }
+        }
+        .sheet(isPresented: $showAIConsent) {
+            AIConsentGate(presenting: $showAIConsent)
+        }
     }
 
     private var splash: some View {
@@ -158,23 +183,9 @@ struct ContentView: View {
                     .environmentObject(store)
             }
         }
-        // AI consent — presented at app root so it sits above every AI
-        // surface. Auto-shown once on first launch when the user becomes
-        // authenticated; once they tap "同意并继续" the AIConsentStore
-        // flag persists in UserDefaults and the sheet never reappears.
-        // The same gate's flag is checked again at the ChatCompletionsClient
-        // level (defense-in-depth: if some future code path skips
-        // presentation, the AI call still fails with consentRequired
-        // instead of silently sharing data).
-        .onChange(of: gateReady) { ready in
-            if ready && !consentStore.hasAccepted { showAIConsent = true }
-        }
-        .onChange(of: consentStore.hasAccepted) { accepted in
-            if accepted { showAIConsent = false }
-        }
-        .sheet(isPresented: $showAIConsent) {
-            AIConsentGate(presenting: $showAIConsent)
-        }
+        // (AI consent sheet moved to the OUTER body — see comment there
+        // for the build-294 bug rationale. Don't add it here again or the
+        // false→true transition gets missed during the mainTabs mount.)
     }
 }
 
