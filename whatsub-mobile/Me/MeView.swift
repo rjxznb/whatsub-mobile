@@ -12,6 +12,11 @@ struct MeView: View {
     @State private var deletingAccount = false
     @State private var deleteAccountError: String?
     @State private var showSubscribe = false
+    /// Manual entry for the AI 数据使用说明 sheet. The same gate auto-shows
+    /// on first authed launch (WhatsubMobileApp.ContentView), but a user
+    /// who swipe-dismissed it or wants to re-read needs a non-restart path.
+    /// 2026-06-09 (App Store Guideline 5.1.1/5.1.2 follow-up).
+    @State private var showAIConsent = false
     // (showPhotoCapture / showLiveScene removed 2026-06-05 — the 拍照翻译
     // (was 拍照识别短语) + 实景口语练习 entries moved to the new 「眼前」
     // tab. 导入视频 also gone — now a "+" button on the Library tab.
@@ -139,6 +144,24 @@ struct MeView: View {
                             Label("导入队列", systemImage: "tray.and.arrow.down")
                                 .foregroundStyle(.whatsubInk)
                         }
+                        // AI 数据使用说明 — manual entry to the same
+                        // AIConsentGate that auto-shows on first launch.
+                        // Lets a user re-read the disclosure or click
+                        // 「同意」 if the auto-presentation missed (e.g.,
+                        // cold-launch race or older build). 2026-06-09.
+                        Button {
+                            showAIConsent = true
+                        } label: {
+                            HStack {
+                                Label("AI 数据使用说明", systemImage: "checkmark.shield")
+                                    .foregroundStyle(.whatsubInk)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.whatsubInkFaint)
+                            }
+                        }
+                        .buttonStyle(.borderless)
                     }
                     .listRowBackground(Color.whatsubBgElev)
                     // (Local 词汇暂存区 entry removed build 248. Pending
@@ -213,6 +236,14 @@ struct MeView: View {
             .sheet(isPresented: $showSubscribe) {
                 SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
                     .environmentObject(store)
+            }
+            // AI 数据使用说明 sheet — same view the app root auto-presents
+            // on first launch. Mounted here so the manual entry button
+            // works regardless of whether the auto-presentation already
+            // ran or not. Idempotent: re-tapping "同意并继续" just
+            // re-sets the flag to true (no-op).
+            .sheet(isPresented: $showAIConsent) {
+                AIConsentGate(presenting: $showAIConsent)
             }
             // (photo + live-scene sheets moved to CameraTabView 2026-06-05;
             //  待同步暂存 sheet removed 2026-06-07.)

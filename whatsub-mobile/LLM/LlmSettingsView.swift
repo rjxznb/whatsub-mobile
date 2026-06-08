@@ -25,8 +25,37 @@ struct LlmSettingsView: View {
     @State private var quotaError: String?
     @State private var quotaLoading: Bool = false
 
+    /// Manual re-entry for the AI 数据使用说明 sheet — see same field +
+    /// pattern in MeView. Convenient here too since LLM 设置 is exactly
+    /// the screen a privacy-conscious user lands on to inspect data flow.
+    /// 2026-06-09 (App Store Guideline 5.1.1/5.1.2 follow-up).
+    @State private var showAIConsent: Bool = false
+
     var body: some View {
         Form {
+            // AI 数据使用说明 — 顶置一行,LLM 设置正好是用户最关心
+            // 数据流向的页面,把"查看完整说明"的入口放在 toggle 之上,
+            // 让他们先读再选。2026-06-09。
+            Section {
+                Button {
+                    showAIConsent = true
+                } label: {
+                    HStack {
+                        Label("AI 数据使用说明", systemImage: "checkmark.shield")
+                            .foregroundStyle(.whatsubInk)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.whatsubInkFaint)
+                    }
+                }
+                .buttonStyle(.borderless)
+            } footer: {
+                Text("点开查看 whatSub 在使用 AI 功能时收集和发送的数据细节,以及托管中转 / BYOK 两种模式下的数据流向。")
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkFaint)
+            }
+
             Section {
                 Toggle(isOn: $useManagedRelay) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -103,6 +132,11 @@ struct LlmSettingsView: View {
             Task { await reloadQuota() }
         }
         .refreshable { await reloadQuota() }
+        // Re-read AI consent disclosure — same view the app auto-presents
+        // on first launch. Idempotent re-accept.
+        .sheet(isPresented: $showAIConsent) {
+            AIConsentGate(presenting: $showAIConsent)
+        }
     }
 
     @ViewBuilder
