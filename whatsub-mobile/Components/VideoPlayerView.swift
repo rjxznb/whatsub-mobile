@@ -38,12 +38,13 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         vc.player = player
         vc.videoGravity = .resizeAspect
         vc.showsPlaybackControls = true
-        // Picture-in-Picture: shows the PiP button in the controls (when the
-        // device supports it + the app declares the `audio` background mode in
-        // Info.plist), and auto-pops into a floating window when the app goes to
-        // the background mid-playback. Audio session is already `.playback` above.
-        vc.allowsPictureInPicturePlayback = true
-        vc.canStartPictureInPictureAutomaticallyFromInline = true
+        // PiP disabled 2026-06-09 — paired with the UIBackgroundModes audio
+        // removal in project.yml (App Store Guideline 2.5.4 rejection: reviewer
+        // wanted a screen recording showing persistent audio, which PiP needed
+        // but isn't a primary feature). Re-enable both together with a screen
+        // recording attached to ASC review notes if PiP becomes a priority.
+        vc.allowsPictureInPicturePlayback = false
+        vc.canStartPictureInPictureAutomaticallyFromInline = false
         context.coordinator.attach(player: player)
         // Force the view tree to load so contentOverlayView is non-nil, then
         // attach the caption eagerly (updateUIViewController also ensures it).

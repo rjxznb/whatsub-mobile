@@ -65,6 +65,12 @@ struct ChatCompletionsClient {
     // MARK: - non-streaming (unchanged caller surface)
 
     func chat(_ messages: [ChatMessage]) async throws -> String {
+        // Defense-in-depth gate for App Store Guideline 5.1.1(i) / 5.1.2(i):
+        // even if the root-level AIConsentGate never presented for some reason,
+        // every AI call short-circuits here until the user has acknowledged
+        // the data-sharing disclosure. The error is mapped to a friendly
+        // RemoteFailure.Kind.consentRequired so the UI can re-present the gate.
+        guard AIConsentStore.hasAcceptedRaw else { throw LlmError.consentRequired }
         guard let r = resolveConfig() else { throw LlmError.notConfigured }
         guard let url = URL(string: "\(r.baseUrl)/chat/completions") else {
             throw LlmError.notConfigured
@@ -236,6 +242,11 @@ struct ChatCompletionsClient {
         /// `message` is the friendly Chinese string we WANT to show; `code`
         /// drives the call-to-action (subscribe vs. configure LLM).
         case policy(code: PolicyCode, message: String, httpStatus: Int)
+        /// User hasn't yet accepted the global AI-feature data-sharing
+        /// disclosure (App Store Guideline 5.1.1(i) / 5.1.2(i), 2026-06-09).
+        /// Maps to RemoteFailure.Kind.consentRequired so UI can re-present
+        /// the AIConsentGate sheet.
+        case consentRequired
 
         /// Known backend error codes that mean "this is a payable problem,
         /// not a bug". Stays an enum so `RemoteFailure.from(_:)` can pattern
@@ -265,6 +276,8 @@ struct ChatCompletionsClient {
                 return "AI 返回的内容没看懂，再试一次试试。"
             case .policy(_, let message, _):
                 return message
+            case .consentRequired:
+                return "请先阅读并同意 AI 功能的数据使用说明，再继续使用 AI。"
             }
         }
     }

@@ -106,11 +106,15 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
-        # Picture-in-Picture (native AVPlayer) needs the audio background mode. MUST
-        # live here in properties — XcodeGen regenerates Info.plist from this block,
-        # so a key added only to the Info.plist file is dropped on `xcodegen generate`.
-        UIBackgroundModes:
-          - audio
+        # 2026-06-09 — UIBackgroundModes audio dropped per App Store review feedback
+        # (Guideline 2.5.4): reviewer couldn't locate any persistent-audio feature
+        # justifying the entitlement. Was originally added for native-AVPlayer
+        # Picture-in-Picture, but PiP itself was a nice-to-have, not a primary
+        # feature. PiP also disabled in VideoPlayerView.swift to match. To
+        # re-enable in future: add `audio` back here AND flip PiP back on in
+        # VideoPlayerView, AND attach a screen recording to ASC review notes
+        # showing the PiP-in-background flow on a physical device (per Apple's
+        # ask in the rejection).
         # 跟读 (shadowing) practice — records short user speech then runs
         # SFSpeechRecognizer to score against the cue text. Both keys required
         # on first invocation; iOS shows the system permission alerts.

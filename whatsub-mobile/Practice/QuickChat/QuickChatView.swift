@@ -32,7 +32,9 @@ struct QuickChatView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var showCompliance: Bool
+    // showCompliance + QuickChatComplianceGate removed 2026-06-09 — the global
+    // AIConsentGate (presented at the app root) now covers every AI surface,
+    // not just QuickChat. See App/AIConsentGate.swift.
     @State private var stuckPhrase: SessionPhrase?
     @State private var showTranscript: Bool = false
     @State private var showCloseConfirm: Bool = false
@@ -76,7 +78,7 @@ struct QuickChatView: View {
             engineDriver: .live(engine),
             maxTurns: maxTurns
         ))
-        _showCompliance = State(initialValue: !QuickChatComplianceGate.hasAcknowledged)
+        // (showCompliance init removed 2026-06-09 — see field declaration.)
     }
 
     /// Roleplay-mode init (added build 248): the caller supplies the system
@@ -102,7 +104,7 @@ struct QuickChatView: View {
             engineDriver: .live(engine),
             maxTurns: maxTurns
         ))
-        _showCompliance = State(initialValue: !QuickChatComplianceGate.hasAcknowledged)
+        // (showCompliance init removed 2026-06-09 — see field declaration.)
     }
 
     var body: some View {
@@ -209,10 +211,6 @@ struct QuickChatView: View {
                     .disabled(vm.turns.isEmpty)
                 }
             }
-            .sheet(isPresented: $showCompliance) {
-                QuickChatComplianceGate(presenting: $showCompliance)
-                    .presentationDetents([.medium])
-            }
             .sheet(item: $stuckPhrase) { p in
                 QuickChatStuckCardView(
                     phrase: p,
@@ -260,16 +258,14 @@ struct QuickChatView: View {
             // URLSession.data() await to be cancelled mid-flight (~50ms in)
             // and surface as "网络失败：已取消" before DeepSeek could reply.
             // Detaching the work survives view re-renders.
-            if !showCompliance { Task { await vm.start() } }
+            Task { await vm.start() }
             // One-time hint about premium voices.
             if !premiumHintShown && !Speaker.hasPremiumEnglishVoice {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 showPremiumHint = true
             }
         }
-        .onChange(of: showCompliance) { showing in
-            if !showing, vm.turns.isEmpty { Task { await vm.start() } }
-        }
+        // showCompliance onChange removed 2026-06-09 — see field declaration.
         // (Auto-listen orchestration removed in builds 237+ — recording is
         // now driven entirely by the orb's long-press gesture.)
         .onChange(of: scenePhase) { phase in
@@ -535,7 +531,7 @@ struct QuickChatView: View {
                 Text(msg).font(.footnote).foregroundStyle(.whatsubInkMuted)
                     .fixedSize(horizontal: false, vertical: true)
                 if msg.contains("LLM 设置") || msg.contains("API Key") || msg.contains("notConfigured") {
-                    Text("提示：到「我的 → LLM 设置」填入 DeepSeek 等服务的 API Key。")
+                    Text("提示：到「我的 → LLM 设置」填入您选用的 LLM 服务的 API Key。")
                         .font(.caption2).foregroundStyle(.whatsubAccent).padding(.top, 2)
                 }
             }

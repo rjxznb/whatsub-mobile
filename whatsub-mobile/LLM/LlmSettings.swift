@@ -15,14 +15,15 @@ struct LlmSettings: Codable, Equatable {
     /// are ignored. Free users (no token) will get 401 at relay → caller
     /// surfaces the existing "AI 设置" or upsell sheet.
     var useManagedRelay: Bool = true
-    var baseUrl: String = "https://api.deepseek.com/v1"
+    // 2026-06-09 — BYOK default values dropped to empty strings to remove
+    // brand-name mentions from the UI (App Store review Guideline 5: foreign
+    // LLM brand names can't pass China DST/MIIT compliance). When relay is
+    // OFF and these are empty, the LlmSettingsView fields show generic
+    // placeholders (api.<your-provider>.com / <model-name>) which prompt the
+    // user to supply whatever provider they prefer without us recommending one.
+    var baseUrl: String = ""
     var apiKey: String = ""
-    // DeepSeek deprecated `deepseek-chat` / `deepseek-reasoner` aliases as of
-    // 2026. New canonical names: `deepseek-v4-flash` (non-thinking, primary)
-    // and `deepseek-v4-pro` (thinking). The old aliases still resolve for the
-    // non-streaming endpoint but the streaming endpoint may return empty for
-    // them — caught us once (QuickChat opening turn silent). Use the new name.
-    var model: String = "deepseek-v4-flash"
+    var model: String = ""
 
     /// True when EITHER relay mode is on (auth handled at call site by the
     /// presence of a session token) OR a BYOK key is filled.
@@ -45,9 +46,9 @@ struct LlmSettings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.useManagedRelay = (try? c.decode(Bool.self, forKey: .useManagedRelay)) ?? true
-        self.baseUrl = (try? c.decode(String.self, forKey: .baseUrl)) ?? "https://api.deepseek.com/v1"
+        self.baseUrl = (try? c.decode(String.self, forKey: .baseUrl)) ?? ""
         self.apiKey = (try? c.decode(String.self, forKey: .apiKey)) ?? ""
-        self.model = (try? c.decode(String.self, forKey: .model)) ?? "deepseek-v4-flash"
+        self.model = (try? c.decode(String.self, forKey: .model)) ?? ""
     }
 }
 

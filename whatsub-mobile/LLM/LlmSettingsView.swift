@@ -57,9 +57,14 @@ struct LlmSettingsView: View {
             }
 
             // ---- BYOK fields — collapse when relay is on ----
+            // 2026-06-09 — placeholders changed from specific provider names /
+            // model strings ("https://api.deepseek.com/v1", "deepseek-v4-flash")
+            // to generic OpenAI-compatible-shaped examples. App Store review
+            // Guideline 5 (China DST/MIIT compliance) requires we don't
+            // promote specific foreign LLM brand names in the app UI.
             if !useManagedRelay {
                 Section(header: Text("接口地址").foregroundStyle(.whatsubInkMuted)) {
-                    TextField("https://api.deepseek.com/v1", text: $baseUrl)
+                    TextField("https://api.<your-provider>.com/v1", text: $baseUrl)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
                         .foregroundStyle(.whatsubInk)
@@ -71,7 +76,7 @@ struct LlmSettingsView: View {
                         .foregroundStyle(.whatsubInk)
                 }
                 Section(header: Text("模型").foregroundStyle(.whatsubInkMuted)) {
-                    TextField("deepseek-v4-flash", text: $model)
+                    TextField("<model-name>", text: $model)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
                         .foregroundStyle(.whatsubInk)

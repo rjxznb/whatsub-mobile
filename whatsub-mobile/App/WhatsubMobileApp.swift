@@ -51,6 +51,12 @@ struct ContentView: View {
     @State private var selectedTab: Int = 0
     @State private var pendingImport: IdentifiedImportURL?
     @State private var gateReady = false
+    /// Global AI-feature consent presentation flag (App Store Guideline
+    /// 5.1.1(i) / 5.1.2(i), 2026-06-09). Bound via the AIConsentStore
+    /// singleton: presented exactly once per install, before any AI call
+    /// can succeed. See `AIConsentGate.swift` for the disclosure body.
+    @State private var showAIConsent = false
+    @ObservedObject private var consentStore = AIConsentStore.shared
 
     // 2026-05-28 policy shift: dropped the hard paywall after the 1-day trial.
     // The app is fully usable post-install — free tier covers basic Library
@@ -151,6 +157,23 @@ struct ContentView: View {
                     .environmentObject(appState)
                     .environmentObject(store)
             }
+        }
+        // AI consent — presented at app root so it sits above every AI
+        // surface. Auto-shown once on first launch when the user becomes
+        // authenticated; once they tap "同意并继续" the AIConsentStore
+        // flag persists in UserDefaults and the sheet never reappears.
+        // The same gate's flag is checked again at the ChatCompletionsClient
+        // level (defense-in-depth: if some future code path skips
+        // presentation, the AI call still fails with consentRequired
+        // instead of silently sharing data).
+        .onChange(of: gateReady) { ready in
+            if ready && !consentStore.hasAccepted { showAIConsent = true }
+        }
+        .onChange(of: consentStore.hasAccepted) { accepted in
+            if accepted { showAIConsent = false }
+        }
+        .sheet(isPresented: $showAIConsent) {
+            AIConsentGate(presenting: $showAIConsent)
         }
     }
 }

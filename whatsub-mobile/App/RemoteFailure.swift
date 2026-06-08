@@ -31,6 +31,10 @@ struct RemoteFailure: Equatable {
         /// managed-relay tier that would cover for them. UI should
         /// deep-link to 「我的 → LLM 设置」.
         case configureLLM
+        /// Global AI-feature consent hasn't been granted yet (App Store
+        /// Guideline 5.1.1(i) / 5.1.2(i), 2026-06-09). UI should re-present
+        /// the `AIConsentGate` sheet so the user can accept and retry.
+        case consentRequired
     }
 
     init(message: String, kind: Kind = .generic) {
@@ -57,6 +61,11 @@ struct RemoteFailure: Equatable {
             case .notConfigured:
                 return RemoteFailure(message: llm.errorDescription ?? "请先在「我的 → LLM 设置」填好 API Key",
                                      kind: .configureLLM)
+            case .consentRequired:
+                return RemoteFailure(
+                    message: llm.errorDescription ?? "请先同意 AI 功能的数据使用说明",
+                    kind: .consentRequired,
+                )
             case .network, .api, .badResponse:
                 return RemoteFailure(message: llm.errorDescription ?? fallback,
                                      kind: .generic)

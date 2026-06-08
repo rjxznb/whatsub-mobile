@@ -635,6 +635,27 @@ struct LiveSceneView: View {
                         .font(.caption)
                         .foregroundStyle(.whatsubInkMuted)
 
+                case .consentRequired:
+                    // Defense-in-depth: the root-level AIConsentGate should
+                    // have caught this before any AI call ran, so reaching
+                    // here means the user closed the gate without accepting
+                    // (or a future code path skipped it). Reset to picker —
+                    // next AI tap will re-trigger the same flow.
+                    Button {
+                        vm.dismissError()
+                    } label: {
+                        Text("重新选图片")
+                            .padding(.horizontal, 32).padding(.vertical, 12)
+                            .background(Color.whatsubAccent, in: Capsule())
+                            .foregroundStyle(.black)
+                            .font(.body.weight(.semibold))
+                    }
+                    Text("提示：请先到 app 启动时弹出的 AI 数据使用说明里点「同意并继续」")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+
                 case .generic:
                     Button {
                         vm.dismissError()
