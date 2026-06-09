@@ -40,7 +40,11 @@ struct QuickChatLauncherView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     heroExplainer
                     workflowSteps
-                    selectorRules
+                    // selectorRules removed 2026-06-09 — phrase selection is
+                    // now fully automatic (no UI choice exposed). The hero
+                    // subtitle briefly mentions auto-selection; the detailed
+                    // priority order lived in the desktop docs / source
+                    // comments and isn't worth surfacing here.
                     turnsSection
                     Color.clear.frame(height: 80)   // room above the floating start button
                 }
@@ -83,7 +87,10 @@ struct QuickChatLauncherView: View {
                 Text("AI 英语口语陪练")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.whatsubInk)
-                Text("用你「认得了但还没说会」的 3 个短语跟 AI 演一段小情景对话，把被动认知变成主动开口。")
+                // 2026-06-09 — 旧文案 "认得了但还没说会的 3 个短语" 太
+                // 口语化,改成正式书面语 "未熟练掌握"。同时把"自动选择短语"
+                // 这条信息提到小字里(原来在已删的 selectorRules 卡片里)。
+                Text("从你语料库中自动选取 3 个未熟练掌握的短语，与 AI 进行一段情景对话，帮助你将被动认知转为主动表达。")
                     .font(.footnote)
                     .foregroundStyle(.whatsubInkMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -94,31 +101,30 @@ struct QuickChatLauncherView: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(Color.whatsubBgElev))
     }
 
-    // MARK: - Workflow (4 steps)
+    // MARK: - Workflow (3 steps, 2026-06-09)
+    //
+    // 旧版四步 (AI 起情景 / 长按球说话 / AI 听完接话 / 更新掌握度) 用户
+    // 反馈"步骤太多",合并成三步,用词改成正式书面语。"长按球" 改成
+    // "按住中央的圆点说话"；"AI 接话" 表达本质相同 → 合并到"对话进行"。
 
     private var workflowSteps: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("怎么用").font(.caption).foregroundStyle(.whatsubInkFaint)
+            Text("使用步骤").font(.caption).foregroundStyle(.whatsubInkFaint)
             VStack(alignment: .leading, spacing: 12) {
                 workflowRow(
                     number: 1,
-                    title: "AI 起情景",
-                    detail: "系统挑 3 个短语，AI 编一个能自然装下它们的小场景，先用英文开个头。"
+                    title: "AI 设定情景",
+                    detail: "系统自动选出 3 个目标短语，AI 据此设计一个能自然使用这些短语的对话场景，并由 AI 用英语开启对话。"
                 )
                 workflowRow(
                     number: 2,
-                    title: "长按球说话",
-                    detail: "按住中间的圆球用英语回应，松开发送。语音实时识别，不用打字。"
+                    title: "按住圆点用英语回应",
+                    detail: "按住屏幕中央的圆点，用英语作答，松开即发送。语音自动转写为文字，无需手动输入。"
                 )
                 workflowRow(
                     number: 3,
-                    title: "AI 听完接话",
-                    detail: "AI 顺着情景接对白，并实时记录每个目标短语「试了没 / 对没」。"
-                )
-                workflowRow(
-                    number: 4,
-                    title: "更新掌握度",
-                    detail: "全部说对或对话结束后自动收尾，把成功使用的短语标记为「会说了」并进入复习间隔。"
+                    title: "对话结束并更新掌握度",
+                    detail: "AI 会逐轮判断每个目标短语是否被正确使用。对话结束后，已正确使用的短语将被标记为「已熟练」并进入间隔复习。"
                 )
             }
         }
@@ -143,33 +149,10 @@ struct QuickChatLauncherView: View {
         }
     }
 
-    // MARK: - Selector rules ("how phrases are chosen")
-
-    private var selectorRules: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("怎么选短语").font(.caption).foregroundStyle(.whatsubInkFaint)
-            VStack(alignment: .leading, spacing: 6) {
-                bullet("优先「认得了但还没说会」（单词卡测验通过、口语未掌握）")
-                bullet("其次「该复习的」（之前会说，但到了间隔复习窗口）")
-                bullet("最后「还不认得的」（同场景能顺便练上）")
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.whatsubBgElev))
-        }
-    }
-
-    private func bullet(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text("•")
-                .font(.footnote)
-                .foregroundStyle(.whatsubAccent)
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(.whatsubInkMuted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
+    // (selectorRules + bullet helpers removed 2026-06-09 — phrase selection
+    // is fully automatic now; the priority order lived in product copy that
+    // we decided not to expose to end users. If we ever need to surface the
+    // rules again, see commit history before 1da1497.)
 
     // MARK: - Turn picker
 
