@@ -71,7 +71,11 @@ struct LlmSettingsView: View {
             } header: {
                 Text("中转模式").foregroundStyle(.whatsubInkMuted)
             } footer: {
-                Text("关闭后请在下方填入自己的 LLM API key(BYOK)")
+                // 2026-06-10 — 显式标明接收方(Apple Guideline 5.1.2(i):
+                // "Specify who the data is sent to")。
+                // 深度求索 (DeepSeek) 是国内有 MIIT 备案的合规服务商,
+                // 跟 China DST/Guideline 5 没冲突。
+                Text("开启时:数据经 whatSub 国内服务器中转后,由「深度求索 (DeepSeek)」提供大模型处理。\n关闭后请在下方填入自己的 LLM API Key(BYOK),数据将直接从设备发给你所选择的服务商,不经过 whatSub。")
                     .font(.caption)
                     .foregroundStyle(.whatsubInkFaint)
             }

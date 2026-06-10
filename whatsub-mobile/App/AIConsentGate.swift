@@ -46,8 +46,9 @@ struct AIConsentGate: View {
                     section(
                         title: "发送给谁",
                         body:
-                            "默认通过 whatSub 国内服务器中转,再发给合规的大模型服务商。\n\n" +
-                            "也可在「我的 → LLM 设置」改用你自己的 API Key,数据将直接从设备发给你选择的服务商,不经过 whatSub 服务器。"
+                            "默认通过 whatSub 在国内的服务器中转,最终由「深度求索 (DeepSeek)」提供大模型处理。" +
+                            "该服务商已取得国内《生成式人工智能服务管理暂行办法》备案,数据全程在中国大陆境内流转。\n\n" +
+                            "也可在「我的 → LLM 设置」关闭托管,改用你自己的 API Key,那时数据将直接从你的设备发给你所选择的服务商,不经过 whatSub 服务器。"
                     )
 
                     section(
@@ -115,18 +116,26 @@ struct AIConsentGate: View {
 }
 
 /// UserDefaults-backed singleton storing the global AI consent acceptance.
-/// `v2` suffix on the key is intentional: it forces any user who acked the
-/// old QuickChat-only gate (`quickchat.compliance.acked.v1`) to see the
-/// expanded global gate at least once on this build, since the v1 wording
-/// didn't disclose the managed-relay path or the per-feature data set.
+/// Version suffix on the key bumps whenever the disclosure copy materially
+/// changes — forces any user who acked the previous version to re-read +
+/// re-accept on the next launch, so consent is meaningful for what we
+/// actually disclose.
 ///
-/// `@MainActor` because `@Published` mutations want to drive SwiftUI updates;
-/// `start()` is sync so view init can read it without async hops.
+///   v1 → 老 QuickChatComplianceGate (claimed "whatSub 不内置 LLM" — false
+///        since the managed relay shipped 2026-06-04)
+///   v2 → 2026-06-09 first global gate but vague recipient ("合规的大模型
+///        服务商"); Apple rejected build 298 for not naming the recipient
+///   v3 → 2026-06-10 names DeepSeek explicitly in the "发送给谁" section
+///        (Apple Guideline 5.1.1/5.1.2 — "specify who the data is sent to")
+///
+/// `@MainActor` because `@Published` mutations drive SwiftUI updates;
+/// `nonisolated static var hasAcceptedRaw` lets non-UI code (chat client
+/// defense gate) read the flag.
 @MainActor
 final class AIConsentStore: ObservableObject {
     static let shared = AIConsentStore()
 
-    private static let key = "ai-consent.v2.accepted"
+    private static let key = "ai-consent.v3.accepted"
 
     @Published private(set) var hasAccepted: Bool
 
@@ -142,6 +151,6 @@ final class AIConsentStore: ObservableObject {
     /// Non-MainActor static read for use from non-UI code (e.g.,
     /// `ChatCompletionsClient.chat()`). UserDefaults read is thread-safe.
     nonisolated static var hasAcceptedRaw: Bool {
-        UserDefaults.standard.bool(forKey: key)
+        UserDefaults.standard.bool(forKey: "ai-consent.v3.accepted")
     }
 }
