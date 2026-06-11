@@ -21,6 +21,14 @@ final class StoreManager: ObservableObject {
     static let subMonthID = "whatsub_pro_month"
     static let subYearID  = "whatsub_pro_year"
 
+    /// Fixed random namespace UUID for derived `appAccountToken`s. Pinned
+    /// so the same email always yields the same UUID across reinstalls,
+    /// across our backend + iOS code, across the lifetime of the product.
+    /// Generated once, NEVER rotated — rotating would orphan every existing
+    /// subscription from server-side reverse-resolution.
+    /// 2026-06-11 (Guideline 2.1(b) follow-up).
+    static let whatsubIAPNamespace = UUID(uuidString: "8A1D4B3F-2E6C-4A9B-B7E5-9D3F8C1E2A6B")!
+
     @Published var purchaseInProgress = false
     @Published var lastError: String?
     @Published var subMonth: Product?
@@ -103,7 +111,24 @@ final class StoreManager: ObservableObject {
         purchaseInProgress = true
         defer { purchaseInProgress = false }
         do {
-            let result = try await product.purchase()
+            // 2026-06-11 — derive appAccountToken from session email
+            // (UUIDv5 with whatsubIAPNamespace) so that:
+            //   1. Every JWS our /verify endpoint sees carries the token
+            //      and stores it in iap_account_tokens.
+            //   2. Every later ASSN webhook (DID_RENEW / EXPIRED / REFUND)
+            //      carries the same token, letting the backend reverse-
+            //      resolve the owner email even if /verify never reached
+            //      us (network outage, OCSP failure, etc.).
+            // When not signed in (user paying without a session — shouldn't
+            // happen but UI doesn't enforce), fall back to a random UUID:
+            // Apple still accepts the purchase, just no reverse-resolution.
+            let email = KeychainStore.load()?.email ?? ""
+            let appAccountUUID: UUID = email.isEmpty
+                ? UUID()
+                : UUID.v5(name: email.trimmingCharacters(in: .whitespaces).lowercased(),
+                          namespace: Self.whatsubIAPNamespace)
+
+            let result = try await product.purchase(options: [.appAccountToken(appAccountUUID)])
             switch result {
             case .success(let verification):
                 return await process(verification)
@@ -122,16 +147,21 @@ final class StoreManager: ObservableObject {
     }
 
     /// Restore prior purchases (换机/重装). Forces a StoreKit sync, then re-reports
-    /// any current entitlements to the backend.
+    /// any current entitlements to the backend. Same fire-and-forget treatment
+    /// as `process()` — UI doesn't wait on the backend roundtrip; local
+    /// StoreKit entitlements drive hasLocalSub immediately.
     func restore() async {
         do {
             try await AppStore.sync()
         } catch {
             // user-cancelled or offline — fall through to whatever StoreKit already has
         }
-        for await result in Transaction.currentEntitlements {
-            if case .verified = result {
-                await reportVerifiedJWS?(result.jwsRepresentation)
+        if let report = reportVerifiedJWS {
+            for await result in Transaction.currentEntitlements {
+                if case .verified = result {
+                    let jws = result.jwsRepresentation
+                    Task { await report(jws) }
+                }
             }
         }
         await refreshLocalEntitlements()
@@ -143,7 +173,18 @@ final class StoreManager: ObservableObject {
     private func process(_ result: VerificationResult<Transaction>) async -> Bool {
         switch result {
         case .verified(let transaction):
-            await reportVerifiedJWS?(result.jwsRepresentation)
+            // 2026-06-11 — reportVerifiedJWS now fires-and-forgets in a
+            // detached Task so the UI doesn't hang while the backend
+            // /verify roundtrip (potentially 3 retries × backoff = ~5 s)
+            // completes. Local StoreKit entitlements update IMMEDIATELY
+            // via refreshLocalEntitlements() below, so hasLocalSub
+            // becomes true the moment Apple confirmed — MeView reads
+            // hasLocalSub as a Pro signal even before /me catches up.
+            // Apple Guideline 2.1(b) fix.
+            if let report = reportVerifiedJWS {
+                let jws = result.jwsRepresentation
+                Task { await report(jws) }
+            }
             await transaction.finish()
             await refreshLocalEntitlements()
             return true

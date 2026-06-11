@@ -83,24 +83,30 @@ struct MeView: View {
                             LabeledContent("个人语料库", value: "\(cq.used)/\(cq.limit)")
                                 .foregroundStyle(.whatsubInk)
                         }
-                        // Suppress the upsell for ANY active subscriber — iOS
-                        // StoreKit OR a website/plugin Alipay 时段会员 (same email).
-                        // Gating on hasActiveSubscription (not iosSubActive) stops a
-                        // cross-platform web subscriber from being shown the 订阅 Pro
-                        // button and double-charging via StoreKit. The 管理订阅
-                        // (StoreKit) button only applies to an iOS-originated sub;
-                        // a web sub is managed on the web/插件, so we just show the
-                        // subscribed badge. We do NOT add any "buy on web" steering
-                        // here (App Store 3.1.1).
-                        if appState.currentUser?.hasActiveSubscription == true {
+                        // 2026-06-11 — was "if currentUser.hasActiveSubscription ==
+                        // true". Apple Guideline 2.1(b) rejected build 299:
+                        // reviewer purchased via StoreKit but the /verify
+                        // round-trip to our backend failed transiently, so
+                        // refreshMe still returned hasActiveSubscription=false
+                        // → UI showed 「未订阅」 → reviewer logged it as
+                        // "purchase not credited". Now we OR in
+                        // `store.hasLocalSub` (StoreKit's local verification
+                        // of an active sub on this device) — so the moment
+                        // Apple confirms the sub via the sandbox/StoreKit,
+                        // the UI shows Pro even if our backend hasn't yet
+                        // caught up. The backend retry + refreshMe still
+                        // happens in the background.
+                        let proActive = appState.currentUser?.hasActiveSubscription == true
+                            || store.hasLocalSub
+                        if proActive {
                             Label(
-                                appState.currentUser?.iosSubActive == true
+                                (appState.currentUser?.iosSubActive == true || store.hasLocalSub)
                                     ? "已订阅 · \(subPlanName)"
                                     : "已订阅 Pro",
                                 systemImage: "checkmark.seal.fill"
                             )
                             .foregroundStyle(.whatsubAccent)
-                            if appState.currentUser?.iosSubActive == true {
+                            if appState.currentUser?.iosSubActive == true || store.hasLocalSub {
                                 Button("管理订阅") { showManageSubscriptions = true }
                                     .foregroundStyle(.whatsubAccent)
                             }
@@ -262,14 +268,21 @@ struct MeView: View {
             if let user = appState.currentUser {
                 if user.hasActiveLicense {
                     statusLabel("网站授权 · 有效", "checkmark.seal.fill", .green)
-                } else if user.hasActiveSubscription == true {
-                    // Any active subscription — iOS StoreKit OR web/插件 Alipay
-                    // 时段会员 (same email). Was iosSubActive, which mislabeled a
-                    // cross-platform web subscriber as 免费版.
+                } else if user.hasActiveSubscription == true || store.hasLocalSub {
+                    // Same hasLocalSub OR added 2026-06-11 — backend may lag
+                    // a fresh StoreKit purchase by a few seconds (transient
+                    // /verify failure + retry). Showing Pro the moment
+                    // StoreKit confirms locally fixes Apple's Guideline
+                    // 2.1(b) "purchase not credited" rejection.
                     statusLabel("已订阅 Pro", "checkmark.seal.fill", .whatsubAccent)
                 } else {
                     statusLabel("免费版", "person.crop.circle", .whatsubInkMuted)
                 }
+            } else if store.hasLocalSub {
+                // No /me response yet (cold launch + offline + had Pro
+                // before). Trust StoreKit's local entitlement so we don't
+                // mislabel a paying user as 查询中…
+                statusLabel("已订阅 Pro", "checkmark.seal.fill", .whatsubAccent)
             } else {
                 Text("查询中…").foregroundStyle(.whatsubInkFaint)
             }

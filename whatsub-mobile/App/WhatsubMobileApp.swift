@@ -89,9 +89,41 @@ struct ContentView: View {
         // ("Apps may not freeze on launch") rejection.
         .task(id: appState.isAuthenticated) {
             guard appState.isAuthenticated else { gateReady = false; return }
+            // 2026-06-11 — was `try? await ...` which silently swallowed every
+            // backend /verify failure. Apple's reviewer purchased successfully
+            // via StoreKit but the call to /api/license/iap/verify failed
+            // (likely a transient network blip OR OCSP-from-Beijing flakiness)
+            // and the user saw "未订阅" with no error. Apple flagged it as
+            // Guideline 2.1(b) "purchased product not credited".
+            //
+            // Now we retry up to 3 times with exponential backoff, surface
+            // any final failure into StoreManager.lastError (which MeView
+            // already renders), and ALWAYS call refreshMe afterward so
+            // /me sees the new entitlement.
             store.reportVerifiedJWS = { jws in
                 guard let token = appState.session?.sessionToken else { return }
-                try? await WhatsubAPI.shared.verifyPurchase(token: token, signedTransactionInfo: jws)
+                let backoffs: [UInt64] = [0, 500_000_000, 2_000_000_000]
+                var lastErr: Error?
+                for delay in backoffs {
+                    if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+                    do {
+                        try await WhatsubAPI.shared.verifyPurchase(
+                            token: token, signedTransactionInfo: jws,
+                        )
+                        lastErr = nil
+                        break
+                    } catch {
+                        lastErr = error
+                    }
+                }
+                if let err = lastErr {
+                    await MainActor.run {
+                        let msg = (err as? LocalizedError)?.errorDescription
+                            ?? err.localizedDescription
+                        store.lastError =
+                            "购买已扣款,但向服务器登记会员状态失败,请稍后到「我的」下拉刷新,或联系客服。(\(msg))"
+                    }
+                }
                 await appState.refreshMe()
             }
             store.start()
