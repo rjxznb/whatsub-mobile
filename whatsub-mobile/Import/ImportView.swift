@@ -210,7 +210,7 @@ struct ImportView: View {
                                 cue: cue,
                                 isCurrent: false,
                                 onTapCue: {},
-                                onTapHighlight: { _, _, _ in },  // import preview: no gloss sheet
+                                onTapHighlight: { _, _, _, _ in },  // import preview: no gloss sheet
                                 onCollect: {}                    // import preview: no notebook yet
                             )
                         }

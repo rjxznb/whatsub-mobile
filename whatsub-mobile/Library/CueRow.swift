@@ -7,8 +7,10 @@ struct CueRow: View {
     /// or the row's empty area.
     let onTapCue: () -> Void
     /// Tapping a highlighted phrase shows its 释义 (and does NOT seek). Carries the
-    /// phrase + its translation/note looked up from the cue.
-    let onTapHighlight: (_ phrase: String, _ translation: String?, _ note: String?) -> Void
+    /// phrase + its translation/note looked up from the cue + the cue itself so
+    /// the gloss sheet can build a `PendingPhrase` if the user hits 收藏 (uses
+    /// `cue.text` as context sentence + `cue.time` as timestamp).
+    let onTapHighlight: (_ phrase: String, _ translation: String?, _ note: String?, _ cue: Cue) -> Void
     /// Long-press → 收藏 entry from the contextMenu.
     let onCollect: () -> Void
     /// Long-press → 跟读 (shadowing) entry from the contextMenu. Defaults to no-op
@@ -51,7 +53,7 @@ struct CueRow: View {
                         .underline(isHL, color: .whatsubHighlight)
                         .onTapGesture {
                             if let p = tok.phrase {
-                                onTapHighlight(p, cue.highlightTranslations[p], cue.keyNotes[p])
+                                onTapHighlight(p, cue.highlightTranslations[p], cue.keyNotes[p], cue)
                             } else {
                                 onTapCue()
                             }

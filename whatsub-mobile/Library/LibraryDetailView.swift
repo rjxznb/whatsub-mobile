@@ -365,7 +365,28 @@ struct LibraryDetailView: View {
                             cue: cue,
                             isCurrent: cue.index == vm.currentIndex,
                             onTapCue: { vm.seekTo(cue) },
-                            onTapHighlight: { w, t, n in glossWord = WordGloss(word: w, translation: t, note: n) },
+                            onTapHighlight: { w, t, n, cue in
+                                // Build the gloss WITH a save context so the
+                                // sheet's 「加入待同步暂存」 button can fire a
+                                // PendingPhrase straight from the popup —
+                                // shortcut for users who like the highlight
+                                // gloss and want to collect it without going
+                                // through the long-press CollectSheet flow.
+                                glossWord = WordGloss(
+                                    word: w,
+                                    translation: t,
+                                    note: n,
+                                    saveContext: vm.entry.map { e in
+                                        WordGloss.SaveContext(
+                                            entryId: e.id,
+                                            videoTitle: e.title,
+                                            youtubeId: e.youtubeId,
+                                            contextSentence: cue.text,
+                                            timestampSec: cue.time
+                                        )
+                                    }
+                                )
+                            },
                             onCollect: { collectCue = cue },
                             onShadow: { shadowCue = cue },
                             onCloze: { clozeCue = cue }
