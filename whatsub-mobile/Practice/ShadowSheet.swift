@@ -31,6 +31,17 @@ struct ShadowSheet: View {
     /// stopped on dismiss.
     @State private var playbackPlayer: AVAudioPlayer?
     @State private var isPlayingRecording = false
+    /// User-chosen playback speed for the ORIGINAL cue audio (not the user's
+    /// recording — own-voice slowdown sounds unnatural and isn't what the
+    /// drill needs). Persisted across sheet opens + app launches via
+    /// UserDefaults so once the user picks 0.65× they don't re-pick it for
+    /// every cue. Pitch is preserved via CueAudioPlayer's `.spectral`
+    /// algorithm so 0.5× still sounds like the speaker.
+    @AppStorage("shadow.playbackRate") private var playbackRate: Double = 1.0
+    /// Slow→fast presets tuned for connected-speech parsing (连读细听). Denser
+    /// in the slow range (0.5/0.65/0.8) since that's where the drill happens,
+    /// vs YouTube's 0.25-step uniform pattern.
+    private let availableRates: [Double] = [0.5, 0.65, 0.8, 1.0]
 
     enum Phase: Equatable {
         case idle
@@ -61,6 +72,7 @@ struct ShadowSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     cueCard
+                    speedPicker
                     actionArea
                     if let diff { resultCard(diff) }
                 }
@@ -106,6 +118,44 @@ struct ShadowSheet: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.whatsubBgElev))
+    }
+
+    // ----------------------------------------------------------- speed picker
+
+    /// Horizontal capsule chip row for the playback-speed presets. Tapping a
+    /// chip writes through `@AppStorage` so the next 听原文 (and any A/B
+    /// compare playback) uses the new rate. Default 1.0 keeps first-time
+    /// experience unchanged; users who never tap it never notice it.
+    private var speedPicker: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tortoise.fill")
+                .font(.caption)
+                .foregroundStyle(.whatsubInkFaint)
+            ForEach(availableRates, id: \.self) { rate in
+                let selected = playbackRate == rate
+                Button {
+                    playbackRate = rate
+                } label: {
+                    Text(rateLabel(rate))
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule().fill(selected ? Color.whatsubAccent : Color.whatsubBgElev)
+                        )
+                        .foregroundStyle(selected ? Color.whatsubBg : Color.whatsubInkSoft)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("播放速度 \(rateLabel(rate))")
+            }
+            Spacer()
+        }
+    }
+
+    private func rateLabel(_ r: Double) -> String {
+        if r == 1.0 { return "原速" }
+        // 0.5 → "0.5×", 0.65 → "0.65×", 0.8 → "0.8×" (no trailing zero)
+        return "\(String(format: "%g", r))×"
     }
 
     // ---------------------------------------------------------------- actions
@@ -313,10 +363,15 @@ struct ShadowSheet: View {
     private func playOriginal() async {
         guard videoURL != nil else { return }
         phase = .playingOriginal
-        audio.play(from: cue.time, to: cue.endTime)
+        let rate = Float(playbackRate)
+        audio.play(from: cue.time, to: cue.endTime, rate: rate)
         // Wait through the cue duration so the button reflects 播放中.
-        let dur = max(0.4, cue.endTime - cue.time)
-        try? await Task.sleep(nanoseconds: UInt64(dur * 1_000_000_000))
+        // Wall-clock duration scales inversely with rate: 0.5× takes 2× as
+        // long. Without this scaling the phase would flip back to .idle
+        // before the audio finished, breaking the button state.
+        let mediaDuration = max(0.4, cue.endTime - cue.time)
+        let wallDuration = mediaDuration / max(0.1, playbackRate)
+        try? await Task.sleep(nanoseconds: UInt64(wallDuration * 1_000_000_000))
         phase = .idle
     }
 

@@ -163,7 +163,14 @@ final class CueAudioPlayer: ObservableObject {
     }
 
     /// Play [cue.time, cue.endTime] then pause. Replayable by calling again.
-    func play(from start: Double, to end: Double) {
+    ///
+    /// `rate`: 1.0 = original speed. Non-1.0 values are useful for ShadowSheet's
+    /// slow-listening drill (parsing connected speech / 连读). The cue's pitch
+    /// is preserved via `audioTimePitchAlgorithm = .spectral` so 0.5× still
+    /// sounds like the speaker (not a low growl, which is the default
+    /// AVPlayer behaviour without a pitch algorithm set). Defaults to 1.0 so
+    /// existing callers (ClozeSheet) are unchanged.
+    func play(from start: Double, to end: Double, rate: Float = 1.0) {
         endTime = end
         // Eager isLoading flip — the KVO observer will refine to .playing once
         // AVPlayer is actually emitting audio (or back to .paused on cancel).
@@ -171,6 +178,11 @@ final class CueAudioPlayer: ObservableObject {
         // round-trip even though the user already tapped.
         isLoading = true
         isPlaying = false
+        // Pitch preservation — set on every play() so it survives a player-item
+        // swap. `.spectral` is the most natural-sounding algorithm for voice at
+        // non-1.0 rates (Apple docs: "high quality, lower performance, best for
+        // music or voice"). Cost is negligible for short cues.
+        player.currentItem?.audioTimePitchAlgorithm = .spectral
         let startCM = CMTime(seconds: max(0, start), preferredTimescale: 600)
         let endCM = CMTime(seconds: end + 0.05, preferredTimescale: 600) // 50ms tail
         player.currentItem?.forwardPlaybackEndTime = endCM
@@ -181,6 +193,12 @@ final class CueAudioPlayer: ObservableObject {
             // Otherwise users see "暂停" while the OSS video is still buffering
             // its first range (could be ~1 min on big videos).
             self.player.play()
+            // Apply rate AFTER play() — setting rate before the player is in
+            // .playing state can be silently ignored. play() always resets
+            // rate to 1.0, so this is the canonical insertion point.
+            if rate != 1.0 {
+                self.player.rate = rate
+            }
             self.attachAutoStop()
         }
     }
