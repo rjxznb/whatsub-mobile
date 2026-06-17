@@ -34,22 +34,7 @@ struct ImportView: View {
             case .idle:
                 idleBody
             case .extracting:
-                ZStack {
-                    progressBody(icon: "captions.bubble", label: "提取字幕中…（需挂 VPN）", progress: nil)
-                    // Host the hidden CaptionExtractor WKWebView at near-zero
-                    // opacity. Mounting it in the view tree (vs. detached) lets
-                    // YouTube's player see a non-zero viewport + visible
-                    // document → bypasses the off-screen caption-suspension
-                    // path. 320×180 frame matches what CaptionExtractor sets
-                    // internally so layout doesn't reflow on mount.
-                    if let web = vm.liveWebView {
-                        WKWebViewHost(webView: web)
-                            .frame(width: 320, height: 180)
-                            .opacity(0.001)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
+                extractingBody
             case .analyzing(let done, let total):
                 progressBody(
                     icon: "sparkles",
@@ -287,6 +272,62 @@ struct ImportView: View {
         }
     }
 
+    // MARK: - Extracting (visible YT player + status)
+
+    /// During extraction we show the WKWebView at full opacity. Three
+    /// benefits over the previous opacity-0.001 invisible mount:
+    ///   1. User can see YouTube actually loading + playing, which makes
+    ///      the 15-25s wait less mysterious ("did it freeze?" → no,
+    ///      look, the video's literally on screen).
+    ///   2. YouTube's IntersectionObserver / visibilityState checks see
+    ///      a fully-visible player → no chance of caption-track
+    ///      suspension on visibility grounds (previously a guess).
+    ///   3. The hook's `setInterval` mute keeps audio silent so it's
+    ///      not a UX nuisance. allowsHitTesting(false) prevents the user
+    ///      accidentally tapping pause / scrub mid-extraction.
+    private var extractingBody: some View {
+        VStack(spacing: 16) {
+            Spacer()
+
+            ProgressView()
+                .tint(.whatsubAccent)
+                .scaleEffect(1.2)
+
+            Text("字幕提取中…")
+                .font(.headline)
+                .foregroundStyle(.whatsubInk)
+
+            if let web = vm.liveWebView {
+                WKWebViewHost(webView: web)
+                    .frame(width: 320, height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        // Matches the website brand token `--hairline-strong`
+                        // (rgba(255,255,255,0.14)). Theme.swift doesn't ship a
+                        // named static for it, so inline the literal here.
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                    )
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+
+            VStack(spacing: 4) {
+                Text("YouTube 播放器正在加载视频字幕轨")
+                    .font(.subheadline)
+                    .foregroundStyle(.whatsubInkMuted)
+                Text("需挂 VPN · 不要锁屏 · 大概 15-25 秒")
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkFaint)
+            }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal)
+
+            Spacer()
+        }
+        .padding()
+    }
+
     // MARK: - Extract Failed (offer push to desktop)
 
     private func pushOfferBody(title: String, message: String, debug: [String] = []) -> some View {
@@ -301,17 +342,13 @@ struct ImportView: View {
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
 
+            // Single explanation paragraph — the CaptionError's
+            // localized description already covers everything (likely
+            // causes + next-step CTAs). 2026-06-18: a previous version
+            // had a second hardcoded "此视频可能没有字幕…" block under
+            // a divider that just repeated the same info; user pointed
+            // it out, removed.
             Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.whatsubInkMuted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-
-            Divider()
-                .background(Color.white.opacity(0.1))
-                .padding(.horizontal, 24)
-
-            Text("此视频可能没有字幕。可推送到桌面端处理（桌面会下载 + whisper 转录 + 解析，需桌面在线且登录同一账号）。")
                 .font(.subheadline)
                 .foregroundStyle(.whatsubInkMuted)
                 .multilineTextAlignment(.center)

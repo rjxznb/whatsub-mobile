@@ -10,13 +10,20 @@ import os.log
 enum CaptionError: Error, LocalizedError {
     case timeout
     case emptyResult
+    /// YouTube redirected to accounts.google.com mid-extraction — meaning
+    /// BotGuard wants a signed-in session before serving captions. We
+    /// can't satisfy this from a cookie-less WKWebView; pushing to desktop
+    /// (which runs yt-dlp with a real cookies file) is the only path.
+    case requiresLogin
 
     var errorDescription: String? {
         switch self {
         case .timeout:
-            return "未捕获到字幕。可能是该视频没有英文字幕，或 YouTube 又改了播放器接口路径。点「查看诊断」看到底哪一步挂了，或先点「推送到桌面端」让 Whisper 转录。"
+            return "未捕获到字幕。可能是 YouTube 对本会话反爬升级了，或视频本身没有英文字幕。点「查看诊断」看挂在哪一步，或「推送到桌面端」让 Whisper 转录。"
         case .emptyResult:
             return "字幕解析结果为空，请确认该视频有英文字幕。"
+        case .requiresLogin:
+            return "YouTube 要求登录才能访问字幕（BotGuard 反爬，手机端无法满足）。请「推送到桌面端」让 yt-dlp 用桌面 cookies 处理。"
         }
     }
 }
@@ -81,11 +88,23 @@ final class CaptionExtractor: NSObject {
         }
     }
 
+    /// Stored so `webView(_:didFinish:)` can navigate to the watch URL once
+    /// the homepage warmup completes (or its 2s window elapses).
+    private var pendingVideoId: String?
+    private var warmupComplete = false
+
     private func setupWebView(videoId: String,
                               onWebViewReady: @MainActor (WKWebView) -> Void) {
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
+        // 2026-06-18 — explicit persistent cookie store. WKWebViewConfiguration
+        // already defaults to .default() (persistent) on iOS, but stating it
+        // here makes the intent obvious for future readers: we WANT cookies
+        // to survive across extractor instances so YouTube's BotGuard
+        // reputation accumulates ("repeat visitor" beats "fresh bot every
+        // time"). Don't change to `.nonPersistent()` — that's what bit us.
+        cfg.websiteDataStore = WKWebsiteDataStore.default()
 
         // Install hook in the page world at document start so it runs
         // before the player's first network call.
@@ -129,25 +148,51 @@ final class CaptionExtractor: NSObject {
         // and YouTube sometimes still flags it as backgrounded.
         onWebViewReady(web)
 
-        // Load watch page with CC forced on. cc_load_policy=1 is now
-        // best-effort (YouTube respects it inconsistently), but combined
-        // with the desktop UA above + the player-API synth fetch in
-        // CaptionHookJS it's still helpful as a hint.
-        let urlString = "https://www.youtube.com/watch?v=\(videoId)&cc_load_policy=1"
-        guard let url = URL(string: urlString) else {
-            appendDebug("invalid URL string")
-            resumeOnce(throwing: CaptionError.emptyResult)
-            return
-        }
-        appendDebug("loading \(urlString)")
-        web.load(URLRequest(url: url))
+        // 2026-06-18 — Two-step navigation: homepage warmup, then watch URL.
+        // Loading youtube.com/ first gives YouTube a "user visited the
+        // homepage then clicked a video" interaction trail in the visitor-
+        // cookie state. Combined with persistent data store above, this is
+        // the cheapest way to look like a returning user — which is what
+        // BotGuard's "real human vs bot" score actually looks at.
+        pendingVideoId = videoId
+        warmupComplete = false
+        appendDebug("warmup: loading youtube.com")
+        web.load(URLRequest(url: URL(string: "https://www.youtube.com/")!))
 
-        // Timeout after 25 seconds.
+        // Hard cap on warmup duration — if homepage didFinish never fires
+        // (slow network, blocked domain), force the watch navigation after
+        // 3.5s so we don't burn the full 25s budget on the warmup alone.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            guard let self, !self.warmupComplete, !self.resumed else { return }
+            self.appendDebug("warmup: max 3.5s elapsed, forcing watch navigation")
+            self.navigateToWatch()
+        }
+
+        // Outer timeout — 25s from setup to first cues. Same budget as
+        // before; warmup eats ~1.5-3.5s of that, leaving ~20s for the
+        // watch URL + player + caption fetch.
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 25_000_000_000)
             self?.appendDebug("timeout after 25s")
             self?.resumeOnce(throwing: CaptionError.timeout)
         }
+    }
+
+    /// Trigger the watch-URL navigation after warmup completes. Idempotent:
+    /// the navigation delegate calls it on homepage didFinish, AND the
+    /// 3.5s timer calls it as a fallback — only the first one runs.
+    private func navigateToWatch() {
+        guard !warmupComplete, let videoId = pendingVideoId, let web = webView else { return }
+        warmupComplete = true
+        let urlString = "https://www.youtube.com/watch?v=\(videoId)&cc_load_policy=1"
+        guard let url = URL(string: urlString) else {
+            appendDebug("invalid watch URL")
+            resumeOnce(throwing: CaptionError.emptyResult)
+            return
+        }
+        appendDebug("post-warmup: loading \(urlString)")
+        web.load(URLRequest(url: url))
     }
 
     private func appendDebug(_ event: String) {
@@ -232,6 +277,27 @@ extension CaptionExtractor: WKScriptMessageHandler {
 // MARK: - WKNavigationDelegate
 
 extension CaptionExtractor: WKNavigationDelegate {
+
+    /// Intercept the sign-in redirect early so we throw a clear
+    /// .requiresLogin instead of silently waiting out the 25s timeout.
+    /// Captured here (not in didFinish) so we abort BEFORE the page loads
+    /// — saves time and keeps `synth_fetch` from pulling 2MB of sign-in
+    /// HTML into the debug log.
+    nonisolated func webView(_ webView: WKWebView,
+                             decidePolicyFor navigationAction: WKNavigationAction,
+                             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if let host = navigationAction.request.url?.host, host.contains("accounts.google.com") {
+            let urlStr = navigationAction.request.url?.absoluteString ?? "?"
+            Task { @MainActor [weak self] in
+                self?.appendDebug("blocked sign-in nav: \(urlStr)")
+                self?.resumeOnce(throwing: CaptionError.requiresLogin)
+            }
+            decisionHandler(.cancel)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
     nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         let url = webView.url?.absoluteString ?? "?"
         Task { @MainActor [weak self] in self?.appendDebug("nav: start \(url)") }
@@ -239,7 +305,17 @@ extension CaptionExtractor: WKNavigationDelegate {
 
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let url = webView.url?.absoluteString ?? "?"
-        Task { @MainActor [weak self] in self?.appendDebug("nav: finish \(url)") }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.appendDebug("nav: finish \(url)")
+            // If warmup just finished (homepage loaded), schedule the watch
+            // navigation. 1.5s dwell on homepage so YouTube's analytics +
+            // cookie state settle before we ask it for a video.
+            if !self.warmupComplete, !url.contains("watch?v="), url.contains("youtube.com") {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                self.navigateToWatch()
+            }
+        }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

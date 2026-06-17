@@ -57,20 +57,37 @@ enum CaptionHookJS {
 
       postDebug("hook_installed", location.href);
 
-      // 2026-06-18 — Aggressive measures (B): WKWebView without cookies +
-      // without user gesture history is YouTube's "cold visitor" → mobile-
-      // web defaults to CC OFF and the player won't start autoplay. Three
-      // nudges, spaced so they fire AFTER the player has initialized. Each
-      // is wrapped in try/catch + telemetry so a failure of one doesn't
-      // affect the others.
+      // Mute any <video> as soon as it shows up + keep muting on a 500ms
+      // interval. With WebView-now-visible (item 7) the user would
+      // otherwise hear YouTube playback audio during the 25s extract
+      // window — annoying. We don't care about audio (we want timedtext),
+      // and muted autoplay is more permissive in WebKit too.
+      function muteAllVideos() {
+        try {
+          var vs = document.querySelectorAll('video');
+          for (var i = 0; i < vs.length; i++) {
+            vs[i].muted = true;
+            vs[i].volume = 0;
+          }
+        } catch(e){}
+      }
+      muteAllVideos();
+      setInterval(muteAllVideos, 500);
+
+      // 2026-06-18 — Aggressive measures (B → revised): use a real player-
+      // ready signal instead of hardcoded setTimeout. Two failure modes
+      // observed in the wild:
+      //   • t=4s nudge_cc_no_button fires because YouTube player still
+      //     hasn't built the controls DOM (slow connection).
+      //   • t=6s nudge_any_candidates n=4 (now they exist) but it's too
+      //     late — synth_fetch has already 404'd on the bot-signed URL.
+      // Fix: poll for `<video>` OR `.ytp-subtitles-button` every 300ms;
+      // fire the nudge chain the moment either appears. Max 15s budget
+      // before giving up (still inside our 25s outer timeout).
       //
-      //   t=2.5s — programmatic <video>.play() (muted first, which Safari
-      //            allows without a gesture). Triggers the timedtext fetch
-      //            path that wouldn't otherwise fire.
-      //   t=4.0s — programmatic click on `.ytp-subtitles-button` so CC
-      //            turns on even when cc_load_policy=1 was ignored.
-      //   t=6.0s — last-ditch search for any caption-track toggle and
-      //            click it. Catches DOM renames YouTube does periodically.
+      // Also: CC click is now GUARDED on aria-pressed !== 'true' so we
+      // don't accidentally TURN OFF an already-on CC. The 2026-06-18 log
+      // showed `pressed=true` → we click → CC goes off → timedtext stops.
       function nudgeVideoPlay() {
         try {
           var v = document.querySelector('video');
@@ -91,6 +108,10 @@ enum CaptionHookJS {
           if (!btn) { postDebug("nudge_cc_no_button", ""); return; }
           var pressed = btn.getAttribute('aria-pressed');
           postDebug("nudge_cc_pre_click", "pressed=" + pressed);
+          if (pressed === 'true') {
+            postDebug("nudge_cc_already_on", "skipping click");
+            return;
+          }
           btn.click();
           postDebug("nudge_cc_clicked", "");
         } catch(e) { postDebug("nudge_cc_fail", String(e)); }
@@ -101,14 +122,43 @@ enum CaptionHookJS {
           // .ytp-button[data-tooltip-target-id*=subtitle] etc.
           var candidates = document.querySelectorAll('[aria-label*="ubtitle" i], [aria-label*="字幕"], [data-tooltip-target-id*="ubtitle" i]');
           postDebug("nudge_any_candidates", "n=" + candidates.length);
+          var clicked = 0;
           for (var i = 0; i < candidates.length; i++) {
-            try { candidates[i].click(); } catch(e){}
+            // Same guard — skip already-pressed toggles. Caption menus
+            // and language selectors don't have aria-pressed so the
+            // skip only fires for actual toggle buttons.
+            var el = candidates[i];
+            if (el.getAttribute && el.getAttribute('aria-pressed') === 'true') continue;
+            try { el.click(); clicked++; } catch(e){}
           }
+          postDebug("nudge_any_clicked", "n=" + clicked);
         } catch(e) { postDebug("nudge_any_fail", String(e)); }
       }
-      setTimeout(nudgeVideoPlay, 2500);
-      setTimeout(nudgeCCButton, 4000);
-      setTimeout(nudgeAnyCaptionToggle, 6000);
+      // Player-ready poller. Fires the nudge chain once <video> exists
+      // OR the CC button exists (whichever comes first). Falls back to
+      // best-effort if neither shows up by maxWait.
+      function waitForPlayerReady(cb, maxWait) {
+        var start = Date.now();
+        function check() {
+          if (document.querySelector('video') || document.querySelector('.ytp-subtitles-button')) {
+            postDebug("player_ready", "after=" + (Date.now() - start) + "ms");
+            cb();
+            return;
+          }
+          if (Date.now() - start > maxWait) {
+            postDebug("player_ready_timeout", "after=" + (Date.now() - start) + "ms");
+            cb();
+            return;
+          }
+          setTimeout(check, 300);
+        }
+        check();
+      }
+      waitForPlayerReady(function() {
+        nudgeVideoPlay();
+        setTimeout(nudgeCCButton, 800);
+        setTimeout(nudgeAnyCaptionToggle, 2000);
+      }, 15000);
 
       function handlePlayerResponse(url, body) {
         try {
