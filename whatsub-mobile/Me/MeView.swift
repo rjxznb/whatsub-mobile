@@ -17,6 +17,13 @@ struct MeView: View {
     /// who swipe-dismissed it or wants to re-read needs a non-restart path.
     /// 2026-06-09 (App Store Guideline 5.1.1/5.1.2 follow-up).
     @State private var showAIConsent = false
+    /// 锁屏继续播放 — 2026-06-17. Persists to UserDefaults via @AppStorage.
+    /// Default false to match pre-2026-06-17 behavior (video pauses on lock)
+    /// and to give Apple Review the user-opt-in framing for the re-added
+    /// UIBackgroundModes: audio entitlement. Read at background-entry by
+    /// BackgroundAudioCoordinator using the same UserDefaults key.
+    @AppStorage(BackgroundAudioCoordinator.preferenceKey)
+    private var backgroundPlaybackEnabled: Bool = false
     // (showPhotoCapture / showLiveScene removed 2026-06-05 — the 拍照翻译
     // (was 拍照识别短语) + 实景口语练习 entries moved to the new 「眼前」
     // tab. 导入视频 also gone — now a "+" button on the Library tab.
@@ -130,6 +137,26 @@ struct MeView: View {
                             .foregroundStyle(.whatsubInk)
                         Link("官网 whatsub.eversay.cc", destination: URL(string: "https://whatsub.eversay.cc")!)
                             .foregroundStyle(.whatsubAccent)
+                    }
+                    .listRowBackground(Color.whatsubBgElev)
+
+                    Section("播放") {
+                        // 锁屏继续播放 — opt-in for UIBackgroundModes: audio
+                        // (2026-06-17). Default OFF. When ON: Library video
+                        // audio survives screen lock + lock-screen card
+                        // shows title/thumb + ±15s skip. When OFF:
+                        // BackgroundAudioCoordinator pauses the player on
+                        // didEnterBackground (matches pre-2026-06-17 behavior).
+                        Toggle(isOn: $backgroundPlaybackEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label("锁屏继续播放", systemImage: "lock.iphone")
+                                    .foregroundStyle(.whatsubInk)
+                                Text("锁屏或切换 app 后，视频音频继续播放")
+                                    .font(.caption)
+                                    .foregroundStyle(.whatsubInkMuted)
+                            }
+                        }
+                        .tint(.whatsubAccent)
                     }
                     .listRowBackground(Color.whatsubBgElev)
 

@@ -106,15 +106,27 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
-        # 2026-06-09 — UIBackgroundModes audio dropped per App Store review feedback
-        # (Guideline 2.5.4): reviewer couldn't locate any persistent-audio feature
-        # justifying the entitlement. Was originally added for native-AVPlayer
-        # Picture-in-Picture, but PiP itself was a nice-to-have, not a primary
-        # feature. PiP also disabled in VideoPlayerView.swift to match. To
-        # re-enable in future: add `audio` back here AND flip PiP back on in
-        # VideoPlayerView, AND attach a screen recording to ASC review notes
-        # showing the PiP-in-background flow on a physical device (per Apple's
-        # ask in the rejection).
+        # 2026-06-17 — UIBackgroundModes: audio RE-ADDED to support the
+        # user-toggleable 「锁屏继续播放」 feature in MeView's 「播放」
+        # section. Default OFF, so first launch matches v0.0.x (no
+        # background audio). When the user opts in, lock-screen audio
+        # continues + Now Playing card surfaces video title + thumbnail
+        # + ±15s skip controls (wired in `BackgroundAudioCoordinator.swift`).
+        #
+        # Originally dropped 2026-06-09 because Apple Review (Guideline
+        # 2.5.4) couldn't find a persistent-audio surface justifying the
+        # entitlement — the entitlement at that point only existed for
+        # PiP, which was discretionary. This round the justification is
+        # explicit and user-driven: the toggle is the entitlement's
+        # raison d'être. ASC review notes for the next submission MUST
+        # call out the MeView 「锁屏继续播放」 path so the reviewer
+        # locates it. Demo flow: 我的 → 播放 → toggle on → open any
+        # Library video → play → lock screen.
+        #
+        # PiP stays OFF (`allowsPictureInPicturePlayback = false`) — re-
+        # add it only if users specifically ask for floating-window UX.
+        UIBackgroundModes:
+          - audio
         # 跟读 (shadowing) practice — records short user speech then runs
         # SFSpeechRecognizer to score against the cue text. Both keys required
         # on first invocation; iOS shows the system permission alerts.

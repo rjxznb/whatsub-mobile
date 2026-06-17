@@ -172,6 +172,11 @@ struct LibraryDetailView: View {
                     seek: vm.seek,
                     currentCue: vm.currentCue,
                     showCaptions: showCaptions,
+                    // Feed Now Playing center metadata for the lock-screen
+                    // card (when the user has 「锁屏继续播放」 on). Title
+                    // + thumb come straight from the entry payload.
+                    title: entry.title,
+                    thumbURL: entry.thumbUrl.flatMap(URL.init),
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )

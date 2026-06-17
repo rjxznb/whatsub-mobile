@@ -21,6 +21,16 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     var currentCue: Cue?
     /// CC toggle — when false the caption is hidden.
     var showCaptions: Bool
+    /// Video title — fed into the system Now Playing Center so the lock-
+    /// screen / Control Center card shows the video name (for users who've
+    /// turned on 「锁屏继续播放」 in MeView). Empty string disables the
+    /// Now Playing card entirely. See `BackgroundAudioCoordinator`.
+    var title: String = ""
+    /// Optional thumbnail URL — asynchronously loaded and pushed into
+    /// MPMediaItemArtwork so the lock-screen card has cover art. Skipped
+    /// when nil. Fetched via URLSession with cache-bypass for the same
+    /// reasons RemoteImage avoids URLCache (VPN-induced cache poisoning).
+    var thumbURL: URL? = nil
     var onReady: () -> Void
     var onTime: (Double) -> Void
 
@@ -28,8 +38,9 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         // Play audio even when the hardware ring/silent switch is on silent.
-        // `.playback` is the standard category for a media app and makes the
-        // sound audible regardless of the switch.
+        // `.playback` is also the category that allows background audio
+        // (paired with UIBackgroundModes: audio in project.yml) when the
+        // user has opted in via MeView's 「锁屏继续播放」 toggle.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
@@ -38,14 +49,26 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         vc.player = player
         vc.videoGravity = .resizeAspect
         vc.showsPlaybackControls = true
-        // PiP disabled 2026-06-09 — paired with the UIBackgroundModes audio
-        // removal in project.yml (App Store Guideline 2.5.4 rejection: reviewer
-        // wanted a screen recording showing persistent audio, which PiP needed
-        // but isn't a primary feature). Re-enable both together with a screen
-        // recording attached to ASC review notes if PiP becomes a priority.
+        // PiP intentionally kept OFF this round. The 「锁屏继续播放」
+        // feature (re-add of UIBackgroundModes: audio + Now Playing
+        // center) provides the primary user-facing surface for "keep
+        // playing while screen off"; PiP would be a separate ask that
+        // App Review previously called out as not-a-primary-feature.
+        // Revisit if users specifically ask for the floating-window UX.
         vc.allowsPictureInPicturePlayback = false
         vc.canStartPictureInPictureAutomaticallyFromInline = false
         context.coordinator.attach(player: player)
+        // Wire the Now Playing card + Remote Command Center to this video.
+        // Done here (vs. higher up at LibraryDetailView level) so the
+        // teardown stays paired with this view controller's lifecycle —
+        // when the user backs out, the lock screen card clears with us.
+        if !title.isEmpty {
+            BackgroundAudioCoordinator.shared.bind(
+                player: player,
+                title: title,
+                thumbURL: thumbURL
+            )
+        }
         // Force the view tree to load so contentOverlayView is non-nil, then
         // attach the caption eagerly (updateUIViewController also ensures it).
         vc.loadViewIfNeeded()
@@ -66,6 +89,9 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 
     static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.detach()
+        // Clear the Now Playing card too — user navigated away from this
+        // video, the lock screen shouldn't keep displaying its title.
+        BackgroundAudioCoordinator.shared.teardown()
     }
 
     final class Coordinator {
