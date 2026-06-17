@@ -23,6 +23,11 @@ final class CorpusViewModel: ObservableObject {
     /// generic tv icon). Empty when no token / load failure — UI falls back
     /// to the icon. Best-effort: failure is silent.
     @Published var libraryThumbnails: [String: String] = [:]
+    /// Bumped after every `reload` (success OR failure) so `RemoteImage`
+    /// in `GroupedMineView` re-fetches covers — bypassing URLCache and
+    /// any iOS DNS staleness left over from a VPN flip. See
+    /// `Components/RemoteImage.swift`.
+    @Published var thumbRefreshNonce: Int = 0
     @Published var loading = false
     @Published var errorMessage: String?
     @Published var licenseLocked = false
@@ -95,6 +100,7 @@ final class CorpusViewModel: ObservableObject {
         }
         loading = false
         loadedOnce = true
+        thumbRefreshNonce &+= 1
     }
 
     func toggleTag(_ tag: String, token: String) async {

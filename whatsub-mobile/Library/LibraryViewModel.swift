@@ -7,6 +7,12 @@ final class LibraryViewModel: ObservableObject {
     @Published var loading = false
     @Published var errorMessage: String?
     @Published var loadedOnce = false
+    /// Bumped on every successful list reload. Threaded into `RemoteImage`
+    /// rows so pull-to-refresh also forces a fresh thumbnail fetch — the
+    /// stock `AsyncImage` we used to use here re-rendered the same URL
+    /// from cache and never noticed a network state change (VPN flip
+    /// → poisoned URLCache + iOS DNS). See `RemoteImage.swift`.
+    @Published var thumbRefreshNonce: Int = 0
 
     func delete(_ id: String, token: String) async {
         do {
@@ -37,5 +43,6 @@ final class LibraryViewModel: ObservableObject {
         }
         loading = false
         loadedOnce = true
+        thumbRefreshNonce &+= 1
     }
 }

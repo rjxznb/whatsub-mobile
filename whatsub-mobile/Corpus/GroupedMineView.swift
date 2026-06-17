@@ -26,6 +26,10 @@ struct GroupedMineView: View {
     /// Empty when CorpusViewModel.listLibrary failed (offline, etc) or
     /// when the user has no Library entries; UI falls back to the icon.
     var libraryThumbnails: [String: String] = [:]
+    /// Bumped by parent on every CorpusViewModel reload so RemoteImage
+    /// re-fetches covers (defeats URLCache + iOS DNS staleness after a
+    /// VPN flip). See `Components/RemoteImage.swift`.
+    var thumbRefreshNonce: Int = 0
     /// Tapped via long-press → Delete in the row context menu. Parent
     /// (CorpusView) handles the actual deletion + confirmation alert so
     /// the alert anchor stays at the tab-level safe area, not inside the
@@ -65,6 +69,7 @@ struct GroupedMineView: View {
                         GroupCard(
                             group: g,
                             thumbnailUrl: thumbnailUrl(for: g),
+                            refreshNonce: thumbRefreshNonce,
                             isExpanded: expandedGroupId == g.id,
                             onToggle: {
                                 withAnimation(.easeOut(duration: 0.18)) {
@@ -151,6 +156,9 @@ private struct GroupCard: View {
     /// library groups whose entry isn't in the user's Library map — e.g.
     /// deleted, or never synced from the device that collected the phrase).
     let thumbnailUrl: String?
+    /// Bumped by parent on reload so `RemoteImage` refetches the cover —
+    /// bypasses URLCache + iOS DNS staleness after a VPN flip.
+    let refreshNonce: Int
     let isExpanded: Bool
     let onToggle: () -> Void
     let onDelete: ((MineItem) -> Void)?
@@ -323,18 +331,9 @@ private struct GroupCard: View {
     @ViewBuilder
     private var leadingArt: some View {
         if let raw = thumbnailUrl, let url = URL(string: raw) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFill()
-                default:
-                    // OSS thumb fetch in flight or failed — show the icon
-                    // in the same footprint so the row doesn't jump.
-                    iconPlaceholder
-                }
-            }
-            .frame(width: 64, height: 36)        // 16:9
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            RemoteImage(url: url, refreshId: refreshNonce)
+                .frame(width: 64, height: 36)        // 16:9
+                .clipShape(RoundedRectangle(cornerRadius: 6))
         } else {
             iconPlaceholder
                 .frame(width: 64, height: 36)

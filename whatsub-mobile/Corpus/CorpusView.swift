@@ -286,6 +286,7 @@ struct CorpusView: View {
                     GroupedMineView(
                         items: vm.mine,
                         libraryThumbnails: vm.libraryThumbnails,
+                        thumbRefreshNonce: vm.thumbRefreshNonce,
                         onDelete: { item in pendingDelete = item }
                     )
                 }

@@ -138,7 +138,7 @@ struct LibraryView: View {
         } else {
             List(vm.entries) { entry in
                 NavigationLink(value: entry.id) {
-                    LibraryRow(entry: entry)
+                    LibraryRow(entry: entry, refreshNonce: vm.thumbRefreshNonce)
                 }
                 .listRowBackground(Color.whatsubBgElev)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -191,28 +191,19 @@ struct LibraryView: View {
 
 private struct LibraryRow: View {
     let entry: LibraryListItem
+    /// Bumped by `LibraryViewModel.thumbRefreshNonce` on every reload —
+    /// threaded into `RemoteImage` so pull-to-refresh also forces the
+    /// thumbnail to re-fetch (bypassing URLCache + iOS DNS staleness
+    /// after a VPN flip). See `Components/RemoteImage.swift`.
+    let refreshNonce: Int
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: entry.thumbUrl.flatMap(URL.init)) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFill()
-                default:
-                    // i.ytimg.com is a Google CDN — unreachable in mainland China
-                    // without a VPN (same constraint as the YouTube player embed).
-                    // Show a play-icon placeholder instead of an empty box.
-                    ZStack {
-                        Color.whatsubBgSoft
-                        Image(systemName: "play.rectangle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.whatsubInkFaint)
-                    }
-                }
-            }
-            .frame(width: 96, height: 54)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            RemoteImage(url: entry.thumbUrl.flatMap(URL.init),
+                        refreshId: refreshNonce)
+                .frame(width: 96, height: 54)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 6))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.title).font(.subheadline).foregroundStyle(.whatsubInk).lineLimit(2)
