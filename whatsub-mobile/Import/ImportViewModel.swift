@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 @MainActor
 final class ImportViewModel: ObservableObject {
@@ -11,8 +12,11 @@ final class ImportViewModel: ObservableObject {
         case syncing
         case done
         case error(String)
-        /// Caption extraction failed — push to desktop is available.
-        case extractFailed(message: String)
+        /// Caption extraction failed — push to desktop is available. `debug`
+        /// is the CaptionExtractor's full event log surfaced via the
+        /// 「查看诊断」 button so users can self-triage instead of guessing
+        /// (or sending us a screenshot of a one-line error).
+        case extractFailed(message: String, debug: [String])
         case pushing
         /// URL successfully enqueued to the backend import queue.
         case pushedToDesktop
@@ -25,6 +29,14 @@ final class ImportViewModel: ObservableObject {
     }
 
     @Published var state: State = .idle
+    /// The hidden WKWebView used by CaptionExtractor — published so ImportView
+    /// can mount it during the .extracting phase. Mounting is required (vs.
+    /// keeping it detached) because YouTube's player uses IntersectionObserver
+    /// + document.visibilityState to detect off-screen players and suspends
+    /// caption-track loading on what it thinks is a hidden tab. We render it
+    /// at opacity 0.001 + non-interactive so it's still invisible to the user.
+    /// See `WKWebViewHost.swift`.
+    @Published var liveWebView: WKWebView?
 
     /// Extracted + analysed result, set once analysis completes.
     private(set) var result: AnalysisJson?
@@ -69,15 +81,27 @@ final class ImportViewModel: ObservableObject {
         // Step 1: Extract captions.
         state = .extracting
         let cues: [Cue]
+        let extractor = CaptionExtractor()
         do {
-            let extractor = CaptionExtractor()
-            cues = try await extractor.extract(videoId: resolvedId)
+            cues = try await extractor.extract(videoId: resolvedId) { [weak self] web in
+                // Publish the WebView so ImportView can host it in the
+                // SwiftUI tree (invisible but present, per the doc on
+                // `liveWebView` above).
+                self?.liveWebView = web
+            }
         } catch {
-            // Caption extraction failed — likely no captions on this video.
-            // Offer the user the option to push to desktop for whisper processing.
-            state = .extractFailed(message: error.localizedDescription)
+            // Caption extraction failed. Surface the rich debug log so the
+            // user can hit 「查看诊断」 and see which step actually died —
+            // far more actionable than the localized one-liner alone.
+            state = .extractFailed(
+                message: error.localizedDescription,
+                debug: extractor.debugLog
+            )
+            liveWebView = nil  // teardown the host
             return
         }
+        // Success — drop the host so the WebView gets deallocated.
+        liveWebView = nil
         rawCues = cues
         // Replace the videoId placeholder title with the real YouTube title
         // (best-effort; VPN is on during import so youtube.com oEmbed is reachable).

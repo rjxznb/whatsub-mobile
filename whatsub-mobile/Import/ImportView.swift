@@ -8,6 +8,11 @@ struct ImportView: View {
 
     @State private var urlInput = ""
     @State private var didAutoRun = false
+    /// Diagnostics sheet for the .extractFailed phase. Surfaces the rich
+    /// CaptionExtractor event log so the user can self-triage instead of
+    /// guessing why captions weren't found.
+    @State private var showDiagnostics = false
+    @State private var diagnosticsLog: [String] = []
 
     private let initialURL: String?
 
@@ -29,7 +34,22 @@ struct ImportView: View {
             case .idle:
                 idleBody
             case .extracting:
-                progressBody(icon: "captions.bubble", label: "提取字幕中…（需挂 VPN）", progress: nil)
+                ZStack {
+                    progressBody(icon: "captions.bubble", label: "提取字幕中…（需挂 VPN）", progress: nil)
+                    // Host the hidden CaptionExtractor WKWebView at near-zero
+                    // opacity. Mounting it in the view tree (vs. detached) lets
+                    // YouTube's player see a non-zero viewport + visible
+                    // document → bypasses the off-screen caption-suspension
+                    // path. 320×180 frame matches what CaptionExtractor sets
+                    // internally so layout doesn't reflow on mount.
+                    if let web = vm.liveWebView {
+                        WKWebViewHost(webView: web)
+                            .frame(width: 320, height: 180)
+                            .opacity(0.001)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
             case .analyzing(let done, let total):
                 progressBody(
                     icon: "sparkles",
@@ -44,8 +64,8 @@ struct ImportView: View {
                 doneBody
             case .error(let msg):
                 errorBody(msg)
-            case .extractFailed(let msg):
-                pushOfferBody(title: "未找到字幕", message: msg)
+            case .extractFailed(let msg, let debug):
+                pushOfferBody(title: "未找到字幕", message: msg, debug: debug)
             case .needsDesktop(let msg):
                 pushOfferBody(title: "需在桌面端处理", message: msg)
             case .pushing:
@@ -269,7 +289,7 @@ struct ImportView: View {
 
     // MARK: - Extract Failed (offer push to desktop)
 
-    private func pushOfferBody(title: String, message: String) -> some View {
+    private func pushOfferBody(title: String, message: String, debug: [String] = []) -> some View {
         VStack(spacing: 20) {
             Spacer()
 
@@ -308,15 +328,34 @@ struct ImportView: View {
             }
             .padding(.horizontal)
 
-            Button("重试") {
-                vm.state = .idle
+            HStack(spacing: 12) {
+                Button("重试") {
+                    vm.state = .idle
+                }
+                .buttonStyle(.bordered)
+                .tint(.whatsubAccent)
+
+                // Only show 查看诊断 if we actually have a log to surface —
+                // the desktop-needed path (`.needsDesktop`) calls this view
+                // with empty debug; no point showing a button into nothing.
+                if !debug.isEmpty {
+                    Button {
+                        diagnosticsLog = debug
+                        showDiagnostics = true
+                    } label: {
+                        Label("查看诊断", systemImage: "info.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.whatsubInkSoft)
+                }
             }
-            .buttonStyle(.bordered)
-            .tint(.whatsubAccent)
 
             Spacer()
         }
         .padding()
+        .sheet(isPresented: $showDiagnostics) {
+            CaptionDiagnosticsSheet(log: diagnosticsLog)
+        }
     }
 
     // MARK: - Pushed to Desktop

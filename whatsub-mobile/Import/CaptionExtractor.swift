@@ -2,7 +2,11 @@ import Foundation
 import WebKit
 import os.log
 
-/// Errors thrown by CaptionExtractor.
+/// Errors thrown by CaptionExtractor. Failure-path detail is intentionally
+/// terse here — the rich event-by-event diagnosis lives on the extractor's
+/// `debugLog` property (publicly readable after a throw). ImportView surfaces
+/// it via the 「查看诊断」 button on the failure screen so users don't have
+/// to plug into Console.app to see where the pipeline died.
 enum CaptionError: Error, LocalizedError {
     case timeout
     case emptyResult
@@ -10,7 +14,7 @@ enum CaptionError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .timeout:
-            return "未捕获到字幕。可能是该视频没有英文字幕，或 YouTube 又改了播放器接口路径。点「推送到桌面端」让 Whisper 转录，或先重试一次。"
+            return "未捕获到字幕。可能是该视频没有英文字幕，或 YouTube 又改了播放器接口路径。点「查看诊断」看到底哪一步挂了，或先点「推送到桌面端」让 Whisper 转录。"
         case .emptyResult:
             return "字幕解析结果为空，请确认该视频有英文字幕。"
         }
@@ -44,20 +48,29 @@ final class CaptionExtractor: NSObject {
     private var continuation: CheckedContinuation<[SpikeCue], Error>?
     private var resumed = false
 
-    /// Rolling diagnostic log. Last ~30 events are surfaced to OSLog on
-    /// failure paths so a developer (or a triage script reading the
-    /// device console) can pinpoint where the pipeline died.
-    private var debugLog: [String] = []
+    /// Rolling diagnostic log. Publicly readable so ImportView's
+    /// 「查看诊断」 sheet can surface the full sequence of events to the
+    /// user on failure — far more actionable than the single-line localized
+    /// error string. Also still dumped to OSLog on every failure path.
+    private(set) var debugLog: [String] = []
     private let log = Logger(subsystem: "cc.eversay.whatsub.mobile",
                              category: "CaptionExtractor")
 
-    func extract(videoId: String) async throws -> [Cue] {
+    /// `onWebViewReady` lets the caller (ImportView) host the WKWebView in
+    /// the SwiftUI view tree at near-zero opacity. Without view-hierarchy
+    /// presentation YouTube's IntersectionObserver flags the player as
+    /// off-screen → some videos refuse to load captions on a "hidden"
+    /// player. Default no-op preserves callers that don't host (tests).
+    func extract(videoId: String,
+                 onWebViewReady: @MainActor (WKWebView) -> Void = { _ in })
+        async throws -> [Cue]
+    {
         appendDebug("extract(videoId=\(videoId)) start")
         let spikeCues = try await withCheckedThrowingContinuation {
             (cont: CheckedContinuation<[SpikeCue], Error>) in
             self.continuation = cont
             self.resumed = false
-            self.setupWebView(videoId: videoId)
+            self.setupWebView(videoId: videoId, onWebViewReady: onWebViewReady)
         }
         // Map SpikeCue → Cue (translation/highlights empty until AnalysisEngine runs).
         return spikeCues.map { spike in
@@ -68,7 +81,8 @@ final class CaptionExtractor: NSObject {
         }
     }
 
-    private func setupWebView(videoId: String) {
+    private func setupWebView(videoId: String,
+                              onWebViewReady: @MainActor (WKWebView) -> Void) {
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
@@ -88,7 +102,17 @@ final class CaptionExtractor: NSObject {
         // to discriminate event kinds.
         cfg.userContentController.add(self, contentWorld: .page, name: "whatsubDebug")
 
-        let web = WKWebView(frame: .zero, configuration: cfg)
+        // 2026-06-18 — give the WebView REAL dimensions (was `.zero`) so
+        // YouTube's IntersectionObserver and CSS viewport-based queries see
+        // a "visible" player. With a zero-size view some videos refused to
+        // load captions because the player thought it was off-screen and
+        // suspended its caption track. The view still gets opacity ~0 from
+        // its SwiftUI host (ImportView during the extracting phase) — the
+        // user never sees it, but the YT player sees a non-zero viewport.
+        let web = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 180),
+            configuration: cfg
+        )
         // 2026-06-17 — CRITICAL: spoof a desktop Chrome UA so YouTube
         // serves the desktop player. The default iOS WKWebView UA was
         // getting the mobile-web player which has CC default OFF + uses
@@ -99,6 +123,11 @@ final class CaptionExtractor: NSObject {
         web.navigationDelegate = self
         // Keep WKWebView alive for the duration.
         self.webView = web
+        // 2026-06-18 — hand the view off to the SwiftUI host BEFORE load()
+        // so the view tree mounts before the first script executes. Without
+        // this, even with non-zero frame, the WebView isn't in a window
+        // and YouTube sometimes still flags it as backgrounded.
+        onWebViewReady(web)
 
         // Load watch page with CC forced on. cc_load_policy=1 is now
         // best-effort (YouTube respects it inconsistently), but combined

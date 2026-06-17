@@ -171,6 +171,14 @@ final class CueAudioPlayer: ObservableObject {
     /// AVPlayer behaviour without a pitch algorithm set). Defaults to 1.0 so
     /// existing callers (ClozeSheet) are unchanged.
     func play(from start: Double, to end: Double, rate: Float = 1.0) {
+        // 2026-06-18 — defensively reset the audio session to .playback before
+        // every play. If ShadowSheet just finished recording, the session is
+        // still in `.playAndRecord, .measurement` (set in startRecording()
+        // for input-level accuracy). `.measurement` mode silently halves the
+        // output volume relative to `.playback` — without this reset the
+        // next 听原文 tap played cue audio at a fraction of normal volume.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+        try? AVAudioSession.sharedInstance().setActive(true)
         endTime = end
         // Eager isLoading flip — the KVO observer will refine to .playing once
         // AVPlayer is actually emitting audio (or back to .paused on cancel).
@@ -200,6 +208,19 @@ final class CueAudioPlayer: ObservableObject {
                 self.player.rate = rate
             }
             self.attachAutoStop()
+        }
+    }
+
+    /// Apply a new rate IMMEDIATELY if play() is currently emitting audio.
+    /// No-op when idle — the next `play(rate:)` call picks up the new value
+    /// from its own argument. Used by ShadowSheet's speed picker so changing
+    /// the chip mid-cue affects the rest of the clip in real time (vs. only
+    /// the next 听原文 tap, which feels broken). Pitch is already preserved
+    /// for the whole play() call via `.spectral`, so the rate flip is
+    /// audibly seamless.
+    func setRate(_ rate: Float) {
+        if isPlaying {
+            player.rate = rate
         }
     }
 

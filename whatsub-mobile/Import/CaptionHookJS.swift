@@ -57,6 +57,59 @@ enum CaptionHookJS {
 
       postDebug("hook_installed", location.href);
 
+      // 2026-06-18 — Aggressive measures (B): WKWebView without cookies +
+      // without user gesture history is YouTube's "cold visitor" → mobile-
+      // web defaults to CC OFF and the player won't start autoplay. Three
+      // nudges, spaced so they fire AFTER the player has initialized. Each
+      // is wrapped in try/catch + telemetry so a failure of one doesn't
+      // affect the others.
+      //
+      //   t=2.5s — programmatic <video>.play() (muted first, which Safari
+      //            allows without a gesture). Triggers the timedtext fetch
+      //            path that wouldn't otherwise fire.
+      //   t=4.0s — programmatic click on `.ytp-subtitles-button` so CC
+      //            turns on even when cc_load_policy=1 was ignored.
+      //   t=6.0s — last-ditch search for any caption-track toggle and
+      //            click it. Catches DOM renames YouTube does periodically.
+      function nudgeVideoPlay() {
+        try {
+          var v = document.querySelector('video');
+          if (!v) { postDebug("nudge_no_video", ""); return; }
+          v.muted = true;
+          var p = v.play();
+          if (p && p.then) {
+            p.then(function() { postDebug("nudge_video_play_ok", ""); })
+             .catch(function(e) { postDebug("nudge_video_play_blocked", String(e)); });
+          } else {
+            postDebug("nudge_video_play_legacy", "");
+          }
+        } catch(e) { postDebug("nudge_video_play_fail", String(e)); }
+      }
+      function nudgeCCButton() {
+        try {
+          var btn = document.querySelector('.ytp-subtitles-button');
+          if (!btn) { postDebug("nudge_cc_no_button", ""); return; }
+          var pressed = btn.getAttribute('aria-pressed');
+          postDebug("nudge_cc_pre_click", "pressed=" + pressed);
+          btn.click();
+          postDebug("nudge_cc_clicked", "");
+        } catch(e) { postDebug("nudge_cc_fail", String(e)); }
+      }
+      function nudgeAnyCaptionToggle() {
+        try {
+          // Wider net — recent player redesigns moved CC into
+          // .ytp-button[data-tooltip-target-id*=subtitle] etc.
+          var candidates = document.querySelectorAll('[aria-label*="ubtitle" i], [aria-label*="字幕"], [data-tooltip-target-id*="ubtitle" i]');
+          postDebug("nudge_any_candidates", "n=" + candidates.length);
+          for (var i = 0; i < candidates.length; i++) {
+            try { candidates[i].click(); } catch(e){}
+          }
+        } catch(e) { postDebug("nudge_any_fail", String(e)); }
+      }
+      setTimeout(nudgeVideoPlay, 2500);
+      setTimeout(nudgeCCButton, 4000);
+      setTimeout(nudgeAnyCaptionToggle, 6000);
+
       function handlePlayerResponse(url, body) {
         try {
           var obj = JSON.parse(body);

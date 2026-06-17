@@ -101,6 +101,15 @@ struct ShadowSheet: View {
             // jumps straight to practice without playing the main video).
             if videoURL != nil { audio.preload(at: cue.time) }
         }
+        // 2026-06-18 — make the speed picker live during playback: tapping a
+        // different chip while the cue is currently playing flips the rate
+        // immediately (rest of the clip plays at the new rate) instead of
+        // taking effect only on the NEXT 听原文 tap. Idle case is a no-op
+        // (CueAudioPlayer.setRate gates on `isPlaying`); the next play()
+        // picks up the new value via the `playbackRate` argument.
+        .onChange(of: playbackRate) { newRate in
+            audio.setRate(Float(newRate))
+        }
         .onDisappear { stopAll() }
     }
 
