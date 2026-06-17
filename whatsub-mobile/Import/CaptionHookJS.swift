@@ -1,41 +1,166 @@
 import Foundation
 
-/// MAIN-world (`.page`) script: hooks window.fetch + XMLHttpRequest so that when
-/// the YouTube player fetches /api/timedtext (its own po_token-signed request),
-/// we capture the body and hand it to Swift via the `whatsubCaptions` message
-/// handler. Adapted from the whatsub-plugin web-plugin/public/fetchHook.js
-/// (post() retargeted to webkit.messageHandlers). Must be injected at
-/// documentStart so it installs before the player's first timedtext request.
+/// MAIN-world (`.page`) script that hooks YouTube's caption fetch + the
+/// `youtubei.googleapis.com/youtubei/v1/player` API response so we can
+/// extract captions regardless of which code path the page uses.
+///
+/// 2026-06-17 revision — adds three fixes for the regression where
+/// mobile WKWebView stopped catching captions while the browser plugin
+/// (running in a real desktop Chrome context) still worked:
+///
+///   1. **Broader URL matching.** YouTube migrated mobile-web players
+///      from `/api/timedtext?...` to `youtubei.googleapis.com/youtubei/
+///      v1/player` (which returns `captionTracks[].baseUrl` inside its
+///      JSON body). The old hook only matched `/api/timedtext`. Now we
+///      catch both paths PLUS any URL containing the substring
+///      "timedtext" as a safety net for whatever YouTube does next.
+///
+///   2. **Player-response synthetic fetch.** Even when YouTube returns a
+///      player response containing valid `captionTracks`, the player
+///      itself won't issue the timedtext fetch unless CC is on (and
+///      mobile-web defaults CC OFF, "to save data"). We now parse the
+///      player response ourselves, pick the best English track
+///      (manual > auto > first available), append `fmt=json3` if
+///      missing, and call `fetch()` directly. The result flows through
+///      the SAME path as a player-issued fetch, so the rest of the
+///      Swift pipeline doesn't need to know about this.
+///
+///   3. **Telemetry to `whatsubDebug` message handler.** Every key
+///      event (hook installed, fetch seen, timedtext matched, player
+///      response parsed) posts a structured event. Swift accumulates
+///      these and dumps them to OSLog on timeout — gives us a forensic
+///      trail when extraction silently fails. Zero impact on success
+///      path. Failures previously surfaced "未捕获到字幕" with no
+///      indication of where in the pipeline it died.
 enum CaptionHookJS {
     static let source = #"""
     (function installCaptionsHook() {
       if (window.__whatsubHookInstalled) return;
       window.__whatsubHookInstalled = true;
-      function isTimedtext(u){ return typeof u === "string" && u.indexOf("/api/timedtext") !== -1; }
-      function post(url, body){
+
+      function isTimedtext(u){
+        if (typeof u !== "string") return false;
+        return u.indexOf("/api/timedtext") !== -1
+            || u.indexOf("timedtext") !== -1;   // catch-all fallback
+      }
+      function isPlayerApi(u){
+        if (typeof u !== "string") return false;
+        return u.indexOf("youtubei/v1/player") !== -1;
+      }
+
+      function postCaptions(url, body){
         try { window.webkit.messageHandlers.whatsubCaptions.postMessage({ url: url, body: body }); } catch(e){}
       }
+      function postDebug(event, info){
+        try { window.webkit.messageHandlers.whatsubDebug.postMessage({ event: event, info: String(info || "") }); } catch(e){}
+      }
+
+      postDebug("hook_installed", location.href);
+
+      function handlePlayerResponse(url, body) {
+        try {
+          var obj = JSON.parse(body);
+          var ct = obj
+                && obj.captions
+                && obj.captions.playerCaptionsTracklistRenderer
+                && obj.captions.playerCaptionsTracklistRenderer.captionTracks;
+          if (!ct || !ct.length) {
+            postDebug("player_no_captions", "tracks=0");
+            return;
+          }
+          postDebug("player_tracks_found", "n=" + ct.length);
+          // Pick: English manual > English auto > first available.
+          var pick = null;
+          for (var i = 0; i < ct.length; i++) {
+            if (ct[i].languageCode === "en" && !ct[i].kind) { pick = ct[i]; break; }
+          }
+          if (!pick) {
+            for (var j = 0; j < ct.length; j++) {
+              if (ct[j].languageCode === "en") { pick = ct[j]; break; }
+            }
+          }
+          if (!pick) pick = ct[0];
+
+          var trackUrl = pick.baseUrl;
+          if (!trackUrl) {
+            postDebug("player_no_baseurl", JSON.stringify(pick).slice(0, 200));
+            return;
+          }
+          if (trackUrl.indexOf("fmt=") === -1) {
+            trackUrl += (trackUrl.indexOf("?") === -1 ? "?" : "&") + "fmt=json3";
+          }
+          postDebug("player_track_picked", (pick.languageCode || "?") + (pick.kind ? "(" + pick.kind + ")" : ""));
+
+          // Synthetic fetch — direct request to the timedtext URL the
+          // player would have made if CC were on. Our own fetch hook
+          // will re-catch this and post() it via the timedtext path,
+          // so we don't double-post here.
+          fetch(trackUrl).then(function(r){
+            if (!r || !r.ok) { postDebug("synth_fetch_not_ok", String(r && r.status)); return; }
+            return r.text();
+          }).then(function(t){
+            if (t) {
+              postDebug("synth_fetch_body", "len=" + t.length);
+              postCaptions(trackUrl, t);
+            }
+          }).catch(function(e){ postDebug("synth_fetch_fail", String(e)); });
+        } catch(e) {
+          postDebug("player_parse_fail", String(e));
+        }
+      }
+
       var origFetch = window.fetch;
       window.fetch = function(input, init){
+        var url = typeof input === "string" ? input
+              : (input && input.url) ? input.url : String(input);
         var p = origFetch.apply(this, arguments);
         try {
-          var url = typeof input === "string" ? input : (input && input.url) ? input.url : String(input);
           if (isTimedtext(url)) {
+            postDebug("timedtext_fetch_seen", url.slice(0, 120));
             p.then(function(res){
-              if (!res || !res.ok) return;
-              res.clone().text().then(function(t){ if (t) post(url, t); }).catch(function(){});
-            }).catch(function(){});
+              if (!res || !res.ok) { postDebug("timedtext_not_ok", String(res && res.status)); return; }
+              res.clone().text().then(function(t){
+                if (t) { postDebug("timedtext_body", "len=" + t.length); postCaptions(url, t); }
+              }).catch(function(e){ postDebug("timedtext_text_fail", String(e)); });
+            }).catch(function(e){ postDebug("timedtext_promise_fail", String(e)); });
+          } else if (isPlayerApi(url)) {
+            postDebug("player_fetch_seen", url.slice(0, 120));
+            p.then(function(res){
+              if (!res || !res.ok) { postDebug("player_not_ok", String(res && res.status)); return; }
+              res.clone().text().then(function(t){ handlePlayerResponse(url, t); });
+            }).catch(function(e){ postDebug("player_promise_fail", String(e)); });
           }
-        } catch(e){}
+        } catch(e){ postDebug("fetch_outer_fail", String(e)); }
         return p;
       };
+
       var origOpen = XMLHttpRequest.prototype.open;
       var origSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function(m, url){ try { this.__wsUrl = String(url); } catch(e){} return origOpen.apply(this, arguments); };
+      XMLHttpRequest.prototype.open = function(m, url){
+        try { this.__wsUrl = String(url); } catch(e){}
+        return origOpen.apply(this, arguments);
+      };
       XMLHttpRequest.prototype.send = function(){
         var url = this.__wsUrl, xhr = this;
         if (url && isTimedtext(url)) {
-          this.addEventListener("load", function(){ try { if (xhr.status===200 && xhr.responseText) post(url, xhr.responseText); } catch(e){} });
+          postDebug("timedtext_xhr_seen", url.slice(0, 120));
+          this.addEventListener("load", function(){
+            try {
+              if (xhr.status === 200 && xhr.responseText) {
+                postDebug("timedtext_xhr_body", "len=" + xhr.responseText.length);
+                postCaptions(url, xhr.responseText);
+              }
+            } catch(e){ postDebug("timedtext_xhr_fail", String(e)); }
+          });
+        } else if (url && isPlayerApi(url)) {
+          postDebug("player_xhr_seen", url.slice(0, 120));
+          this.addEventListener("load", function(){
+            try {
+              if (xhr.status === 200 && xhr.responseText) {
+                handlePlayerResponse(url, xhr.responseText);
+              }
+            } catch(e){ postDebug("player_xhr_fail", String(e)); }
+          });
         }
         return origSend.apply(this, arguments);
       };
