@@ -174,9 +174,16 @@ struct LibraryDetailView: View {
                     showCaptions: showCaptions,
                     // Feed Now Playing center metadata for the lock-screen
                     // card (when the user has 「锁屏继续播放」 on). Title
-                    // + thumb come straight from the entry payload.
+                    // is on the detail payload. The thumb endpoint isn't
+                    // exposed on LibraryEntryDetail directly (only on the
+                    // list payload), so we reconstruct it here using the
+                    // same URL pattern the backend serves from the list —
+                    // `whatsub.eversay.cc/api/library/thumb/<id>` returns
+                    // the OSS-uploaded JPEG for synced videos and 404s
+                    // cleanly otherwise (Now Playing card just shows
+                    // title without artwork in that case).
                     title: entry.title,
-                    thumbURL: entry.thumbUrl.flatMap(URL.init),
+                    thumbURL: URL(string: "https://whatsub.eversay.cc/api/library/thumb/\(entry.id)"),
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) }
                 )
