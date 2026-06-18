@@ -33,10 +33,14 @@ final class ImportViewModel: ObservableObject {
     /// can mount it during the .extracting phase. Mounting is required (vs.
     /// keeping it detached) because YouTube's player uses IntersectionObserver
     /// + document.visibilityState to detect off-screen players and suspends
-    /// caption-track loading on what it thinks is a hidden tab. We render it
-    /// at opacity 0.001 + non-interactive so it's still invisible to the user.
-    /// See `WKWebViewHost.swift`.
+    /// caption-track loading on what it thinks is a hidden tab. See
+    /// `WKWebViewHost.swift`.
     @Published var liveWebView: WKWebView?
+    /// Gates the visible reveal of `liveWebView` in ImportView. False during
+    /// the warmup phase (when the WebView is on youtube.com homepage showing
+    /// an unrelated auto-preview video that would confuse the user), flipped
+    /// true once CaptionExtractor navigates to the actual target /watch URL.
+    @Published var liveWebViewWatching: Bool = false
 
     /// Extracted + analysed result, set once analysis completes.
     private(set) var result: AnalysisJson?
@@ -82,13 +86,22 @@ final class ImportViewModel: ObservableObject {
         state = .extracting
         let cues: [Cue]
         let extractor = CaptionExtractor()
+        liveWebViewWatching = false
         do {
-            cues = try await extractor.extract(videoId: resolvedId) { [weak self] web in
-                // Publish the WebView so ImportView can host it in the
-                // SwiftUI tree (invisible but present, per the doc on
-                // `liveWebView` above).
-                self?.liveWebView = web
-            }
+            cues = try await extractor.extract(
+                videoId: resolvedId,
+                onWebViewReady: { [weak self] web in
+                    // Publish the WebView so ImportView can host it in the
+                    // SwiftUI tree (still invisible during warmup, per
+                    // `liveWebViewWatching`).
+                    self?.liveWebView = web
+                },
+                onWatchNavigation: { [weak self] in
+                    // Warmup ended, watch URL load starting — reveal the
+                    // WebView so the user sees their actual video loading.
+                    self?.liveWebViewWatching = true
+                }
+            )
         } catch {
             // Caption extraction failed. Surface the rich debug log so the
             // user can hit 「查看诊断」 and see which step actually died —
@@ -98,10 +111,12 @@ final class ImportViewModel: ObservableObject {
                 debug: extractor.debugLog
             )
             liveWebView = nil  // teardown the host
+            liveWebViewWatching = false
             return
         }
         // Success — drop the host so the WebView gets deallocated.
         liveWebView = nil
+        liveWebViewWatching = false
         rawCues = cues
         // Replace the videoId placeholder title with the real YouTube title
         // (best-effort; VPN is on during import so youtube.com oEmbed is reachable).

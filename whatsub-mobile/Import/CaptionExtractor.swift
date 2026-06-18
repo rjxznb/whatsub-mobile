@@ -210,6 +210,10 @@ final class CaptionExtractor: NSObject {
             return
         }
         appendDebug("post-warmup: loading \(urlString)")
+        // Tell ImportView to reveal the WKWebView NOW — we're about to load
+        // the actual target video, so the user sees their video loading
+        // instead of the warmup homepage's preview content.
+        onWatchNavigation()
         web.load(URLRequest(url: url))
     }
 

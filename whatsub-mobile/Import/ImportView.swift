@@ -298,6 +298,14 @@ struct ImportView: View {
                 .foregroundStyle(.whatsubInk)
 
             if let web = vm.liveWebView {
+                // Mount the WebView in the view tree (required so YouTube's
+                // IntersectionObserver sees it as visible) but keep it
+                // hidden during warmup — otherwise the user sees the YT
+                // homepage's auto-playing preview banner for ~3.5s, which
+                // looks like "this is showing me a random unrelated video"
+                // (user-reported 2026-06-18). opacity 0.001 still gives
+                // IntersectionObserver enough; flips to 1.0 once
+                // CaptionExtractor's onWatchNavigation fires.
                 WKWebViewHost(webView: web)
                     .frame(width: 320, height: 180)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -308,6 +316,7 @@ struct ImportView: View {
                         RoundedRectangle(cornerRadius: 10)
                             .stroke(Color.white.opacity(0.14), lineWidth: 1)
                     )
+                    .opacity(vm.liveWebViewWatching ? 1.0 : 0.001)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
