@@ -155,6 +155,43 @@ actor WhatsubAPI {
         _ = try await postExpectingOk(Endpoints.library("sync"), body: data, bearer: token)
     }
 
+    /// PATCH the cue payload (analysisJson + transcriptSrt) for an existing
+    /// library entry. Used by the iOS subtitle editor — POST `/sync/:id/cues`
+    /// is a thin, idempotent endpoint that doesn't require the heavy
+    /// videoKey/audioKey/thumb fields the regular /sync needs. Backend
+    /// bumps synced_at so other clients pull the new version on next refresh.
+    func updateLibraryEntryCues(
+        entryId: String,
+        analysis: AnalysisJson,
+        transcriptSrt: String,
+        token: String
+    ) async throws {
+        let subtitlesDicts: [[String: Any]] = analysis.subtitles.map { cue in
+            [
+                "time": cue.time,
+                "endTime": cue.endTime,
+                "text": cue.text,
+                "translation": cue.translation,
+                "isKeyPoint": cue.isKeyPoint,
+                "highlightWords": cue.highlightWords,
+                "keyNotes": cue.keyNotes,
+                "highlightTranslations": cue.highlightTranslations,
+            ]
+        }
+        let keyPhrasesDicts: [[String: Any]] = analysis.keyPhrases.map { kp in
+            ["expression": kp.expression, "meaningZh": kp.meaningZh, "usage": kp.usage]
+        }
+        let body: [String: Any] = [
+            "analysisJson": [
+                "subtitles": subtitlesDicts,
+                "keyPhrases": keyPhrasesDicts,
+            ],
+            "transcriptSrt": transcriptSrt,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        _ = try await postExpectingOk(Endpoints.library("sync/\(entryId)/cues"), body: data, bearer: token)
+    }
+
     // ----- Corpus -----
 
     /// scope = "public" (needs license) or "mine" (session only).

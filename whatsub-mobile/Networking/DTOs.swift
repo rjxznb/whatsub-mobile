@@ -94,12 +94,17 @@ struct Cue: Decodable, Identifiable {
 
     let time: Double
     let endTime: Double
-    let text: String          // English
-    let translation: String   // Chinese
-    let isKeyPoint: Bool
-    let highlightWords: [String]
-    let keyNotes: [String: String]
-    let highlightTranslations: [String: String]
+    // 2026-06-18: text fields became `var` for the in-app subtitle editor.
+    // time/endTime stay `let` — the editor deliberately doesn't expose
+    // timestamp adjustment (high risk of breaking alignment, low value vs.
+    // just deleting/re-creating a cue). highlight* go mutable so editing
+    // text can clear stale AI markers in the same struct.
+    var text: String          // English
+    var translation: String   // Chinese
+    var isKeyPoint: Bool
+    var highlightWords: [String]
+    var keyNotes: [String: String]
+    var highlightTranslations: [String: String]
 
     enum CodingKeys: String, CodingKey {
         case time, endTime, text, translation, isKeyPoint

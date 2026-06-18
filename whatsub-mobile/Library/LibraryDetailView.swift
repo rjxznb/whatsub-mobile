@@ -32,6 +32,10 @@ struct LibraryDetailView: View {
     /// existing default; .collections renders EntryCollectionsList scoped to
     /// this entry (corpus phrases tagged with libraryEntryId == entryId).
     @State private var contentTab: ContentTab = .subtitles
+    /// 2026-06-18: 取消编辑 confirmation when there are unsaved drafts.
+    /// Skipping the alert when `!vm.dirty` lets users back out of an
+    /// untouched edit session without a noisy "are you sure" prompt.
+    @State private var confirmCancelEdit: Bool = false
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
     // (showPendingSheet + 「待同步 N 条」 banner removed 2026-06-07.
     // PendingPhraseStore is still used — observed inside
@@ -357,9 +361,40 @@ struct LibraryDetailView: View {
     }
 
     private func subtitleList(_ entry: LibraryEntryDetail) -> some View {
+        Group {
+            if vm.editMode {
+                editingSubtitleList
+            } else {
+                readingSubtitleList(entry)
+            }
+        }
+    }
+
+    private func readingSubtitleList(_ entry: LibraryEntryDetail) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
+                    // "编辑字幕" entry point — kept above the list (vs. in the
+                    // nav toolbar) so it's discoverable on first scroll. Only
+                    // visible on the 字幕 tab; vanishes on 收藏 / 角色扮演.
+                    Button {
+                        vm.startEditing()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "pencil")
+                            Text("编辑字幕（修字 / 删 / 调顺序）")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .foregroundStyle(.whatsubAccent)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.whatsubAccent.opacity(0.10))
+                        )
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 4)
                     ForEach(entry.analysisJson.subtitles) { cue in
                         CueRow(
                             cue: cue,
@@ -403,6 +438,86 @@ struct LibraryDetailView: View {
                     proxy.scrollTo(idx, anchor: .center)
                 }
             }
+        }
+    }
+
+    /// Edit mode: per-row TextFields + swipe-to-delete + Save / Cancel
+    /// bar. Uses List (not LazyVStack) because .swipeActions only fires
+    /// inside List. Save error surfaces inline at the top so the user
+    /// doesn't have to dismiss an alert to retry.
+    @ViewBuilder
+    private var editingSubtitleList: some View {
+        VStack(spacing: 0) {
+            // Sticky action bar with cancel / save + dirty indicator.
+            HStack(spacing: 12) {
+                Button("取消") {
+                    if vm.dirty {
+                        confirmCancelEdit = true
+                    } else {
+                        vm.cancelEditing()
+                    }
+                }
+                .foregroundStyle(.whatsubInkSoft)
+                Spacer()
+                if vm.saving {
+                    ProgressView().controlSize(.small).tint(.whatsubAccent)
+                    Text("保存中…").font(.footnote).foregroundStyle(.whatsubInkMuted)
+                } else if vm.dirty {
+                    Text("已改动").font(.footnote).foregroundStyle(.whatsubAccent)
+                }
+                Button {
+                    Task {
+                        guard let token = appState.session?.sessionToken else { return }
+                        await vm.saveEdits(token: token)
+                    }
+                } label: {
+                    Text("保存").font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.whatsubAccent)
+                .disabled(!vm.dirty || vm.saving)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.whatsubBgSoft)
+
+            if let err = vm.saveError {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.red.opacity(0.08))
+            }
+
+            List {
+                ForEach(Array(vm.draftCues.enumerated()), id: \.offset) { idx, cue in
+                    CueRowEditing(
+                        index: idx,
+                        cue: cue,
+                        onTextChange: { vm.updateCueText(at: idx, text: $0) },
+                        onTranslationChange: { vm.updateCueTranslation(at: idx, translation: $0) }
+                    )
+                    .listRowBackground(Color.whatsubBg)
+                    .listRowSeparatorTint(Color.white.opacity(0.06))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            vm.deleteCue(at: idx)
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.whatsubBg)
+        }
+        .alert("放弃改动?", isPresented: $confirmCancelEdit) {
+            Button("放弃", role: .destructive) { vm.cancelEditing() }
+            Button("继续编辑", role: .cancel) {}
+        } message: {
+            Text("已修改的内容将丢失。")
         }
     }
 
