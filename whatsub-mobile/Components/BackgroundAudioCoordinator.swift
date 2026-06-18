@@ -189,6 +189,15 @@ final class BackgroundAudioCoordinator {
         timeObserver = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
             guard let self, let p = self.currentPlayer else { return }
             var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+            // 2026-06-18 — defensive: ALWAYS re-assert title + artist on every
+            // tick. AVPlayerViewController.updatesNowPlayingInfoCenter is now
+            // false (set in VideoPlayerView), but other system paths (AirPlay
+            // route change, app foreground after long sleep, Now Playing
+            // session reassignment) can still wipe the dict to a duration/
+            // time-only state. Belt-and-suspenders so the lock-screen card
+            // doesn't go title-less mid-playback.
+            info[MPMediaItemPropertyTitle] = self.currentTitle
+            info[MPMediaItemPropertyArtist] = "whatSub"
             info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = t.seconds
             info[MPNowPlayingInfoPropertyPlaybackRate] = p.rate
             // Duration may become known after the metadata first load —

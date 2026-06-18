@@ -57,6 +57,17 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         // Revisit if users specifically ask for the floating-window UX.
         vc.allowsPictureInPicturePlayback = false
         vc.canStartPictureInPictureAutomaticallyFromInline = false
+        // 2026-06-18 — disable AVPlayerViewController's automatic Now Playing
+        // integration. Default is true, in which case AVPlayerViewController
+        // periodically REPLACES the entire MPNowPlayingInfoCenter.nowPlayingInfo
+        // dict with one that has time/duration/rate ONLY — wiping the title +
+        // artist + artwork that BackgroundAudioCoordinator manually set. User
+        // report: lock screen card showed progress bar working but title +
+        // thumb area was blank. Same path also stomps the ±15s skip
+        // intervals we set on MPRemoteCommandCenter (lock screen shows the
+        // default ±10s). Our Coordinator owns the whole now-playing surface;
+        // ATV's auto-integration would only fight us.
+        vc.updatesNowPlayingInfoCenter = false
         context.coordinator.attach(player: player)
         // Wire the Now Playing card + Remote Command Center to this video.
         // Done here (vs. higher up at LibraryDetailView level) so the
