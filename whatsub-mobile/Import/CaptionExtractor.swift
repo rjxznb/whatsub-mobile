@@ -278,18 +278,41 @@ extension CaptionExtractor: WKScriptMessageHandler {
 
 extension CaptionExtractor: WKNavigationDelegate {
 
-    /// Intercept the sign-in redirect early so we throw a clear
-    /// .requiresLogin instead of silently waiting out the 25s timeout.
-    /// Captured here (not in didFinish) so we abort BEFORE the page loads
-    /// — saves time and keeps `synth_fetch` from pulling 2MB of sign-in
-    /// HTML into the debug log.
+    /// Intercept ACTIVE sign-in redirects (`accounts.google.com` without the
+    /// `passive=true` marker) so we throw .requiresLogin early instead of
+    /// waiting out the 25s timeout. PASSIVE SSO probes (which YouTube fires
+    /// unconditionally when loading the homepage to check for an existing
+    /// Google session) get allowed through — they auto-bounce back to YT
+    /// regardless of whether the user has a session and don't block caption
+    /// extraction. Earlier versions blocked all accounts.google.com nav,
+    /// which killed extraction for every video because the warmup load of
+    /// youtube.com always triggered the passive probe. 2026-06-18.
     nonisolated func webView(_ webView: WKWebView,
                              decidePolicyFor navigationAction: WKNavigationAction,
                              decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if let host = navigationAction.request.url?.host, host.contains("accounts.google.com") {
-            let urlStr = navigationAction.request.url?.absoluteString ?? "?"
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow); return
+        }
+        if url.host?.contains("accounts.google.com") == true {
+            let urlStr = url.absoluteString
+            // Heuristics for "passive" probe (returns to YT no matter what):
+            //   • passive=true query
+            //   • signin_passive in the path or `next` param
+            //   • uilel=3 (the "ambient" SSO entry point YouTube uses)
+            // Any of these → allow the nav and keep extracting.
+            let isPassive = urlStr.contains("passive=true")
+                || urlStr.contains("signin_passive")
+                || urlStr.contains("uilel=3")
+            if isPassive {
+                Task { @MainActor [weak self] in
+                    self?.appendDebug("allowed passive SSO nav: \(urlStr.prefix(140))")
+                }
+                decisionHandler(.allow)
+                return
+            }
+            // Real sign-in wall — abort.
             Task { @MainActor [weak self] in
-                self?.appendDebug("blocked sign-in nav: \(urlStr)")
+                self?.appendDebug("blocked active sign-in nav: \(urlStr.prefix(140))")
                 self?.resumeOnce(throwing: CaptionError.requiresLogin)
             }
             decisionHandler(.cancel)
