@@ -64,15 +64,19 @@ final class CaptionExtractor: NSObject {
                              category: "CaptionExtractor")
 
     /// `onWebViewReady` lets the caller (ImportView) host the WKWebView in
-    /// the SwiftUI view tree at near-zero opacity. Without view-hierarchy
-    /// presentation YouTube's IntersectionObserver flags the player as
-    /// off-screen → some videos refuse to load captions on a "hidden"
-    /// player. Default no-op preserves callers that don't host (tests).
+    /// the SwiftUI view tree. The hosting is needed for YouTube's player
+    /// to see a non-zero viewport, but ImportView keeps the view hidden
+    /// until `onWatchNavigation` fires — otherwise the user sees the
+    /// warmup homepage's auto-playing preview banner for the first ~3.5s,
+    /// which looks like a bug ("why is it showing me a different video?").
+    /// Default no-ops preserve callers that don't host (tests).
     func extract(videoId: String,
-                 onWebViewReady: @MainActor (WKWebView) -> Void = { _ in })
+                 onWebViewReady: @MainActor (WKWebView) -> Void = { _ in },
+                 onWatchNavigation: @MainActor () -> Void = {})
         async throws -> [Cue]
     {
         appendDebug("extract(videoId=\(videoId)) start")
+        self.onWatchNavigation = onWatchNavigation
         let spikeCues = try await withCheckedThrowingContinuation {
             (cont: CheckedContinuation<[SpikeCue], Error>) in
             self.continuation = cont
@@ -92,6 +96,10 @@ final class CaptionExtractor: NSObject {
     /// the homepage warmup completes (or its 2s window elapses).
     private var pendingVideoId: String?
     private var warmupComplete = false
+    /// Fired exactly once when navigateToWatch starts the watch-URL load,
+    /// so ImportView can reveal the WKWebView at that moment instead of
+    /// during warmup (which shows the homepage's unrelated preview video).
+    private var onWatchNavigation: @MainActor () -> Void = {}
 
     private func setupWebView(videoId: String,
                               onWebViewReady: @MainActor (WKWebView) -> Void) {
