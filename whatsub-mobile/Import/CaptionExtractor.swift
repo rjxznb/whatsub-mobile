@@ -72,7 +72,7 @@ final class CaptionExtractor: NSObject {
     /// Default no-ops preserve callers that don't host (tests).
     func extract(videoId: String,
                  onWebViewReady: @MainActor (WKWebView) -> Void = { _ in },
-                 onWatchNavigation: @MainActor () -> Void = {})
+                 onWatchNavigation: @MainActor @escaping () -> Void = {})
         async throws -> [Cue]
     {
         appendDebug("extract(videoId=\(videoId)) start")
