@@ -49,6 +49,14 @@ enum CaptionHookJS {
       }
 
       function postCaptions(url, body){
+        // 2026-06-18 — Skip if we're not on the target /watch page. Posting
+        // captions from the warmup homepage's preview / a navigated-to
+        // recommendation video would feed the Swift parser the wrong cues
+        // (or trigger a misleading "got body but parser dropped it" log).
+        if (!isOnTargetVideo()) {
+          postDebug("skip_post_off_target", location.pathname + " v=" + (new URLSearchParams(location.search).get('v') || ''));
+          return;
+        }
         try { window.webkit.messageHandlers.whatsubCaptions.postMessage({ url: url, body: body }); } catch(e){}
       }
       function postDebug(event, info){
@@ -56,6 +64,26 @@ enum CaptionHookJS {
       }
 
       postDebug("hook_installed", location.href);
+
+      // 2026-06-18 — Gate caption capture on "we're on the right page".
+      // The hook installs on EVERY navigation (warmup homepage, the watch
+      // URL we asked for, iframes, AND any video YouTube might navigate
+      // us to via recommendation thumbnails accidentally clicked by
+      // nudgeAnyCaptionToggle). Without this gate, we'd post captions
+      // from random preview videos and get 404s on the wrong timedtext
+      // URLs — making BotGuard's real behaviour impossible to diagnose.
+      //
+      // window.__whatsubTargetVideoId is injected by CaptionExtractor via
+      // WKUserScript before this hook runs, so it's always available.
+      function isOnTargetVideo() {
+        try {
+          if (location.pathname !== '/watch') return false;
+          var target = window.__whatsubTargetVideoId;
+          if (!target) return false;
+          var params = new URLSearchParams(location.search);
+          return params.get('v') === target;
+        } catch(e) { return false; }
+      }
 
       // Mute any <video> as soon as it shows up + keep muting on a 500ms
       // interval. With WebView-now-visible (item 7) the user would
@@ -118,17 +146,29 @@ enum CaptionHookJS {
       }
       function nudgeAnyCaptionToggle() {
         try {
-          // Wider net — recent player redesigns moved CC into
-          // .ytp-button[data-tooltip-target-id*=subtitle] etc.
-          var candidates = document.querySelectorAll('[aria-label*="ubtitle" i], [aria-label*="字幕"], [data-tooltip-target-id*="ubtitle" i]');
+          // 2026-06-18 — SCOPE to the player chrome (.ytp-chrome-controls
+          // or .ytp-right-controls) to prevent clicking recommendation
+          // thumbnails whose aria-labels also mention "subtitles" — that's
+          // what navigated us to `lRz9h75kDqc` instead of staying on the
+          // target video in the 2026-06-18 failure log. Without the scope
+          // we'd match 11+ candidates per page including links, settings
+          // menu items, and recommendation cards.
+          var chrome = document.querySelector('.ytp-chrome-controls') || document.querySelector('.ytp-right-controls');
+          if (!chrome) {
+            postDebug("nudge_any_no_chrome", "player toolbar not yet rendered");
+            return;
+          }
+          var candidates = chrome.querySelectorAll('[aria-label*="ubtitle" i], [aria-label*="字幕"], [data-tooltip-target-id*="ubtitle" i]');
           postDebug("nudge_any_candidates", "n=" + candidates.length);
           var clicked = 0;
           for (var i = 0; i < candidates.length; i++) {
-            // Same guard — skip already-pressed toggles. Caption menus
-            // and language selectors don't have aria-pressed so the
-            // skip only fires for actual toggle buttons.
             var el = candidates[i];
             if (el.getAttribute && el.getAttribute('aria-pressed') === 'true') continue;
+            // Belt-and-suspenders — refuse to click anything that's an <a>
+            // (navigation) or has role="menuitem" (settings panel items).
+            var tag = (el.tagName || '').toUpperCase();
+            if (tag === 'A') continue;
+            if (el.getAttribute && el.getAttribute('role') === 'menuitem') continue;
             try { el.click(); clicked++; } catch(e){}
           }
           postDebug("nudge_any_clicked", "n=" + clicked);

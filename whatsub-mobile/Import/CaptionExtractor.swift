@@ -106,6 +106,24 @@ final class CaptionExtractor: NSObject {
         // time"). Don't change to `.nonPersistent()` — that's what bit us.
         cfg.websiteDataStore = WKWebsiteDataStore.default()
 
+        // 2026-06-18 — Inject the target videoId BEFORE the hook so JS can
+        // gate all caption-posting on "are we currently on the right /watch
+        // page". Without this, the hook posts captions from:
+        //   (a) the warmup homepage's auto-preview video, OR
+        //   (b) any video YouTube navigates us to via recommendation clicks.
+        // Both produce 404s that look like "the target video has no
+        // captions" when in fact we just asked for the wrong URL's
+        // timedtext token. Sanitized to prevent JS injection — videoIds are
+        // 11 alphanum chars, but defensively strip anything else.
+        let safeId = videoId.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-" }.map(String.init).joined()
+        let targetScript = WKUserScript(
+            source: "window.__whatsubTargetVideoId = '\(safeId)';",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+            in: .page
+        )
+        cfg.userContentController.addUserScript(targetScript)
+
         // Install hook in the page world at document start so it runs
         // before the player's first network call.
         let hook = WKUserScript(
