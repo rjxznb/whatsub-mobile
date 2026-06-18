@@ -244,7 +244,22 @@ enum CaptionHookJS {
           }).then(function(t){
             if (t) {
               postDebug("synth_fetch_body", "len=" + t.length);
-              postCaptions(trackUrl, t);
+              // 2026-06-18 — Detect a BotGuard login-wall response and signal
+              // Swift to abort early. When YT rejects our timedtext URL it
+              // often serves a 200 OK with the full sign-in page HTML
+              // (~2MB) — that's never parseable as json3, and waiting out
+              // the 25s timeout serves no purpose. Heuristic: first 200
+              // chars start with `<!doctype` / `<html` OR contain `sign in`
+              // / `signin` / `accounts.google` substrings.
+              var head = t.trim().slice(0, 400).toLowerCase();
+              if (head.indexOf('<!doctype') === 0
+                  || head.indexOf('<html') === 0
+                  || head.indexOf('accounts.google') !== -1
+                  || head.indexOf('signin') !== -1) {
+                postDebug("login_wall_detected", "head=" + head.slice(0, 60));
+              } else {
+                postCaptions(trackUrl, t);
+              }
             }
           }).catch(function(e){ postDebug("synth_fetch_fail", String(e)); });
         } catch(e) {

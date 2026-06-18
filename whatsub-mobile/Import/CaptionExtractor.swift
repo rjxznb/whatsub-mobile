@@ -23,7 +23,7 @@ enum CaptionError: Error, LocalizedError {
         case .emptyResult:
             return "字幕解析结果为空，请确认该视频有英文字幕。"
         case .requiresLogin:
-            return "YouTube 要求登录才能访问字幕（BotGuard 反爬，手机端无法满足）。请「推送到桌面端」让 yt-dlp 用桌面 cookies 处理。"
+            return "YouTube 反爬把字幕接口锁了（即使有登录入口也救不回来 — BotGuard 看 WebKit 指纹拒绝服务）。点「推送到桌面端」让桌面 yt-dlp 用真实 cookies 抓字幕，这条路目前 100% 稳。"
         }
     }
 }
@@ -275,6 +275,14 @@ extension CaptionExtractor: WKScriptMessageHandler {
                 let info = (dict["info"] as? String) ?? ""
                 Task { @MainActor [weak self] in
                     self?.appendDebug("js: \(event) \(info)")
+                    // 2026-06-18 — early abort on BotGuard login wall. The JS
+                    // hook detects "the timedtext synth_fetch returned a 2MB
+                    // HTML page" (sign-in wall, not json3) and fires this
+                    // event. Without the abort, we'd wait out the 25s
+                    // timeout on a video YT has already rejected.
+                    if event == "login_wall_detected" {
+                        self?.resumeOnce(throwing: CaptionError.requiresLogin)
+                    }
                 }
             }
             return
