@@ -248,15 +248,33 @@ enum CaptionHookJS {
               // Swift to abort early. When YT rejects our timedtext URL it
               // often serves a 200 OK with the full sign-in page HTML
               // (~2MB) — that's never parseable as json3, and waiting out
-              // the 25s timeout serves no purpose. Heuristic: first 200
-              // chars start with `<!doctype` / `<html` OR contain `sign in`
-              // / `signin` / `accounts.google` substrings.
-              var head = t.trim().slice(0, 400).toLowerCase();
-              if (head.indexOf('<!doctype') === 0
-                  || head.indexOf('<html') === 0
-                  || head.indexOf('accounts.google') !== -1
-                  || head.indexOf('signin') !== -1) {
-                postDebug("login_wall_detected", "head=" + head.slice(0, 60));
+              // the 25s timeout serves no purpose.
+              //
+              // Two converging signals (need either):
+              //   1. HTML markers in the first 400 chars: <!doctype, <html,
+              //      <head>, accounts.google, signin, "youtube.com/signin"
+              //   2. Body > 50KB AND doesn't look like JSON / XML / WebVTT.
+              //      Real json3 captions are usually < 30KB even for hour-
+              //      long videos (it's just text); anything 50KB+ that
+              //      parsed to "not JSON" is almost certainly an HTML page.
+              var trimmed = t.trim();
+              var head = trimmed.slice(0, 400).toLowerCase();
+              var looksLikeJson = head.charAt(0) === '{';
+              var looksLikeXml = head.indexOf('<?xml') === 0
+                              || head.indexOf('<transcript') === 0
+                              || head.indexOf('<tt ') === 0;
+              var looksLikeVtt = head.indexOf('webvtt') === 0;
+              var hasHtmlMarker = head.indexOf('<!doctype') === 0
+                              || head.indexOf('<html') === 0
+                              || head.indexOf('<head>') !== -1
+                              || head.indexOf('accounts.google') !== -1
+                              || head.indexOf('signin') !== -1
+                              || head.indexOf('"signinredirecturl"') !== -1;
+              var isHuge = t.length > 50000;
+              var likelyWall = hasHtmlMarker
+                            || (isHuge && !looksLikeJson && !looksLikeXml && !looksLikeVtt);
+              if (likelyWall) {
+                postDebug("login_wall_detected", "len=" + t.length + " head=" + head.slice(0, 80).replace(/\s+/g, ' '));
               } else {
                 postCaptions(trackUrl, t);
               }

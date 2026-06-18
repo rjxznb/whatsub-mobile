@@ -296,11 +296,20 @@ extension CaptionExtractor: WKScriptMessageHandler {
         let data = Data(body.utf8)
         let cues = parseTimedtextJson3(data)
         guard !cues.isEmpty else {
-            // Got a non-empty body but parsing yielded nothing — log it so
-            // we don't silently discard a successful capture that just
-            // happened to be a format the parser doesn't know.
+            // Got a non-empty body but parsing yielded nothing.
             Task { @MainActor [weak self] in
-                self?.appendDebug("parser dropped body (len=\(body.count))")
+                guard let self else { return }
+                self.appendDebug("parser dropped body (len=\(body.count))")
+                // 2026-06-18 — Swift-side fallback for the login-wall detector.
+                // Real json3 captions are tiny (kilobytes); a huge unparseable
+                // body is almost certainly the BotGuard sign-in HTML page.
+                // Abort here so we don't sit on the 25s timeout — same
+                // outcome as if the JS hook had caught it via its own
+                // `login_wall_detected` heuristic.
+                if body.count > 50_000 {
+                    self.appendDebug("Swift-side login wall: \(body.count) bytes dropped → requiresLogin")
+                    self.resumeOnce(throwing: CaptionError.requiresLogin)
+                }
             }
             return
         }
