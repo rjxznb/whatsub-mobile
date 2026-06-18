@@ -198,7 +198,7 @@ enum CaptionHookJS {
         nudgeVideoPlay();
         setTimeout(nudgeCCButton, 800);
         setTimeout(nudgeAnyCaptionToggle, 2000);
-      }, 15000);
+      }, 30000);  // 2026-06-18: 15s → 30s, paired with outer 25s → 60s.
 
       function handlePlayerResponse(url, body) {
         try {

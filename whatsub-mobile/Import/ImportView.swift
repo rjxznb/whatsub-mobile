@@ -325,7 +325,7 @@ struct ImportView: View {
                 Text("YouTube 播放器正在加载视频字幕轨")
                     .font(.subheadline)
                     .foregroundStyle(.whatsubInkMuted)
-                Text("需挂 VPN · 不要锁屏 · 大概 15-25 秒")
+                Text("需挂 VPN · 不要锁屏 · 通常 10-30 秒，BotGuard 严格的视频可能到 60 秒")
                     .font(.caption)
                     .foregroundStyle(.whatsubInkFaint)
             }

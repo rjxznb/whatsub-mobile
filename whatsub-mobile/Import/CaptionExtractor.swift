@@ -195,12 +195,21 @@ final class CaptionExtractor: NSObject {
             self.navigateToWatch()
         }
 
-        // Outer timeout — 25s from setup to first cues. Same budget as
-        // before; warmup eats ~1.5-3.5s of that, leaving ~20s for the
-        // watch URL + player + caption fetch.
+        // Outer timeout — 60s from setup to first cues. Bumped from 25s on
+        // 2026-06-18 (user feedback: "25s 太短了"). Trade-off review:
+        //   • Slow VPN / slow YT response: extra 35s rescues videos where
+        //     the player just hadn't finished loading by 25s. Real win.
+        //   • BotGuard 401/404 + login wall: NOT helped by waiting longer
+        //     (it's a final verdict). Already caught early via the
+        //     `login_wall_detected` heuristic — aborts at ~5s, no wait.
+        //   • timedtext URL `expire=N`: occasionally the YT player re-
+        //     signs after the first URL expires; more time = more chances
+        //     to capture a fresh signed request.
+        // Warmup eats ~1.5-3.5s of that, leaving ~55s for the watch URL
+        // + player + caption fetch.
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 25_000_000_000)
-            self?.appendDebug("timeout after 25s")
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            self?.appendDebug("timeout after 60s")
             self?.resumeOnce(throwing: CaptionError.timeout)
         }
     }
