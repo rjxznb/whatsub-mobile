@@ -29,6 +29,9 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published var dirty: Bool = false
     @Published var saving: Bool = false
     @Published var saveError: String?
+    /// Set to the draft index currently being re-analyzed via the LLM so the
+    /// row UI can show a spinner. nil = idle.
+    @Published var analyzingCueIndex: Int?
 
     private var cues: [Cue] { entry?.analysisJson.subtitles ?? [] }
 
@@ -181,6 +184,144 @@ final class LibraryDetailViewModel: ObservableObject {
             saveError = "保存失败，请重试"
         }
         saving = false
+    }
+
+    /// Merge a cue with the one BEFORE it (drops the boundary between them).
+    /// `cue[i-1].text + " " + cue[i].text`; time span becomes [prev.time,
+    /// curr.endTime]. AI highlights are cleared on the merged result — the
+    /// joined text needs re-analysis to mark phrases that span the boundary.
+    /// No-op for the first cue (nothing to merge into).
+    func mergeCueWithPrevious(at index: Int) {
+        guard draftCues.indices.contains(index), index > 0 else { return }
+        let prev = draftCues[index - 1]
+        let curr = draftCues[index]
+        let mergedText = [prev.text, curr.text].filter { !$0.isEmpty }.joined(separator: " ")
+        let mergedTranslation = [prev.translation, curr.translation]
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        let merged = Cue(
+            index: prev.index,
+            time: prev.time,
+            endTime: curr.endTime,
+            text: mergedText,
+            translation: mergedTranslation
+        )
+        var mergedVar = merged
+        // Clear AI markers — the combined text has different positional
+        // semantics, so any preserved highlightWords would be misleading.
+        mergedVar.highlightWords = []
+        mergedVar.keyNotes = [:]
+        mergedVar.highlightTranslations = [:]
+        mergedVar.isKeyPoint = false
+        draftCues[index - 1] = mergedVar
+        draftCues.remove(at: index)
+        dirty = true
+        // Currently-playing index update — same logic as deleteCue: if we
+        // collapsed across the current index, point at the merged row.
+        if let cur = currentIndex {
+            if cur == index || cur == index - 1 {
+                currentIndex = index - 1
+            } else if cur > index {
+                currentIndex = cur - 1
+            }
+        }
+    }
+
+    /// Split one cue into two by finding a space near the text midpoint and
+    /// halving the time span. Translation halves at its char midpoint (no
+    /// reliable grammar boundary detector for Chinese in this codebase).
+    /// AI highlights drop — neither half inherits them.
+    func splitCue(at index: Int) {
+        guard draftCues.indices.contains(index) else { return }
+        let c = draftCues[index]
+        let (firstText, secondText) = Self.splitEnglish(c.text)
+        let (firstZh, secondZh) = Self.splitChinese(c.translation)
+        let midTime = (c.time + c.endTime) / 2.0
+        let first = Cue(index: c.index,
+                        time: c.time, endTime: midTime,
+                        text: firstText, translation: firstZh)
+        // Use a fresh non-collision index — actual index will be re-numbered
+        // on next decode, but UI keys (`id == index`) need uniqueness in the
+        // ForEach for this session. Use a value above the existing max.
+        let nextIndex = (draftCues.map { $0.index }.max() ?? c.index) + 1
+        let second = Cue(index: nextIndex,
+                         time: midTime, endTime: c.endTime,
+                         text: secondText, translation: secondZh)
+        draftCues[index] = first
+        draftCues.insert(second, at: index + 1)
+        dirty = true
+        if let cur = currentIndex, cur > index { currentIndex = cur + 1 }
+    }
+
+    /// Re-run the LLM analysis for ONE cue and copy back its highlightWords /
+    /// keyNotes / highlightTranslations / isKeyPoint. Used after a text edit
+    /// (which auto-clears those fields) to refresh the AI markers without
+    /// re-running the full transcript analysis. ~1 LLM call, ~$0.005-ish at
+    /// current DeepSeek pricing — surfaced via per-row context menu so users
+    /// only pay when they explicitly ask.
+    func reanalyzeCue(at index: Int) async {
+        guard draftCues.indices.contains(index) else { return }
+        let settings = LlmSettingsStore.load()
+        guard settings.isConfigured else {
+            saveError = "请先配置 LLM（我的 → LLM 设置）"
+            return
+        }
+        analyzingCueIndex = index
+        defer { analyzingCueIndex = nil }
+        let target = draftCues[index]
+        let client = ChatCompletionsClient(settings: settings)
+        do {
+            let raw = try await client.chat([
+                ChatMessage(role: "system", content: AnalysisPrompts.system),
+                ChatMessage(role: "user", content: AnalysisPrompts.userPrompt([target])),
+            ])
+            let parsed = AnalysisEngine.parseCueLines(raw)
+            guard let updated = parsed.first else {
+                saveError = "AI 返回为空"
+                return
+            }
+            // Splice back ONLY the LLM-derived fields. Keep our timestamps +
+            // text (LLM might have corrected typos we wanted preserved).
+            var c = draftCues[index]
+            c.translation = updated.translation.isEmpty ? c.translation : updated.translation
+            c.isKeyPoint = updated.isKeyPoint
+            c.highlightWords = updated.highlightWords
+            c.keyNotes = updated.keyNotes
+            c.highlightTranslations = updated.highlightTranslations
+            draftCues[index] = c
+            dirty = true
+        } catch {
+            saveError = "重新分析失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// Split English text at the space nearest the middle. Falls back to
+    /// raw mid-char split if there's no space (single long word, rare).
+    private static func splitEnglish(_ text: String) -> (String, String) {
+        guard !text.isEmpty else { return ("", "") }
+        let chars = Array(text)
+        let mid = chars.count / 2
+        var bestSpace = -1
+        var bestDist = Int.max
+        for i in chars.indices where chars[i] == " " {
+            let d = abs(i - mid)
+            if d < bestDist { bestDist = d; bestSpace = i }
+        }
+        if bestSpace > 0 {
+            let prefix = String(chars[..<bestSpace])
+            let suffix = String(chars[(bestSpace + 1)...])
+                .trimmingCharacters(in: .whitespaces)
+            return (prefix, suffix)
+        }
+        return (String(chars[..<mid]), String(chars[mid...]))
+    }
+
+    /// Split Chinese at the character midpoint. No grammar boundary detection;
+    /// users can fine-tune the halves after the split via the row TextFields.
+    private static func splitChinese(_ text: String) -> (String, String) {
+        guard !text.isEmpty else { return ("", "") }
+        let chars = Array(text)
+        let mid = chars.count / 2
+        return (String(chars[..<mid]), String(chars[mid...]))
     }
 
     func showHighlight(word: String, note: String?, translation: String?) {

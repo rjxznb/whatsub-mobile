@@ -17,8 +17,13 @@ import SwiftUI
 struct CueRowEditing: View {
     let index: Int
     let cue: Cue
+    let canMergeUp: Bool
+    let isAnalyzing: Bool
     let onTextChange: (String) -> Void
     let onTranslationChange: (String) -> Void
+    let onMergeUp: () -> Void
+    let onSplit: () -> Void
+    let onReanalyze: () -> Void
 
     /// Local copies so TextField bindings have a stable @State to update —
     /// re-syncing from `cue` on appear means tapping a different row
@@ -38,6 +43,11 @@ struct CueRowEditing: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.whatsubInkFaint)
                 Spacer()
+                if isAnalyzing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.whatsubAccent)
+                }
             }
             TextField("英文", text: $englishDraft, axis: .vertical)
                 .font(.system(size: 17, weight: .medium))
@@ -52,6 +62,30 @@ struct CueRowEditing: View {
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)
+        // Long-press → contextMenu: merge / split / re-analyze. Lives at
+        // row-level so the user can trigger from any spot in the row,
+        // not just a tiny toolbar icon. Each item is hidden when
+        // inappropriate (canMergeUp / isAnalyzing).
+        .contextMenu {
+            if canMergeUp {
+                Button {
+                    onMergeUp()
+                } label: {
+                    Label("合并到上一句", systemImage: "arrow.up.and.line.horizontal.and.arrow.down")
+                }
+            }
+            Button {
+                onSplit()
+            } label: {
+                Label("拆成两句", systemImage: "rectangle.split.2x1")
+            }
+            Button {
+                onReanalyze()
+            } label: {
+                Label("AI 重新分析", systemImage: "sparkles")
+            }
+            .disabled(isAnalyzing)
+        }
         .onAppear {
             englishDraft = cue.text
             chineseDraft = cue.translation

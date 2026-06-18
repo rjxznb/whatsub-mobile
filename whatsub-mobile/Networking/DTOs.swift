@@ -125,6 +125,21 @@ struct Cue: Decodable, Identifiable {
         self.highlightTranslations = [:]
     }
 
+    /// Memberwise init carrying the translation too — used by the subtitle
+    /// editor's merge / split operations (2026-06-18). highlights are still
+    /// empty by default since edits invalidate any prior AI markers.
+    init(index: Int, time: Double, endTime: Double, text: String, translation: String) {
+        self.index = index
+        self.time = time
+        self.endTime = endTime
+        self.text = text
+        self.translation = translation
+        self.isKeyPoint = false
+        self.highlightWords = []
+        self.keyNotes = [:]
+        self.highlightTranslations = [:]
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         time = try c.decodeIfPresent(Double.self, forKey: .time) ?? 0

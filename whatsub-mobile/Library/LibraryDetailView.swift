@@ -495,8 +495,13 @@ struct LibraryDetailView: View {
                     CueRowEditing(
                         index: idx,
                         cue: cue,
+                        canMergeUp: idx > 0,
+                        isAnalyzing: vm.analyzingCueIndex == idx,
                         onTextChange: { vm.updateCueText(at: idx, text: $0) },
-                        onTranslationChange: { vm.updateCueTranslation(at: idx, translation: $0) }
+                        onTranslationChange: { vm.updateCueTranslation(at: idx, translation: $0) },
+                        onMergeUp: { vm.mergeCueWithPrevious(at: idx) },
+                        onSplit: { vm.splitCue(at: idx) },
+                        onReanalyze: { Task { await vm.reanalyzeCue(at: idx) } }
                     )
                     .listRowBackground(Color.whatsubBg)
                     .listRowSeparatorTint(Color.white.opacity(0.06))
