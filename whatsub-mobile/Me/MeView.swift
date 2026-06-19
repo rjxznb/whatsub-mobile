@@ -205,6 +205,14 @@ struct MeView: View {
                             }
                         }
                         .buttonStyle(.borderless)
+                        // Power-user escape hatch — CaptionCache is permanent
+                        // by design (extracted JSON is small + the network
+                        // round-trip is the slow part). Last-in-section so
+                        // an accidental tap doesn't pre-empt other settings.
+                        Button("清除字幕缓存") {
+                            CaptionCache.shared.clearAll()
+                        }
+                        .foregroundStyle(.whatsubAccent)
                     }
                     .listRowBackground(Color.whatsubBgElev)
                     // (Local 词汇暂存区 entry removed build 248. Pending
