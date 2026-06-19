@@ -80,22 +80,12 @@ enum YouTubeCaptionExtractor {
             userAgent: "com.google.android.youtube/19.07.34 (Linux; U; Android 14) gzip",
             extraClientContext: ["androidSdkVersion": 30]
         ),
-        // Fallback 1: IOS — broadest compatibility. Generally bypasses
-        // music-rights, region locks, and many age gates that
-        // ANDROID_TESTSUITE rejects. Same idea as yt-dlp's
-        // `--extractor-args "youtube:player_client=ios"`.
-        InnertubeClient(
-            clientName: "IOS",
-            clientVersion: "19.09.3",
-            xClientNameHeader: "5",
-            xClientVersionHeader: "19.09.3",
-            userAgent: "com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)",
-            extraClientContext: ["deviceMake": "Apple", "deviceModel": "iPhone14,3"]
-        ),
-        // Fallback 2: TVHTML5_SIMPLY_EMBEDDED_PLAYER — TV embedded
+        // Fallback 1: TVHTML5_SIMPLY_EMBEDDED_PLAYER — TV embedded
         // client. Minimal anti-scraping because YouTube can't enforce
         // device attestation across smart TV / Roku / Apple TV
-        // ecosystems. Last resort for age-gated content IOS rejects.
+        // ecosystems. Placed second because in 2026 it's more reliable
+        // than IOS (which is increasingly rate-limited as YouTube
+        // tightens its anti-scrape on Apple-platform clients).
         InnertubeClient(
             clientName: "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
             clientVersion: "2.0",
@@ -103,6 +93,22 @@ enum YouTubeCaptionExtractor {
             xClientVersionHeader: "2.0",
             userAgent: "Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
             extraClientContext: [:]
+        ),
+        // Fallback 2: IOS — third-line fallback. Metadata bumped to
+        // late-2024 versions (yt-dlp current values); older 19.09.x +
+        // iPhone14,3 + iOS 15.6 started returning HTTP 400 in 2026.
+        InnertubeClient(
+            clientName: "IOS",
+            clientVersion: "19.45.4",
+            xClientNameHeader: "5",
+            xClientVersionHeader: "19.45.4",
+            userAgent: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)",
+            extraClientContext: [
+                "deviceMake": "Apple",
+                "deviceModel": "iPhone16,2",
+                "osName": "iPhone",
+                "osVersion": "18.1.0.22B83",
+            ]
         ),
     ]
 
@@ -133,30 +139,53 @@ enum YouTubeCaptionExtractor {
         }
         await emit(onProgress, "cache miss for \(videoId)")
 
-        // 2. Walk client fallback chain. Break on first OK; remember
-        // the last status seen so we can map to the right error if
-        // every client refuses.
+        // 2. Walk client fallback chain. Break on first OK; on ANY
+        // failure (UNPLAYABLE status, HTTP error, network error)
+        // continue to the next client. Only re-throw after all
+        // clients are exhausted.
         var workingResponse: PlayerResponse?
         var lastStatus: String = "UNKNOWN"
+        var lastError: CaptionError?
 
         for client in fallbackClients {
             await emit(onProgress, "POST youtubei/v1/player + \(client.clientName)")
-            let resp = try await fetchPlayerResponse(
-                videoId: videoId, client: client, fetcher: fetcher
-            )
-            lastStatus = resp.playabilityStatus.status
-            if lastStatus == "OK" {
-                await emit(onProgress, "playabilityStatus=OK on \(client.clientName)")
-                workingResponse = resp
-                break
+            do {
+                let resp = try await fetchPlayerResponse(
+                    videoId: videoId, client: client, fetcher: fetcher
+                )
+                lastStatus = resp.playabilityStatus.status
+                if lastStatus == "OK" {
+                    await emit(onProgress, "playabilityStatus=OK on \(client.clientName)")
+                    workingResponse = resp
+                    break
+                }
+                await emit(onProgress, "playabilityStatus=\(lastStatus) on \(client.clientName) → try next client")
+            } catch let err as CaptionError {
+                // HTTP / network / parse failure — log + remember as
+                // last-error so we can re-throw it if every other
+                // client also fails. Continue the chain.
+                await emit(onProgress, "\(client.clientName) request failed: \(err.errorDescription ?? "unknown") → try next client")
+                lastError = err
             }
-            await emit(onProgress, "playabilityStatus=\(lastStatus) on \(client.clientName) → try next client")
         }
 
         guard let player = workingResponse else {
-            let mapped: CaptionError = (lastStatus == "LOGIN_REQUIRED" || lastStatus == "AGE_VERIFICATION_REQUIRED")
-                ? .requiresLogin
-                : .videoUnavailable
+            // Status-based exhaustion takes precedence (we got responses
+            // from at least one client, they just said the video is
+            // gated/dead). If we never got a successful response at all,
+            // surface the last underlying transport error so the user
+            // sees "HTTP 400" / "网络错误" instead of a misleading
+            // "video unavailable".
+            let mapped: CaptionError
+            if lastStatus == "LOGIN_REQUIRED" || lastStatus == "AGE_VERIFICATION_REQUIRED" {
+                mapped = .requiresLogin
+            } else if lastStatus != "UNKNOWN" {
+                mapped = .videoUnavailable
+            } else if let lastError = lastError {
+                mapped = lastError
+            } else {
+                mapped = .videoUnavailable
+            }
             await emit(onProgress, "all clients exhausted, last=\(lastStatus)")
             throw mapped
         }

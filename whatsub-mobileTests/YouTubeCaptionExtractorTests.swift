@@ -294,6 +294,33 @@ final class YouTubeCaptionExtractorTests: XCTestCase {
         XCTAssertEqual(cues.count, 2)
     }
 
+    func testFallsBackToNextClientOnHTTPError() async throws {
+        let okJSON = """
+        {"playabilityStatus":{"status":"OK"},
+         "captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[
+           {"baseUrl":"https://yt.example/timedtext","languageCode":"en"}
+         ]}}}
+        """.data(using: .utf8)!
+        var playerCalls = 0
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { req in
+            if req.httpMethod == "POST" {
+                playerCalls += 1
+                // First client HTTP 400 → fallback chain must keep going
+                // (the bug X_-Q1hOYeCo hit before the catch-and-continue
+                // fix landed: IOS HTTP 400 was propagating out instead of
+                // letting TVHTML5 take over).
+                return playerCalls == 1 ? self.status(400) : self.ok(okJSON)
+            }
+            return self.ok(self.makeTimedtextJson3())
+        }
+        let cues = try await YouTubeCaptionExtractor.extract(
+            videoId: "fb-http", cache: cache, fetcher: fetcher
+        )
+        XCTAssertEqual(playerCalls, 2,
+                       "should advance to next client after HTTP 400")
+        XCTAssertEqual(cues.count, 2)
+    }
+
     func testExhaustsAllClientsThenThrows() async {
         let unplayableJSON = """
         {"playabilityStatus":{"status":"UNPLAYABLE"}}
