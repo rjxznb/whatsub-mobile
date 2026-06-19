@@ -8,8 +8,8 @@ struct ImportView: View {
 
     @State private var urlInput = ""
     @State private var didAutoRun = false
-    /// Diagnostics sheet for the .extractFailed phase. Surfaces the rich
-    /// CaptionExtractor event log so the user can self-triage instead of
+    /// Diagnostics sheet for the .extractFailed phase. Surfaces the
+    /// extractor's per-step event log so the user can self-triage instead of
     /// guessing why captions weren't found.
     @State private var showDiagnostics = false
     @State private var diagnosticsLog: [String] = []

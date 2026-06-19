@@ -1,8 +1,6 @@
 import Foundation
 
 /// All failure paths the iOS-native YouTube caption extractor can surface.
-/// Replaces the legacy WKWebView-based `CaptionExtractor.CaptionError` which
-/// only carried `.timeout`, `.emptyResult`, and `.requiresLogin`.
 ///
 /// Message strings are sourced verbatim from
 /// `docs/superpowers/specs/2026-06-19-ios-innertube-captions-design.md` §6.2
@@ -11,9 +9,6 @@ import Foundation
 /// CaptionDiagnosticsSheet button surfaces the per-step debug log
 /// separately.
 enum CaptionError: Error, LocalizedError {
-    // Legacy WKWebView-based extractor cases (preserved for compatibility)
-    case timeout
-    // New iOS-native Innertube-based extractor cases
     case network(URLError)
     case http(status: Int)
     case videoUnavailable
@@ -26,8 +21,6 @@ enum CaptionError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .timeout:
-            return "未捕获到字幕。可能是 YouTube 对本会话反爬升级了，或视频本身没有英文字幕。点「查看诊断」看挂在哪一步，或「推送到桌面端」让 Whisper 转录。"
         case .network:
             return "网络错误,请检查 VPN 或网络连接"
         case .http(let status):

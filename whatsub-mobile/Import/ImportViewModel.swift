@@ -12,7 +12,7 @@ final class ImportViewModel: ObservableObject {
         case done
         case error(String)
         /// Caption extraction failed — push to desktop is available. `debug`
-        /// is the CaptionExtractor's full event log surfaced via the
+        /// is the extractor's per-step event log surfaced via the
         /// 「查看诊断」 button so users can self-triage instead of guessing
         /// (or sending us a screenshot of a one-line error).
         case extractFailed(message: String, debug: [String])
@@ -72,10 +72,8 @@ final class ImportViewModel: ObservableObject {
         // Step 1: Extract captions.
         state = .extracting
         let cues: [Cue]
-        // 2026-06-19: switched to pure-Swift Innertube extractor (spec
-        // docs/superpowers/specs/2026-06-19-ios-innertube-captions-design.md).
-        // The new path doesn't use WKWebView, so the liveWebView state from
-        // the old flow is gone.
+        // 2026-06-19: pure-Swift Innertube extractor — see spec
+        // docs/superpowers/specs/2026-06-19-ios-innertube-captions-design.md.
         var debugLog: [String] = []
         do {
             cues = try await YouTubeCaptionExtractor.extract(

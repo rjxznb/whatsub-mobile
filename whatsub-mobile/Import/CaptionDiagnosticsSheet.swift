@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Renders CaptionExtractor's event log so users can see exactly which
+/// Renders the caption extractor's event log so users can see exactly which
 /// step of the extraction pipeline died. Surfaced from ImportView's
 /// .extractFailed phase via a 「查看诊断」 button next to 「重试」.
 ///
