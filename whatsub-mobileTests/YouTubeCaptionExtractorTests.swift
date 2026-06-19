@@ -73,9 +73,9 @@ final class YouTubeCaptionExtractorTests: XCTestCase {
                 XCTAssertTrue(req.url?.absoluteString
                               .contains("youtubei/v1/player") ?? false)
                 XCTAssertEqual(req.value(forHTTPHeaderField: "X-YouTube-Client-Name"),
-                               "3")
+                               "28")
                 XCTAssertEqual(req.value(forHTTPHeaderField: "X-YouTube-Client-Version"),
-                               "1.9")
+                               "1.65.10")
                 XCTAssertEqual(req.value(forHTTPHeaderField: "Content-Type"),
                                "application/json")
                 return self.ok(playerJSON)
@@ -339,7 +339,7 @@ final class YouTubeCaptionExtractorTests: XCTestCase {
                 XCTFail("expected .videoUnavailable, got \(error)"); return
             }
         }
-        XCTAssertEqual(playerCalls, 3,
+        XCTAssertEqual(playerCalls, 4,
                        "must try every client in the fallback chain")
     }
 

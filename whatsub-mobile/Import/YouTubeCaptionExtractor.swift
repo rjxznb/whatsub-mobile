@@ -11,19 +11,20 @@ import Foundation
 /// signature deobfuscation, because YouTube serves non-web clients via
 /// a different API path entirely.
 ///
-/// Client fallback chain: ANDROID_TESTSUITE → IOS → TVHTML5. The
-/// primary (ANDROID_TESTSUITE) wins for the ~95% of plain videos and
-/// is the fastest (smallest payload). When YouTube returns UNPLAYABLE
-/// / LOGIN_REQUIRED / AGE_VERIFICATION_REQUIRED on it — common on
-/// music videos, region-locked content, and certain age-gated videos
-/// — we fall through to IOS and then TVHTML5, which together unblock
-/// most of the remaining cases (same idea as yt-dlp's
-/// `--extractor-args "youtube:player_client=android,ios,tv"`).
+/// Client fallback chain (2026-06-20, matches yt-dlp's 2026 picks):
+/// ANDROID_VR → TVHTML5_SIMPLY_EMBEDDED_PLAYER → IOS → MWEB.
+/// ANDROID_VR (Oculus Quest YouTube app) is the current most-permissive
+/// no-PO_TOKEN client per yt-dlp 2026 defaults — replaced our previous
+/// ANDROID_TESTSUITE which yt-dlp removed from `INNERTUBE_CLIENTS`. TV
+/// embedded second is good for age-gate / kids-mode. IOS bumped to
+/// yt-dlp's current metadata (clientVersion 21.02.3 / iPhone16,2 /
+/// iOS 18) — older 19.x values started returning HTTP 400 in 2026 as
+/// YouTube tightened Apple-platform anti-scrape. MWEB last as a
+/// generic-web safety net.
 ///
-/// Risks (spec §10): all three clients may eventually require
-/// PO_TOKEN. Mitigation: add another entry to `fallbackClients` (e.g.
-/// `MEDIA_CONNECT_FRONTEND` or whatever NewPipe / yt-dlp are using
-/// next). The chain is the abstraction.
+/// Risks (spec §10): each client may eventually require PO_TOKEN.
+/// Mitigation: mirror what yt-dlp's `extractor/youtube/_base.py`
+/// `INNERTUBE_CLIENTS` ships next. The chain is the abstraction.
 enum YouTubeCaptionExtractor {
 
     /// Function-type alias for HTTP injection. Tests pass a mock; production
@@ -70,22 +71,22 @@ enum YouTubeCaptionExtractor {
     }
 
     fileprivate static let fallbackClients: [InnertubeClient] = [
-        // Primary: ANDROID_TESTSUITE — fastest, simplest, no PO_TOKEN.
-        // Covers the vast majority of regular videos.
+        // Primary: ANDROID_VR — yt-dlp's 2026 default client, lifted
+        // from the Oculus Quest YouTube VR app. No PO_TOKEN, broadest
+        // coverage as of 2026-06. Replaced our previous
+        // ANDROID_TESTSUITE which yt-dlp removed from INNERTUBE_CLIENTS.
         InnertubeClient(
-            clientName: "ANDROID_TESTSUITE",
-            clientVersion: "1.9",
-            xClientNameHeader: "3",
-            xClientVersionHeader: "1.9",
-            userAgent: "com.google.android.youtube/19.07.34 (Linux; U; Android 14) gzip",
-            extraClientContext: ["androidSdkVersion": 30]
+            clientName: "ANDROID_VR",
+            clientVersion: "1.65.10",
+            xClientNameHeader: "28",
+            xClientVersionHeader: "1.65.10",
+            userAgent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+            extraClientContext: ["androidSdkVersion": 32]
         ),
         // Fallback 1: TVHTML5_SIMPLY_EMBEDDED_PLAYER — TV embedded
         // client. Minimal anti-scraping because YouTube can't enforce
         // device attestation across smart TV / Roku / Apple TV
-        // ecosystems. Placed second because in 2026 it's more reliable
-        // than IOS (which is increasingly rate-limited as YouTube
-        // tightens its anti-scrape on Apple-platform clients).
+        // ecosystems. Good at unblocking kids-mode + some age-gates.
         InnertubeClient(
             clientName: "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
             clientVersion: "2.0",
@@ -94,21 +95,34 @@ enum YouTubeCaptionExtractor {
             userAgent: "Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
             extraClientContext: [:]
         ),
-        // Fallback 2: IOS — third-line fallback. Metadata bumped to
-        // late-2024 versions (yt-dlp current values); older 19.09.x +
-        // iPhone14,3 + iOS 15.6 started returning HTTP 400 in 2026.
+        // Fallback 2: IOS — Apple-platform fallback. Metadata mirrors
+        // yt-dlp's 2026 INNERTUBE_CLIENTS values (clientVersion bumped
+        // from earlier 19.45.4 → 21.02.3 after another round of
+        // YouTube anti-scrape tightening on Apple clients in mid-2026).
         InnertubeClient(
             clientName: "IOS",
-            clientVersion: "19.45.4",
+            clientVersion: "21.02.3",
             xClientNameHeader: "5",
-            xClientVersionHeader: "19.45.4",
-            userAgent: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)",
+            xClientVersionHeader: "21.02.3",
+            userAgent: "com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X)",
             extraClientContext: [
                 "deviceMake": "Apple",
                 "deviceModel": "iPhone16,2",
                 "osName": "iPhone",
-                "osVersion": "18.1.0.22B83",
+                "osVersion": "18.2.0.22C152",
             ]
+        ),
+        // Fallback 3: MWEB — mobile web. Generic safety net; reaches
+        // some videos the device-specific clients above don't. No
+        // PO_TOKEN required for the player request itself (only some
+        // GVS streams need it, which we don't touch here).
+        InnertubeClient(
+            clientName: "MWEB",
+            clientVersion: "2.20260115.01.00",
+            xClientNameHeader: "2",
+            xClientVersionHeader: "2.20260115.01.00",
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            extraClientContext: [:]
         ),
     ]
 
