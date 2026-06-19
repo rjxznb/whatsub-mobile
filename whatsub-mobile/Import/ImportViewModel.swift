@@ -6,6 +6,12 @@ final class ImportViewModel: ObservableObject {
     enum State {
         case idle
         case extracting
+        /// Captions extracted + cached, waiting for user confirmation to
+        /// start the AI step. Shows the raw English cues so the user can
+        /// (a) verify extraction succeeded and (b) toggle VPN before the
+        /// LLM call fires — Chinese users hit eversay.cc which VPN often
+        /// MITMs, and they need this gap to switch routing.
+        case captionsReady
         case analyzing(done: Int, total: Int)
         case preview
         case syncing
@@ -101,10 +107,18 @@ final class ImportViewModel: ObservableObject {
             return
         }
 
-        // Step 3: Analyse — calls into shared helper so `retryAnalysisOnly`
-        // can re-run JUST this stage without going through URL input
-        // again. rawCues stays in memory so re-running is free + offline.
-        await performAnalysis(cues)
+        // Step 3: Wait for user confirmation. The previous flow auto-ran
+        // AI analysis here; that left China users no window to switch off
+        // VPN between caption (needs VPN) and AI (needs VPN OFF for relay
+        // users), and also obscured whether extraction actually succeeded.
+        // captionsReady shows the raw cues + a "开始 AI 解析" button.
+        state = .captionsReady
+    }
+
+    /// User tapped 「开始 AI 解析」 from the captionsReady screen. Runs the
+    /// LLM step on the in-memory rawCues.
+    func startAnalysis() async {
+        await performAnalysis(rawCues)
     }
 
     /// Re-run just the LLM analysis on the in-memory `rawCues`. Used by

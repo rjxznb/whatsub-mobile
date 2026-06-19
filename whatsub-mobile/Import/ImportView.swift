@@ -36,6 +36,8 @@ struct ImportView: View {
                 idleBody
             case .extracting:
                 extractingBody
+            case .captionsReady:
+                captionsReadyBody
             case .analyzing(let done, let total):
                 progressBody(
                     icon: "sparkles",
@@ -207,6 +209,107 @@ struct ImportView: View {
                            value: pulsing)
                 .onAppear { pulsing = true }
         }
+    }
+
+    // MARK: - Captions Ready (NEW — between extract and AI analysis)
+
+    /// Bridges caption extraction → AI analysis. Two jobs:
+    ///   1. Prove to the user that captions did download (was a real ask
+    ///      after the disk-cache-vs-memory-cache confusion).
+    ///   2. Give China relay users an explicit "switch VPN off NOW" gap
+    ///      between the YouTube hit (needs VPN) and the eversay.cc hit
+    ///      (works best WITHOUT VPN). Previously the two ran back-to-back
+    ///      so the user couldn't toggle.
+    private var captionsReadyBody: some View {
+        VStack(spacing: 0) {
+            // Header
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.green)
+                    Text("字幕已下载 · \(vm.rawCues.count) 条")
+                        .font(.headline)
+                        .foregroundStyle(.whatsubInk)
+                }
+                if LlmSettingsStore.load().useManagedRelay {
+                    Text("⚡ 下一步会调用 AI 解析(eversay.cc, 国内直连)。在用 VPN 的话, **建议现在关掉再开始** —— 否则 VPN 会拐 eversay.cc 去海外节点, TLS 握手会跪。")
+                        .font(.footnote)
+                        .foregroundStyle(.whatsubInkMuted)
+                        .multilineTextAlignment(.leading)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
+                } else {
+                    Text("下一步会调用 AI 解析。如果用 VPN 访问 LLM 厂商, 保持现状即可。")
+                        .font(.footnote)
+                        .foregroundStyle(.whatsubInkMuted)
+                        .padding(.horizontal, 16)
+                }
+            }
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+
+            // Scrollable raw cue list — English only, no AI annotations.
+            // Long-press a cue → 复制 (textSelection + contextMenu).
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(vm.rawCues) { cue in
+                        rawCueRow(cue)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 130)
+            }
+
+            // Bottom action bar (sticky)
+            VStack(spacing: 0) {
+                Divider().background(Color.white.opacity(0.08))
+                Button {
+                    Task { await vm.startAnalysis() }
+                } label: {
+                    Label("开始 AI 解析", systemImage: "sparkles")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.whatsubAccent)
+                        .foregroundStyle(.black)
+                        .cornerRadius(12)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+                .background(Color.whatsubBg)
+            }
+        }
+    }
+
+    private func rawCueRow(_ cue: Cue) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(formatTimestamp(cue.time))
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.whatsubInkFaint)
+                .frame(width: 46, alignment: .leading)
+            Text(cue.text)
+                .font(.system(size: 15))
+                .foregroundStyle(.whatsubInkSoft)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 8))
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = cue.text
+            } label: { Label("复制", systemImage: "doc.on.doc") }
+        }
+    }
+
+    private func formatTimestamp(_ sec: Double) -> String {
+        let total = Int(sec)
+        let m = total / 60
+        let s = total % 60
+        return String(format: "%d:%02d", m, s)
     }
 
     // MARK: - Preview
