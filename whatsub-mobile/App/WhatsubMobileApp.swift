@@ -230,8 +230,8 @@ struct ContentView: View {
                 // Drive the LiveActivity cooldown latch on foreground —
                 // tears the Activity down 10 min after the last work item
                 // drained. Cheap when no Activity exists (early-return).
-                // iOS 16.1+ guard: ActivityKit is unavailable on 16.0.
-                if #available(iOS 16.1, *) {
+                // iOS 16.2+ guard: ActivityKit is unavailable on 16.0.
+                if #available(iOS 16.2, *) {
                     Task { await LiveActivityCoordinator.shared.endIfStale() }
                 }
             }

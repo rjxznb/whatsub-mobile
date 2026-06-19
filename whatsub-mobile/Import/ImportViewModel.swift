@@ -188,8 +188,8 @@ final class ImportViewModel: ObservableObject {
             // queue view still works. Done BEFORE the state transition so
             // the lock-screen card appears in the same tick the success UI
             // does.
-            // iOS 16.1+ guard: ActivityKit is unavailable on 16.0.
-            if #available(iOS 16.1, *) {
+            // iOS 16.2+ guard: ActivityKit is unavailable on 16.0.
+            if #available(iOS 16.2, *) {
                 if let email = email {
                     let initial = ImportActivityAttributes.ContentState(
                         inProgress: 1,

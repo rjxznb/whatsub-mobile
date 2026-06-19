@@ -34,8 +34,8 @@ import UIKit
 // 2026-06-19 — App-wide deployment target is iOS 16.0 but ActivityKit's
 // `Activity<...>` only ships on 16.1+. Gating the whole coordinator
 // at 16.1 keeps every Activity-touching line behind a single guard;
-// callers gate their invocations with `if #available(iOS 16.1, *)`.
-@available(iOS 16.1, *)
+// callers gate their invocations with `if #available(iOS 16.2, *)`.
+@available(iOS 16.2, *)
 @MainActor
 final class LiveActivityCoordinator: ObservableObject {
 
