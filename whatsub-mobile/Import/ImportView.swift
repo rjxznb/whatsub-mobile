@@ -290,11 +290,22 @@ struct ImportView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
                 .textSelection(.enabled)
-            Button("重试") {
-                vm.state = .idle
+            // Smart retry: if rawCues is in memory (extraction succeeded,
+            // AI stage failed) — retry the AI step directly with the same
+            // cues. Otherwise reset to idle so URL input shows.
+            if !vm.rawCues.isEmpty {
+                Button("重试 AI 解析") {
+                    Task { await vm.retryAnalysisOnly() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.whatsubAccent)
+            } else {
+                Button("重试") {
+                    vm.state = .idle
+                }
+                .buttonStyle(.bordered)
+                .tint(.whatsubAccent)
             }
-            .buttonStyle(.bordered)
-            .tint(.whatsubAccent)
             // VPN 规则 tutorial — only useful when the user is on the relay
             // (BYOK users hit their own LLM vendor directly, no eversay.cc
             // detour). Showing it indiscriminately would confuse BYOK users

@@ -281,12 +281,18 @@ struct ChatCompletionsClient {
                 // glance: -1001 timeout, -1003 host not found, -1004 cannot
                 // connect, -1009 offline, -1200 TLS handshake.
                 return "网络出错：\(d)（开着 VPN 的话试试关掉、或换个网络）"
-            case .api(let c, _):
-                // Never include the raw body in the user-facing string —
-                // that's what showed "LLM 接口错误 (403): {raw JSON}" in
-                // the first place. Engineer can still grep the .api(c, detail)
-                // payload via LocalizedError → Console for debugging.
-                return "AI 服务返回了错误（\(c)），稍后再试一次试试。"
+            case .api(let c, let detail):
+                // Earlier decision was to hide the detail because a 403 +
+                // raw JSON looked like garbage. But "服务返回了错误（200）"
+                // with no body context is impossible to debug — 200 with
+                // our parser failing means wrong baseUrl, wrong model, or
+                // a vendor schema variant we don't handle. Surface the
+                // first 300 chars so users (or us in DM) can tell which.
+                if detail.isEmpty {
+                    return "AI 服务返回了错误（\(c)），稍后再试一次试试。"
+                }
+                let trimmed = detail.prefix(300)
+                return "AI 服务返回了错误（\(c)）\n详情：\(trimmed)"
             case .badResponse:
                 return "AI 返回的内容没看懂，再试一次试试。"
             case .policy(_, let message, _):

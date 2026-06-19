@@ -101,7 +101,32 @@ final class ImportViewModel: ObservableObject {
             return
         }
 
-        // Step 3: Analyse with progress reporting.
+        // Step 3: Analyse — calls into shared helper so `retryAnalysisOnly`
+        // can re-run JUST this stage without going through URL input
+        // again. rawCues stays in memory so re-running is free + offline.
+        await performAnalysis(cues)
+    }
+
+    /// Re-run just the LLM analysis on the in-memory `rawCues`. Used by
+    /// the error-screen「重试 AI 解析」button so a network-stage failure
+    /// (VPN routing, key issue, etc.) doesn't force the user back through
+    /// URL input + caption extraction. If somehow rawCues is empty (e.g.,
+    /// after a process restart), falls back to .idle so the URL screen
+    /// shows up.
+    func retryAnalysisOnly() async {
+        guard !rawCues.isEmpty else {
+            state = .idle
+            return
+        }
+        await performAnalysis(rawCues)
+    }
+
+    private func performAnalysis(_ cues: [Cue]) async {
+        let settings = LlmSettingsStore.load()
+        guard settings.isConfigured else {
+            state = .error("请先配置 LLM（我的 → LLM 设置）")
+            return
+        }
         state = .analyzing(done: 0, total: 1)
         let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
         do {
@@ -113,22 +138,17 @@ final class ImportViewModel: ObservableObject {
             result = analysis
             state = .preview
         } catch {
-            // Captions are already in CaptionCache by this point — extraction
-            // succeeded. The most common LLM failure for Chinese relay users
-            // with VPN on is `whatsub.eversay.cc` getting MITM'd through
-            // their HK exit (TLS -1200). The iOS app can't bypass system VPN
-            // per-request, so we surface two recovery paths in the error UI:
-            // (1) toggle VPN off + retry (CaptionCache short-circuits the
-            // re-extract), (2) add a VPN直连 rule for permanent fix (sheet
-            // opened from `ImportView.errorBody`). BYOK users (who hit their
-            // own LLM vendor directly) get a different hint — their VPN
-            // routing is fine, the issue is elsewhere.
+            // Captions stay in memory (rawCues) so the error-screen retry
+            // skips straight back to performAnalysis. The hint differs by
+            // mode: relay users hit eversay.cc (suspect VPN MITM); BYOK
+            // users hit their LLM vendor directly (suspect baseUrl /
+            // model / key).
             let base = error.localizedDescription
             let hint: String
             if settings.useManagedRelay {
-                hint = "\n\n字幕已缓存。最快恢复：关掉 VPN 后点「重试」（字幕走缓存不重抓，eversay.cc 国内直连）。一劳永逸：给 VPN 加 eversay.cc 直连规则——见错误页底部「VPN 规则」按钮。"
+                hint = "\n\n字幕仍在内存里，点「重试 AI 解析」会跳过字幕抓取直接重跑 AI。最快恢复：关 VPN 后点重试。一劳永逸：见底部「VPN 规则」。"
             } else {
-                hint = "\n\n字幕已缓存。检查 LLM 设置里的 baseUrl 是否能从你当前网络（VPN/直连）访问到，再点「重试」。"
+                hint = "\n\n字幕仍在内存里，点「重试 AI 解析」可以重试。报「200」通常是 baseUrl 或 model 名不对——检查「我的 → LLM 设置」里 baseUrl 是否带 `/v1` 后缀（DeepSeek 是 `https://api.deepseek.com/v1`）、model 是 `deepseek-chat` 之类厂商支持的型号。"
             }
             state = .error(base + hint)
         }
