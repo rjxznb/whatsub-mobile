@@ -9,6 +9,22 @@ final class AppState: ObservableObject {
     @Published var session: Session?
     @Published var currentUser: MeResponse?
 
+    /// Bottom-tab selection. Lifted out of ContentView's local @State so
+    /// deep-link handlers (whatsub://library, whatsub://import-queue) can
+    /// drive tab switches when an Activity is tapped. Tab indices match
+    /// ContentView.mainTabs order: 0 Library / 1 语料库 / 2 实景口语 / 3 我的.
+    @Published var selectedTab: Int = 0
+
+    /// Set by the whatsub://import-queue deep link to push ImportQueueView
+    /// onto the 我的 tab's NavigationStack. MeView binds this to a
+    /// `NavigationLink(isActive:)` (iOS 16 compatible) and the system flips
+    /// it back to false on pop. Same binding also drives the visible
+    /// 导入队列 row tap, so the destination has a single source of truth.
+    /// Idempotent — re-tapping while already at the destination just
+    /// re-sets the binding to true (no-op for a destination already on the
+    /// stack).
+    @Published var meShowImportQueue: Bool = false
+
     var isAuthenticated: Bool { session?.isValid == true }
 
     init() {

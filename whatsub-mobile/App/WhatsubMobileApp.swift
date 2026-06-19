@@ -48,7 +48,9 @@ struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: StoreManager
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedTab: Int = 0
+    // `selectedTab` lives on AppState now so the URL handler can drive
+    // tab switches from `whatsub://library` / `whatsub://import-queue`
+    // taps on the Live Activity (2026-06-18 plan).
     @State private var pendingImport: IdentifiedImportURL?
     @State private var gateReady = false
     /// Global AI-feature consent presentation flag (App Store Guideline
@@ -171,7 +173,7 @@ struct ContentView: View {
     }
 
     private var mainTabs: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $appState.selectedTab) {
             LibraryView()
                 .tabItem { Label("Library", systemImage: "play.rectangle") }
                 .tag(0)
@@ -196,16 +198,39 @@ struct ContentView: View {
                 .tag(3)
         }
         .onOpenURL { url in
-            guard url.host == "import",
-                  let pending = AppGroup.pendingImportURL() else { return }
-            AppGroup.clearPendingImportURL()
-            pendingImport = IdentifiedImportURL(url: pending)
+            // Share Extension import handoff (whatsub://import?url=…) —
+            // existing path, leave behavior identical.
+            if url.host == "import" {
+                if let pending = AppGroup.pendingImportURL() {
+                    AppGroup.clearPendingImportURL()
+                    pendingImport = IdentifiedImportURL(url: pending)
+                }
+                return
+            }
+            // Live Activity tap destinations (2026-06-18 plan, Phase 5.4).
+            // Both routes are idempotent: if already at the destination,
+            // setting the bindings to the same value is a no-op.
+            switch url.host {
+            case "library":
+                appState.selectedTab = 0
+            case "import-queue":
+                appState.selectedTab = 3
+                appState.meShowImportQueue = true
+            default:
+                break
+            }
         }
         .onChange(of: scenePhase) { phase in
-            if phase == .active, pendingImport == nil,
-               let saved = AppGroup.pendingImportURL() {
-                AppGroup.clearPendingImportURL()
-                pendingImport = IdentifiedImportURL(url: saved)
+            if phase == .active {
+                if pendingImport == nil,
+                   let saved = AppGroup.pendingImportURL() {
+                    AppGroup.clearPendingImportURL()
+                    pendingImport = IdentifiedImportURL(url: saved)
+                }
+                // Drive the LiveActivity cooldown latch on foreground —
+                // tears the Activity down 10 min after the last work item
+                // drained. Cheap when no Activity exists (early-return).
+                Task { await LiveActivityCoordinator.shared.endIfStale() }
             }
         }
         .sheet(item: $pendingImport) { item in

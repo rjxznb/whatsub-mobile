@@ -166,19 +166,40 @@ final class ImportViewModel: ObservableObject {
 
     /// Directly enqueue an entered/shared URL to the desktop queue (the explicit
     /// "推送到桌面" choice — bypasses on-phone caption extraction).
-    func pushURL(_ urlOrId: String, token: String) async {
+    /// `email` (when available) is forwarded to `pushToDesktop` so it can start
+    /// the Live Activity scoped to that user. Optional — Live Activity is
+    /// best-effort; without an email we still enqueue normally.
+    func pushURL(_ urlOrId: String, token: String, email: String? = nil) async {
         let trimmed = urlOrId.trimmingCharacters(in: .whitespacesAndNewlines)
         resolvedSourceURL = trimmed.contains("://")
             ? trimmed
             : (VideoSource.isLikelyYouTubeId(trimmed) ? "https://www.youtube.com/watch?v=\(trimmed)" : trimmed)
-        await pushToDesktop(token: token)
+        await pushToDesktop(token: token, email: email)
     }
 
-    func pushToDesktop(token: String) async {
+    func pushToDesktop(token: String, email: String? = nil) async {
         let url = resolvedSourceURL.isEmpty ? "https://www.youtube.com/watch?v=\(videoId)" : resolvedSourceURL
         state = .pushing
         do {
             try await WhatsubAPI.shared.enqueueImport(url: url, token: token)
+            // Start (or refresh) the Live Activity for the import queue so the
+            // user has lock-screen / Dynamic Island visibility into desktop
+            // processing. Best-effort — Activity failure means the in-app
+            // queue view still works. Done BEFORE the state transition so
+            // the lock-screen card appears in the same tick the success UI
+            // does.
+            if let email = email {
+                let initial = ImportActivityAttributes.ContentState(
+                    inProgress: 1,
+                    completed: 0,
+                    failed: 0,
+                    recentTitle: title
+                )
+                await LiveActivityCoordinator.shared.ensureActivity(
+                    forUserEmail: email,
+                    initialState: initial
+                )
+            }
             state = .pushedToDesktop
         } catch APIError.quotaExceeded(let used, let limit) {
             state = .quotaWall(used: used, limit: limit)

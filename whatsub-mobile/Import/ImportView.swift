@@ -460,7 +460,7 @@ struct ImportView: View {
                 .padding(.horizontal)
             SubscriptionOptionsView(onPurchased: {
                 guard let token = appState.session?.sessionToken else { return }
-                Task { await vm.pushToDesktop(token: token) }
+                Task { await vm.pushToDesktop(token: token, email: appState.session?.email) }
             })
             .padding(.horizontal)
 
@@ -484,7 +484,7 @@ struct ImportView: View {
             vm.state = .error("请先登录")
             return
         }
-        Task { await vm.pushURL(urlInput, token: token) }
+        Task { await vm.pushURL(urlInput, token: token, email: appState.session?.email) }
     }
 
     private func startSync() {
@@ -500,6 +500,6 @@ struct ImportView: View {
             vm.state = .error("请先登录")
             return
         }
-        Task { await vm.pushToDesktop(token: token) }
+        Task { await vm.pushToDesktop(token: token, email: appState.session?.email) }
     }
 }

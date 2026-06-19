@@ -173,7 +173,17 @@ struct MeView: View {
                             Label("语音设置", systemImage: "speaker.wave.2")
                                 .foregroundStyle(.whatsubInk)
                         }
-                        NavigationLink(destination: ImportQueueView()) {
+                        // Bound to AppState so the whatsub://import-queue
+                        // deep link (Live Activity tap → ContentView.onOpenURL
+                        // sets the flag) pushes the same destination as a
+                        // manual tap. iOS 16 path: NavigationLink(isActive:)
+                        // — deprecated in iOS 17 but still functional and
+                        // the cheapest iOS-16-compatible way to drive a
+                        // push programmatically.
+                        NavigationLink(
+                            destination: ImportQueueView(),
+                            isActive: $appState.meShowImportQueue
+                        ) {
                             Label("导入队列", systemImage: "tray.and.arrow.down")
                                 .foregroundStyle(.whatsubInk)
                         }
