@@ -106,6 +106,14 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
+        # 2026-06-19 — REQUIRED for ActivityKit. Without this key Apple
+        # silently rejects every `Activity.request(...)` call (no error,
+        # no log, just nothing on lock-screen / Dynamic Island).
+        # Companion entitlement `aps-environment` lives below; the two
+        # together unlock the desktop-import Live Activity feature
+        # (Phase 0-8 from 2026-06-18 plan was missing this key — bug
+        # only surfaced when a real user tried it on device).
+        NSSupportsLiveActivities: true
         # 2026-06-17 — UIBackgroundModes: audio RE-ADDED to support the
         # user-toggleable 「锁屏继续播放」 feature in MeView's 「播放」
         # section. Default OFF, so first launch matches v0.0.x (no
