@@ -107,6 +107,7 @@ struct Cue: Codable, Identifiable {
     var highlightTranslations: [String: String]
 
     enum CodingKeys: String, CodingKey {
+        case index
         case time, endTime, text, translation, isKeyPoint
         case highlightWords, keyNotes, highlightTranslations
     }
@@ -142,6 +143,12 @@ struct Cue: Codable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // `index` is synthesized at AnalysisJson decode time (array position) — JSON
+        // from the LLM pipeline doesn't carry it. Decode it here for completeness
+        // (cache round-trips via the analysisJson string preserve it), but note that
+        // `AnalysisJson.init(from:)` reassigns `subs[i].index = i` AFTER decode so
+        // the array-position invariant always wins regardless of what's on disk.
+        index = try c.decodeIfPresent(Int.self, forKey: .index) ?? 0
         time = try c.decodeIfPresent(Double.self, forKey: .time) ?? 0
         endTime = try c.decodeIfPresent(Double.self, forKey: .endTime) ?? 0
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
@@ -158,6 +165,7 @@ struct Cue: Codable, Identifiable {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(index, forKey: .index)
         try c.encode(time, forKey: .time)
         try c.encode(endTime, forKey: .endTime)
         try c.encode(text, forKey: .text)
