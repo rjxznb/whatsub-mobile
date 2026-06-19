@@ -87,7 +87,7 @@ private struct DynamicKey: CodingKey {
 }
 
 /// One subtitle cue from analysisJson.subtitles — already bilingual + highlighted.
-struct Cue: Decodable, Identifiable {
+struct Cue: Codable, Identifiable {
     var id: Int { index }
     /// Synthesized at decode time (array position) since the JSON has no id.
     var index: Int = 0
@@ -154,6 +154,18 @@ struct Cue: Decodable, Identifiable {
         // ENTIRE entry. Decode leniently: keep only string values, skip the rest.
         keyNotes = Cue.lenientStringMap(c, .keyNotes)
         highlightTranslations = Cue.lenientStringMap(c, .highlightTranslations)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(time, forKey: .time)
+        try c.encode(endTime, forKey: .endTime)
+        try c.encode(text, forKey: .text)
+        try c.encode(translation, forKey: .translation)
+        try c.encode(isKeyPoint, forKey: .isKeyPoint)
+        try c.encode(highlightWords, forKey: .highlightWords)
+        try c.encode(keyNotes, forKey: .keyNotes)
+        try c.encode(highlightTranslations, forKey: .highlightTranslations)
     }
 
     /// Decode a JSON object as `[String: String]`, keeping only entries whose
