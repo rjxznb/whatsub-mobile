@@ -36,8 +36,8 @@ final class CaptionCacheTests: XCTestCase {
         XCTAssertNotNil(loaded)
         XCTAssertEqual(loaded?.count, 2)
         XCTAssertEqual(loaded?[0].text, "line 0")
-        XCTAssertEqual(loaded?[0].time, 0.0, accuracy: 0.001)
-        XCTAssertEqual(loaded?[1].endTime, 3.0, accuracy: 0.001)
+        XCTAssertEqual(loaded?[0].time ?? 0, 0.0, accuracy: 0.001)
+        XCTAssertEqual(loaded?[1].endTime ?? 0, 3.0, accuracy: 0.001)
     }
 
     func testClearAllEmptiesDirectory() {
