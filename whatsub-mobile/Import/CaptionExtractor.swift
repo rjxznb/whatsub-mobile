@@ -2,32 +2,6 @@ import Foundation
 import WebKit
 import os.log
 
-/// Errors thrown by CaptionExtractor. Failure-path detail is intentionally
-/// terse here — the rich event-by-event diagnosis lives on the extractor's
-/// `debugLog` property (publicly readable after a throw). ImportView surfaces
-/// it via the 「查看诊断」 button on the failure screen so users don't have
-/// to plug into Console.app to see where the pipeline died.
-enum CaptionError: Error, LocalizedError {
-    case timeout
-    case emptyResult
-    /// YouTube redirected to accounts.google.com mid-extraction — meaning
-    /// BotGuard wants a signed-in session before serving captions. We
-    /// can't satisfy this from a cookie-less WKWebView; pushing to desktop
-    /// (which runs yt-dlp with a real cookies file) is the only path.
-    case requiresLogin
-
-    var errorDescription: String? {
-        switch self {
-        case .timeout:
-            return "未捕获到字幕。可能是 YouTube 对本会话反爬升级了，或视频本身没有英文字幕。点「查看诊断」看挂在哪一步，或「推送到桌面端」让 Whisper 转录。"
-        case .emptyResult:
-            return "字幕解析结果为空，请确认该视频有英文字幕。"
-        case .requiresLogin:
-            return "YouTube 反爬把字幕接口锁了（即使有登录入口也救不回来 — BotGuard 看 WebKit 指纹拒绝服务）。点「推送到桌面端」让桌面 yt-dlp 用真实 cookies 抓字幕，这条路目前 100% 稳。"
-        }
-    }
-}
-
 /// Headless YouTube caption extractor.
 ///
 /// 2026-06-17 — major reliability pass after a regression where mobile
