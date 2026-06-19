@@ -184,6 +184,38 @@ iOS surface for the long async wait while the desktop client downloads + transcr
 
 **Phase 0 manual steps**: APNs Auth Key creation at developer.apple.com (one .p8 download, save Key ID + paste contents into GitHub Secrets `APNS_KEY_ID` + `APNS_KEY_P8` + `APNS_TEAM_ID=Q3BK52FQT9`); Aliyun `/opt/whatsub/.env` gains the matching vars (the `environment:` block in `docker-compose.yml` is already wired in `b4f54f1`); `docker compose up -d --force-recreate whatsub-license` on Aliyun once the env is in place. Without the env vars the helper silently no-ops (logs `[apnsPush] missing env, skipping push`) — useful for local dev where APNs isn't set up.
 
+### iOS Native YouTube Caption Extraction via Innertube (2026-06-19)
+
+Replaces the legacy WKWebView + fetchHook path (~30% success rate
+against BotGuard) with a pure-Swift HTTP client that calls YouTube's
+Innertube `/v1/player` API claiming to be `ANDROID_TESTSUITE` — the
+same trick yt-dlp's `--extractor-args "youtube:player_client=android"`
+and NewPipe use. YouTube serves Android-claiming clients via a
+different API path with no BotGuard / no PO_TOKEN / no signature
+deobfuscation, because Android native apps can't run JS sandboxes
+and YouTube can't enforce device attestation across the broader
+Android ecosystem without breaking smart TVs / Roku / Apple TV.
+
+Architecture: `Import/YouTubeCaptionExtractor.swift` (~150 LoC) makes
+two HTTP calls (POST player API → GET timedtext + fmt=json3), reuses
+`parseTimedtextJson3`, and writes a permanent per-video disk cache at
+`Caches/yt_captions/<videoId>.json` via `Import/CaptionCache.swift`
+(~50 LoC). Spec: `docs/superpowers/specs/2026-06-19-ios-innertube-captions-design.md`.
+
+Net change: −400 LoC. Deleted `CaptionExtractor.swift`,
+`CaptionHookJS.swift`, `WKWebViewHost.swift`. UI simplified —
+`.extracting` body is now a centred spinner instead of a 320×180
+visible WebView. Diagnostics surface (`CaptionDiagnosticsSheet`)
+unchanged; receives progress events via the new extractor's
+`onProgress` callback.
+
+Risk horizon: ANDROID_TESTSUITE may require PO_TOKEN within 1-2
+years. Mitigation: switch the `clientName` constant to
+`TV_EMBEDDED` and the `X-YouTube-Client-Name` header to `85` — TV
+clients have minimal anti-scraping for ecosystem-compatibility
+reasons. If that also locks: backend yt-dlp service (architecturally
+designed earlier; unbuilt by choice — keeps server costs flat).
+
 ## 踩过的坑 (avoid repeating)
 
 ### CI / GitHub Actions / iOS toolchain
