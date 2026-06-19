@@ -31,6 +31,11 @@ import UIKit
 /// we read the bearer straight from Keychain via `KeychainStore.load()`
 /// — the coordinator is decoupled from `AppState`, which is fine because
 /// the Activity only exists when the user is signed in (caller-enforced).
+// 2026-06-19 — App-wide deployment target is iOS 16.0 but ActivityKit's
+// `Activity<...>` only ships on 16.1+. Gating the whole coordinator
+// at 16.1 keeps every Activity-touching line behind a single guard;
+// callers gate their invocations with `if #available(iOS 16.1, *)`.
+@available(iOS 16.1, *)
 @MainActor
 final class LiveActivityCoordinator: ObservableObject {
 

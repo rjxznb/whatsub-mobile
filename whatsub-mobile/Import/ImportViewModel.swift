@@ -188,17 +188,20 @@ final class ImportViewModel: ObservableObject {
             // queue view still works. Done BEFORE the state transition so
             // the lock-screen card appears in the same tick the success UI
             // does.
-            if let email = email {
-                let initial = ImportActivityAttributes.ContentState(
-                    inProgress: 1,
-                    completed: 0,
-                    failed: 0,
-                    recentTitle: title
-                )
-                await LiveActivityCoordinator.shared.ensureActivity(
-                    forUserEmail: email,
-                    initialState: initial
-                )
+            // iOS 16.1+ guard: ActivityKit is unavailable on 16.0.
+            if #available(iOS 16.1, *) {
+                if let email = email {
+                    let initial = ImportActivityAttributes.ContentState(
+                        inProgress: 1,
+                        completed: 0,
+                        failed: 0,
+                        recentTitle: title
+                    )
+                    await LiveActivityCoordinator.shared.ensureActivity(
+                        forUserEmail: email,
+                        initialState: initial
+                    )
+                }
             }
             state = .pushedToDesktop
         } catch APIError.quotaExceeded(let used, let limit) {
