@@ -5,8 +5,21 @@ import UniformTypeIdentifiers
 /// it in the App Group, opens the host app via `whatsub://import`, and finishes.
 /// No UI — completes immediately.
 class ShareViewController: UIViewController {
+    private var didStart = false
+
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // viewDidAppear, not viewDidLoad: kicking off the host-app open while
+        // our extension VC is still presenting leaves a zombie view in the
+        // host app on iOS 16+ — YouTube has been seen to lock up touch
+        // handling for ~30s on return until iOS GCs the orphan.
+        guard !didStart else { return }
+        didStart = true
         Task { await handleShare() }
     }
 
@@ -16,9 +29,15 @@ class ShareViewController: UIViewController {
             AppGroup.setPendingImportURL(urlString)
             await openHostApp()
         }
-        // Complete AFTER the open is initiated, so the share sheet doesn't
-        // dismiss + cancel the pending launch.
-        extensionContext?.completeRequest(returningItems: nil)
+        // completeRequest WITH completion handler — the no-arg form lets iOS
+        // resume the host app before our view controller is fully torn down,
+        // so our (clear) view ends up sitting on top of the host's hierarchy
+        // eating touches. The continuation guarantees we wait for teardown.
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            extensionContext?.completeRequest(returningItems: nil) { _ in
+                cont.resume()
+            }
+        }
     }
 
     /// Read a URL (public.url) or text containing a URL from the input items.
@@ -41,30 +60,18 @@ class ShareViewController: UIViewController {
         return nil
     }
 
-    /// Open the containing app via the `whatsub://` scheme.
-    /// 1) Official API: ask the HOST app (e.g. YouTube) to open our URL — iOS
-    ///    then routes the scheme to whatSub. Works on most modern iOS.
-    /// 2) Fallback: responder-chain `openURL:` (works on some older versions).
-    /// Either way the URL is already saved to the App Group, so the main app's
-    /// scenePhase safety-net picks it up even if neither auto-launches.
+    /// Open the containing app via the `whatsub://` scheme. iOS routes the
+    /// scheme to whatSub. If the system declines (some iOS versions return
+    /// false mid-share-sheet-dismiss), the URL is still saved to the App
+    /// Group and the main app's scenePhase safety-net picks it up on next
+    /// launch — we deliberately do NOT fall back to the responder-chain
+    /// `perform("openURL:")` hack, which has been a root cause of host-app
+    /// (YouTube) UI lockups on iOS 16+.
     @discardableResult
     private func openHostApp() async -> Bool {
-        guard let url = URL(string: "whatsub://import") else { return false }
-        if let ctx = extensionContext {
-            let opened = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-                ctx.open(url) { cont.resume(returning: $0) }
-            }
-            if opened { return true }
+        guard let url = URL(string: "whatsub://import"), let ctx = extensionContext else { return false }
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            ctx.open(url) { cont.resume(returning: $0) }
         }
-        var responder: UIResponder? = self
-        let selector = NSSelectorFromString("openURL:")
-        while let r = responder {
-            if r.responds(to: selector) && !(r is ShareViewController) {
-                r.perform(selector, with: url)
-                return true
-            }
-            responder = r.next
-        }
-        return false
     }
 }

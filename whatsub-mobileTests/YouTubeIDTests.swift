@@ -14,4 +14,16 @@ final class YouTubeIDTests: XCTestCase {
     func testNonYouTube() {
         XCTAssertNil(extractYouTubeID("https://example.com/page"))
     }
+    func testShortsURL() {
+        XCTAssertEqual(extractYouTubeID("https://www.youtube.com/shorts/ECXAFUmdJkI"), "ECXAFUmdJkI")
+    }
+    func testShortsURLWithQuery() {
+        XCTAssertEqual(extractYouTubeID("https://youtube.com/shorts/ECXAFUmdJkI?si=abc"), "ECXAFUmdJkI")
+    }
+    func testEmbedURL() {
+        XCTAssertEqual(extractYouTubeID("https://www.youtube.com/embed/ECXAFUmdJkI"), "ECXAFUmdJkI")
+    }
+    func testLiveURL() {
+        XCTAssertEqual(extractYouTubeID("https://www.youtube.com/live/ECXAFUmdJkI"), "ECXAFUmdJkI")
+    }
 }
