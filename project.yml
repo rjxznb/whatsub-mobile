@@ -156,8 +156,16 @@ targets:
       properties:
         com.apple.security.application-groups:
           - group.cc.eversay.whatsub.mobile
+        # 2026-06-18 — Live Activity feature (docs/superpowers/plans/2026-06-18-
+        # ios-live-activity-import-queue.md). APNs push delivers ContentState
+        # updates to the lock screen / Dynamic Island Activity card. Set to
+        # `development` here so TestFlight builds reach APNs sandbox; Xcode
+        # auto-swaps to `production` for App Store distribution builds.
+        aps-environment: development
     dependencies:
       - target: whatsub-share
+        embed: true
+      - target: whatsub-widget
         embed: true
       - framework: frameworks/sherpa-onnx.xcframework
         embed: false
@@ -206,6 +214,31 @@ targets:
       properties:
         com.apple.security.application-groups:
           - group.cc.eversay.whatsub.mobile
+
+  # iOS Live Activity widget (2026-06-18). Renders the lock-screen card +
+  # Dynamic Island compact/minimal/expanded views for the desktop import
+  # queue progress Activity. Pushed from backend via APNs HTTP/2 — see
+  # docs/superpowers/plans/2026-06-18-ios-live-activity-import-queue.md.
+  whatsub-widget:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.1"
+    sources:
+      - whatsub-widget
+      - whatsub-mobile/Shared/ImportActivityAttributes.swift
+      - whatsub-mobile/App/Theme.swift
+    info:
+      path: whatsub-widget/Info.plist
+      properties:
+        CFBundleDisplayName: whatSub Widget
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cc.eversay.whatsub.mobile.widget
+        INFOPLIST_KEY_CFBundleDisplayName: whatSub Widget
 
   whatsub-mobileTests:
     type: bundle.unit-test
