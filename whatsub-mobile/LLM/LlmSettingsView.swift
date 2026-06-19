@@ -56,6 +56,39 @@ struct LlmSettingsView: View {
                     .foregroundStyle(.whatsubInkFaint)
             }
 
+            // BYOK-shadowed-by-relay detector. Common confusion mode:
+            // user toggled relay OFF once, filled BYOK fields, then later
+            // toggled relay back ON (or never toggled off in the first
+            // place but still believes they "set up BYOK"). The BYOK
+            // values get persisted but ChatCompletionsClient ignores them
+            // entirely when relay is on. Without this banner the only
+            // signal users have is the error host they see ("hmm, why
+            // does it say eversay.cc?").
+            if useManagedRelay
+                && !apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("BYOK key 已填但未生效", systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.whatsubHighlight)
+                        Text("当前「使用 whatsub 托管 LLM」开关是 ON,所有 AI 调用走我们的中转 relay,你下方填的 baseUrl / API Key / Model **完全被忽略**。\n\n想用自己的 key,先关掉下方开关。")
+                            .font(.footnote)
+                            .foregroundStyle(.whatsubInkSoft)
+                        Button {
+                            useManagedRelay = false
+                            autosave()
+                        } label: {
+                            Label("关掉托管,改用我自己的 key", systemImage: "arrow.right.circle.fill")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.whatsubAccent)
+                        .padding(.top, 2)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
             Section {
                 Toggle(isOn: $useManagedRelay) {
                     VStack(alignment: .leading, spacing: 2) {
