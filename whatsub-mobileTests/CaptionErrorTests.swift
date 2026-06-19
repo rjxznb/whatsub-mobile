@@ -3,6 +3,11 @@ import XCTest
 
 final class CaptionErrorTests: XCTestCase {
 
+    func testTimeoutMessage() {
+        XCTAssertEqual(CaptionError.timeout.errorDescription,
+                       "未捕获到字幕。可能是 YouTube 对本会话反爬升级了，或视频本身没有英文字幕。点「查看诊断」看挂在哪一步，或「推送到桌面端」让 Whisper 转录。")
+    }
+
     func testNetworkErrorMessage() {
         let underlying = URLError(.notConnectedToInternet)
         let err = CaptionError.network(underlying)
