@@ -272,66 +272,25 @@ struct ImportView: View {
         }
     }
 
-    // MARK: - Extracting (visible YT player + status)
+    // MARK: - Extracting (spinner only)
 
-    /// During extraction we show the WKWebView at full opacity. Three
-    /// benefits over the previous opacity-0.001 invisible mount:
-    ///   1. User can see YouTube actually loading + playing, which makes
-    ///      the 15-25s wait less mysterious ("did it freeze?" → no,
-    ///      look, the video's literally on screen).
-    ///   2. YouTube's IntersectionObserver / visibilityState checks see
-    ///      a fully-visible player → no chance of caption-track
-    ///      suspension on visibility grounds (previously a guess).
-    ///   3. The hook's `setInterval` mute keeps audio silent so it's
-    ///      not a UX nuisance. allowsHitTesting(false) prevents the user
-    ///      accidentally tapping pause / scrub mid-extraction.
+    /// During native Innertube extraction (spec §7.1) there's nothing
+    /// visual to show — the network calls return in 1-3 seconds, often
+    /// faster than the user notices. A centred spinner + status line is
+    /// honest and avoids the previous WebView-mount-during-warmup UX
+    /// noise where users saw an unrelated YouTube homepage preview.
     private var extractingBody: some View {
         VStack(spacing: 16) {
             Spacer()
-
             ProgressView()
                 .tint(.whatsubAccent)
                 .scaleEffect(1.2)
-
             Text("字幕提取中…")
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
-
-            if let web = vm.liveWebView {
-                // Mount the WebView in the view tree (required so YouTube's
-                // IntersectionObserver sees it as visible) but keep it
-                // hidden during warmup — otherwise the user sees the YT
-                // homepage's auto-playing preview banner for ~3.5s, which
-                // looks like "this is showing me a random unrelated video"
-                // (user-reported 2026-06-18). opacity 0.001 still gives
-                // IntersectionObserver enough; flips to 1.0 once
-                // CaptionExtractor's onWatchNavigation fires.
-                WKWebViewHost(webView: web)
-                    .frame(width: 320, height: 180)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(
-                        // Matches the website brand token `--hairline-strong`
-                        // (rgba(255,255,255,0.14)). Theme.swift doesn't ship a
-                        // named static for it, so inline the literal here.
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.white.opacity(0.14), lineWidth: 1)
-                    )
-                    .opacity(vm.liveWebViewWatching ? 1.0 : 0.001)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-
-            VStack(spacing: 4) {
-                Text("YouTube 播放器正在加载视频字幕轨")
-                    .font(.subheadline)
-                    .foregroundStyle(.whatsubInkMuted)
-                Text("需挂 VPN · 不要锁屏 · 通常 10-30 秒，BotGuard 严格的视频可能到 60 秒")
-                    .font(.caption)
-                    .foregroundStyle(.whatsubInkFaint)
-            }
-            .multilineTextAlignment(.center)
-            .padding(.horizontal)
-
+            Text("通常 1-3 秒")
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkMuted)
             Spacer()
         }
         .padding()
