@@ -88,6 +88,18 @@ struct CueRow: View {
             Button { onCollect() } label: { Label("收藏到词汇本", systemImage: "bookmark") }
             Button { onShadow() } label: { Label("跟读练习", systemImage: "mic.circle") }
             Button { onCloze() } label: { Label("听抄练习", systemImage: "ear") }
+            Divider()
+            Button {
+                UIPasteboard.general.string = cue.text
+            } label: { Label("复制原文", systemImage: "doc.on.doc") }
+            if !cue.translation.isEmpty {
+                Button {
+                    UIPasteboard.general.string = cue.translation
+                } label: { Label("复制译文", systemImage: "doc.on.doc") }
+                Button {
+                    UIPasteboard.general.string = "\(cue.text)\n\(cue.translation)"
+                } label: { Label("复制双语", systemImage: "doc.on.doc.fill") }
+            }
         }
     }
 }

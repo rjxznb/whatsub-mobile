@@ -13,6 +13,7 @@ struct ImportView: View {
     /// guessing why captions weren't found.
     @State private var showDiagnostics = false
     @State private var diagnosticsLog: [String] = []
+    @State private var showVPNHelp = false
 
     private let initialURL: String?
 
@@ -160,20 +161,28 @@ struct ImportView: View {
     private func progressBody(icon: String, label: String, progress: Double?) -> some View {
         VStack(spacing: 24) {
             Spacer()
-            Image(systemName: icon)
-                .font(.system(size: 44))
-                .foregroundStyle(.whatsubAccent)
+            // Pulsing icon — without animation here the screen looked frozen
+            // during long LLM calls (the linear bar sat at 0/1 for ~10 s
+            // before the first chunk landed). Two cues are now alive:
+            // (a) the icon pulses, (b) the indeterminate spinner under the
+            // bar — so users see *something* is happening even when
+            // determinate progress hasn't ticked.
+            PulsingIcon(systemName: icon)
 
             Text(label)
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
                 .multilineTextAlignment(.center)
 
-            if let progress {
-                ProgressView(value: progress)
-                    .tint(.whatsubAccent)
-                    .padding(.horizontal, 40)
-            } else {
+            VStack(spacing: 10) {
+                if let progress, progress > 0 {
+                    ProgressView(value: progress)
+                        .tint(.whatsubAccent)
+                        .padding(.horizontal, 40)
+                }
+                // Always show an indeterminate spinner: when the
+                // determinate value is stuck at 0 (mid-LLM-request) the
+                // spinner is the only sign the network call is live.
                 ProgressView()
                     .tint(.whatsubAccent)
             }
@@ -181,6 +190,23 @@ struct ImportView: View {
             Spacer()
         }
         .padding()
+    }
+
+    /// Brand sparkle / icon that pulses opacity+scale so progress-screen
+    /// dwell time doesn't feel frozen.
+    private struct PulsingIcon: View {
+        let systemName: String
+        @State private var pulsing = false
+        var body: some View {
+            Image(systemName: systemName)
+                .font(.system(size: 44))
+                .foregroundStyle(.whatsubAccent)
+                .scaleEffect(pulsing ? 1.12 : 0.92)
+                .opacity(pulsing ? 1.0 : 0.55)
+                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                           value: pulsing)
+                .onAppear { pulsing = true }
+        }
     }
 
     // MARK: - Preview
@@ -263,13 +289,29 @@ struct ImportView: View {
                 .foregroundStyle(.whatsubInkMuted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
+                .textSelection(.enabled)
             Button("重试") {
                 vm.state = .idle
             }
             .buttonStyle(.bordered)
             .tint(.whatsubAccent)
+            // VPN 规则 tutorial — only useful when the user is on the relay
+            // (BYOK users hit their own LLM vendor directly, no eversay.cc
+            // detour). Showing it indiscriminately would confuse BYOK users
+            // wondering why we're suggesting VPN tweaks.
+            if LlmSettingsStore.load().useManagedRelay {
+                Button {
+                    showVPNHelp = true
+                } label: {
+                    Label("查看 VPN 直连规则（一次配置永久解决）", systemImage: "network.badge.shield.half.filled")
+                        .font(.footnote)
+                }
+                .buttonStyle(.borderless)
+                .tint(.whatsubAccent)
+            }
             Spacer()
         }
+        .sheet(isPresented: $showVPNHelp) { VPNRuleHelpSheet() }
     }
 
     // MARK: - Extracting (spinner only)

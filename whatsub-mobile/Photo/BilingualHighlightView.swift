@@ -86,6 +86,30 @@ struct BilingualHighlightView: View {
         Button {
             onTogglePhrase(p.id)
         } label: {
+            phraseRowBody(p)
+        }
+        .buttonStyle(.plain)
+        // Long-press → 复制. The phrase + meaning live inside a Button so
+        // SwiftUI's .textSelection(.enabled) doesn't fire (Button intercepts
+        // touches before the Text grabs the long-press → magnifier path).
+        // contextMenu is the standard iOS workaround.
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = p.phrase
+            } label: { Label("复制英文", systemImage: "doc.on.doc") }
+            if let m = p.meaningZh, !m.isEmpty {
+                Button {
+                    UIPasteboard.general.string = m
+                } label: { Label("复制中文", systemImage: "doc.on.doc") }
+                Button {
+                    UIPasteboard.general.string = "\(p.phrase) — \(m)"
+                } label: { Label("复制中英", systemImage: "doc.on.doc.fill") }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func phraseRowBody(_ p: PhotoPhrase) -> some View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: selected.contains(p.id)
                       ? "checkmark.circle.fill"
@@ -124,8 +148,6 @@ struct BilingualHighlightView: View {
                     : Color.clear,
                 in: RoundedRectangle(cornerRadius: 8)
             )
-        }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder

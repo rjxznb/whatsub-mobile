@@ -114,13 +114,22 @@ final class ImportViewModel: ObservableObject {
             state = .preview
         } catch {
             // Captions are already in CaptionCache by this point — extraction
-            // succeeded. The most common LLM failure for Chinese users with
-            // VPN on is `whatsub.eversay.cc` getting MITM'd through their
-            // HK exit (TLS -1200): the iOS app can't bypass the system VPN,
-            // but the user CAN flip VPN off + tap retry, and the cached
-            // captions short-circuit the re-extract. Make that path obvious.
+            // succeeded. The most common LLM failure for Chinese relay users
+            // with VPN on is `whatsub.eversay.cc` getting MITM'd through
+            // their HK exit (TLS -1200). The iOS app can't bypass system VPN
+            // per-request, so we surface two recovery paths in the error UI:
+            // (1) toggle VPN off + retry (CaptionCache short-circuits the
+            // re-extract), (2) add a VPN直连 rule for permanent fix (sheet
+            // opened from `ImportView.errorBody`). BYOK users (who hit their
+            // own LLM vendor directly) get a different hint — their VPN
+            // routing is fine, the issue is elsewhere.
             let base = error.localizedDescription
-            let hint = "\n\n字幕已下载到本地缓存，关闭 VPN 后点「重试」会跳过重抓直接走 AI 解析（eversay.cc 在国内本来就直连）。"
+            let hint: String
+            if settings.useManagedRelay {
+                hint = "\n\n字幕已缓存。最快恢复：关掉 VPN 后点「重试」（字幕走缓存不重抓，eversay.cc 国内直连）。一劳永逸：给 VPN 加 eversay.cc 直连规则——见错误页底部「VPN 规则」按钮。"
+            } else {
+                hint = "\n\n字幕已缓存。检查 LLM 设置里的 baseUrl 是否能从你当前网络（VPN/直连）访问到，再点「重试」。"
+            }
             state = .error(base + hint)
         }
     }
