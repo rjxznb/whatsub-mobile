@@ -1,5 +1,4 @@
 import Foundation
-import WebKit
 
 @MainActor
 final class ImportViewModel: ObservableObject {
@@ -29,18 +28,6 @@ final class ImportViewModel: ObservableObject {
     }
 
     @Published var state: State = .idle
-    /// The hidden WKWebView used by CaptionExtractor — published so ImportView
-    /// can mount it during the .extracting phase. Mounting is required (vs.
-    /// keeping it detached) because YouTube's player uses IntersectionObserver
-    /// + document.visibilityState to detect off-screen players and suspends
-    /// caption-track loading on what it thinks is a hidden tab. See
-    /// `WKWebViewHost.swift`.
-    @Published var liveWebView: WKWebView?
-    /// Gates the visible reveal of `liveWebView` in ImportView. False during
-    /// the warmup phase (when the WebView is on youtube.com homepage showing
-    /// an unrelated auto-preview video that would confuse the user), flipped
-    /// true once CaptionExtractor navigates to the actual target /watch URL.
-    @Published var liveWebViewWatching: Bool = false
 
     /// Extracted + analysed result, set once analysis completes.
     private(set) var result: AnalysisJson?
@@ -85,38 +72,23 @@ final class ImportViewModel: ObservableObject {
         // Step 1: Extract captions.
         state = .extracting
         let cues: [Cue]
-        let extractor = CaptionExtractor()
-        liveWebViewWatching = false
+        // 2026-06-19: switched to pure-Swift Innertube extractor (spec
+        // docs/superpowers/specs/2026-06-19-ios-innertube-captions-design.md).
+        // The new path doesn't use WKWebView, so the liveWebView state from
+        // the old flow is gone.
+        var debugLog: [String] = []
         do {
-            cues = try await extractor.extract(
+            cues = try await YouTubeCaptionExtractor.extract(
                 videoId: resolvedId,
-                onWebViewReady: { [weak self] web in
-                    // Publish the WebView so ImportView can host it in the
-                    // SwiftUI tree (still invisible during warmup, per
-                    // `liveWebViewWatching`).
-                    self?.liveWebView = web
-                },
-                onWatchNavigation: { [weak self] in
-                    // Warmup ended, watch URL load starting — reveal the
-                    // WebView so the user sees their actual video loading.
-                    self?.liveWebViewWatching = true
-                }
+                onProgress: { event in debugLog.append(event) }
             )
         } catch {
-            // Caption extraction failed. Surface the rich debug log so the
-            // user can hit 「查看诊断」 and see which step actually died —
-            // far more actionable than the localized one-liner alone.
             state = .extractFailed(
                 message: error.localizedDescription,
-                debug: extractor.debugLog
+                debug: debugLog
             )
-            liveWebView = nil  // teardown the host
-            liveWebViewWatching = false
             return
         }
-        // Success — drop the host so the WebView gets deallocated.
-        liveWebView = nil
-        liveWebViewWatching = false
         rawCues = cues
         // Replace the videoId placeholder title with the real YouTube title
         // (best-effort; VPN is on during import so youtube.com oEmbed is reachable).
