@@ -103,8 +103,20 @@ struct ChatCompletionsClient {
 
         let (data, resp): (Data, URLResponse)
         do { (data, resp) = try await session.data(for: req) }
-        catch { throw LlmError.network(error.localizedDescription) }
-        guard let http = resp as? HTTPURLResponse else { throw LlmError.network("no http") }
+        catch {
+            // Surface the URLError code + URL so the diagnostic tells us which
+            // failure mode hit (timeout vs DNS vs TLS vs offline) without the
+            // engineer needing to re-bind a debugger. The user-facing message
+            // includes the code; console print gets the full description for
+            // when someone shares a screenshot.
+            let urlErr = error as? URLError
+            let code = urlErr.map { String($0.code.rawValue) } ?? "?"
+            let host = url.host ?? "?"
+            let detail = "[\(code) \(host)] \(error.localizedDescription)"
+            print("[ChatCompletionsClient] POST \(url.absoluteString) failed: \(error)")
+            throw LlmError.network(detail)
+        }
+        guard let http = resp as? HTTPURLResponse else { throw LlmError.network("no http response · url=\(url.absoluteString)") }
         guard (200..<300).contains(http.statusCode) else {
             // Relay returns structured policy errors (`{error:"license_blocked",
             // message: "<friendly zh>"}`) for the 4 known fix-it-by-paying
@@ -263,9 +275,12 @@ struct ChatCompletionsClient {
             case .notConfigured:
                 return "AI 还没配置好。打开「我的 → LLM 设置」，填入一个 API Key 就能用啦。"
             case .network(let d):
-                // Strip URLSession's verbose framing — users see "网络断了"
-                // not "The Internet connection appears to be offline. (NSURL…"
-                return "网络好像断开了，检查一下连接再试。（\(d)）"
+                // Detail includes URLError code + host + description so a
+                // screenshot is enough to diagnose (timeout / DNS / TLS /
+                // offline). Common URLError codes worth recognising at a
+                // glance: -1001 timeout, -1003 host not found, -1004 cannot
+                // connect, -1009 offline, -1200 TLS handshake.
+                return "网络出错：\(d)（开着 VPN 的话试试关掉、或换个网络）"
             case .api(let c, _):
                 // Never include the raw body in the user-facing string —
                 // that's what showed "LLM 接口错误 (403): {raw JSON}" in
