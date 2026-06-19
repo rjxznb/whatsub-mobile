@@ -113,7 +113,15 @@ final class ImportViewModel: ObservableObject {
             result = analysis
             state = .preview
         } catch {
-            state = .error(error.localizedDescription)
+            // Captions are already in CaptionCache by this point — extraction
+            // succeeded. The most common LLM failure for Chinese users with
+            // VPN on is `whatsub.eversay.cc` getting MITM'd through their
+            // HK exit (TLS -1200): the iOS app can't bypass the system VPN,
+            // but the user CAN flip VPN off + tap retry, and the cached
+            // captions short-circuit the re-extract. Make that path obvious.
+            let base = error.localizedDescription
+            let hint = "\n\n字幕已下载到本地缓存，关闭 VPN 后点「重试」会跳过重抓直接走 AI 解析（eversay.cc 在国内本来就直连）。"
+            state = .error(base + hint)
         }
     }
 
