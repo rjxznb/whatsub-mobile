@@ -192,6 +192,31 @@ actor WhatsubAPI {
         _ = try await postExpectingOk(Endpoints.library("sync/\(entryId)/cues"), body: data, bearer: token)
     }
 
+    // ----- Live Activity -----
+
+    /// POST /api/live-activity/register — uploads the APNs push token iOS
+    /// minted for a freshly-started Activity, so the backend can fan out
+    /// ContentState updates whenever the import-queue progress changes for
+    /// this user. Idempotent on the server (re-register replaces the token).
+    func registerLiveActivityToken(activityId: String, pushToken: String, token: String) async throws {
+        let body: [String: Any] = [
+            "activityId": activityId,
+            "pushToken": pushToken,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        _ = try await postExpectingOk(Endpoints.liveActivity("register"), body: data, bearer: token)
+    }
+
+    /// POST /api/live-activity/end — tells backend this Activity is over so
+    /// it stops pushing to the (now invalid) token. Best-effort from the
+    /// caller's POV; the system also invalidates the push token when the
+    /// Activity ends, so a missed call is recoverable on next push attempt.
+    func endLiveActivity(activityId: String, token: String) async throws {
+        let body: [String: Any] = ["activityId": activityId]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        _ = try await postExpectingOk(Endpoints.liveActivity("end"), body: data, bearer: token)
+    }
+
     // ----- Corpus -----
 
     /// scope = "public" (needs license) or "mine" (session only).

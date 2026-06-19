@@ -16,10 +16,16 @@ enum Endpoints {
     /// "whatsub 托管" is on — same host, includes the `/v1` segment so
     /// `${baseUrl}/chat/completions` resolves to the proxy.
     static let llmRelayClientBase = "https://whatsub.eversay.cc/api/llm/v1"
+    /// Live Activity APNs push-token registry (2026-06-18). Backend stores
+    /// `(userEmail, activityId, pushToken)` and pushes ContentState updates
+    /// to APNs whenever the import-queue progress changes for that user.
+    /// See docs/superpowers/plans/2026-06-18-ios-live-activity-import-queue.md.
+    static let liveActivityBase = "https://whatsub.eversay.cc/api/live-activity"
 
     static func auth(_ path: String) -> URL { URL(string: "\(authBase)/\(path)")! }
     static func iap(_ path: String) -> URL { URL(string: "\(iapBase)/\(path)")! }
     static func corpus(_ path: String) -> URL { URL(string: "\(corpusBase)/\(path)")! }
     static func library(_ path: String) -> URL { URL(string: "\(libraryBase)/\(path)")! }
     static func llm(_ path: String) -> URL { URL(string: "\(llmBase)/\(path)")! }
+    static func liveActivity(_ path: String) -> URL { URL(string: "\(liveActivityBase)/\(path)")! }
 }
