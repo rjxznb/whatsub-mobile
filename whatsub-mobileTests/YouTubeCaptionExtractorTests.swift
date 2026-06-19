@@ -265,6 +265,57 @@ final class YouTubeCaptionExtractorTests: XCTestCase {
         }
     }
 
+    // MARK: - Client fallback chain
+
+    func testFallsBackToNextClientOnUnplayable() async throws {
+        let unplayableJSON = """
+        {"playabilityStatus":{"status":"UNPLAYABLE"}}
+        """.data(using: .utf8)!
+        let okJSON = """
+        {"playabilityStatus":{"status":"OK"},
+         "captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[
+           {"baseUrl":"https://yt.example/timedtext","languageCode":"en"}
+         ]}}}
+        """.data(using: .utf8)!
+        var playerCalls = 0
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { req in
+            if req.httpMethod == "POST" {
+                playerCalls += 1
+                // First client UNPLAYABLE → must try the next one.
+                return playerCalls == 1 ? self.ok(unplayableJSON) : self.ok(okJSON)
+            }
+            return self.ok(self.makeTimedtextJson3())
+        }
+        let cues = try await YouTubeCaptionExtractor.extract(
+            videoId: "fb", cache: cache, fetcher: fetcher
+        )
+        XCTAssertEqual(playerCalls, 2,
+                       "should advance to second client after UNPLAYABLE")
+        XCTAssertEqual(cues.count, 2)
+    }
+
+    func testExhaustsAllClientsThenThrows() async {
+        let unplayableJSON = """
+        {"playabilityStatus":{"status":"UNPLAYABLE"}}
+        """.data(using: .utf8)!
+        var playerCalls = 0
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { _ in
+            playerCalls += 1
+            return self.ok(unplayableJSON)
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await YouTubeCaptionExtractor.extract(
+                videoId: "x", cache: cache, fetcher: fetcher
+            )
+        ) { error in
+            guard case CaptionError.videoUnavailable = error else {
+                XCTFail("expected .videoUnavailable, got \(error)"); return
+            }
+        }
+        XCTAssertEqual(playerCalls, 3,
+                       "must try every client in the fallback chain")
+    }
+
     // MARK: - Progress events
 
     func testEmitsProgressEvents() async throws {
