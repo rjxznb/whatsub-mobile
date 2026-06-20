@@ -274,7 +274,18 @@ final class LibraryDetailViewModel: ObservableObject {
                 ChatMessage(role: "system", content: AnalysisPrompts.system),
                 ChatMessage(role: "user", content: AnalysisPrompts.userPrompt([target])),
             ])
-            let parsed = AnalysisEngine.parseCueLines(raw)
+            // Run the raw response through JsonLineParser → AnalysisEngine.parseCue,
+            // mirroring the streaming pipeline's parsing semantics. Single-cue
+            // reanalyze stays non-stream because the output is one short
+            // line — streaming would be overkill.
+            let parser = JsonLineParser()
+            var parsed: [Cue] = []
+            parser.feed(raw.hasSuffix("\n") ? raw : raw + "\n") { obj in
+                if let cue = AnalysisEngine.parseCue(obj) { parsed.append(cue) }
+            }
+            parser.flush { obj in
+                if let cue = AnalysisEngine.parseCue(obj) { parsed.append(cue) }
+            }
             guard let updated = parsed.first else {
                 saveError = "AI 返回为空"
                 return
