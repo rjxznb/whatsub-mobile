@@ -148,16 +148,36 @@ struct ChatCompletionsClient {
             let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
             throw LlmError.api(http.statusCode, "返回结构异常 · body=\(body)")
         }
-        // Some providers (DeepSeek v4-pro) put the answer in `reasoning_content`
-        // alongside an empty `content`. Accept either.
-        let content = (msg["content"] as? String) ?? (msg["reasoning_content"] as? String) ?? ""
+        // DeepSeek v4 reasoning models (v4-flash, v4-pro) ALWAYS emit
+        // `content: ""` and put the actual output in `reasoning_content`.
+        // The previous nil-coalesce was a no-op for them: "" is non-nil
+        // so `??` never reached reasoning_content. Pick whichever field
+        // has non-empty text after trim — reasoning_content wins when
+        // content is empty/whitespace.
+        let rawContent = (msg["content"] as? String) ?? ""
+        let rawReasoning = (msg["reasoning_content"] as? String) ?? ""
+        let contentTrim = rawContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = contentTrim.isEmpty ? rawReasoning : rawContent
         // Whitespace-only counts as empty — DeepSeek occasionally returns
         // "\n" / " " and our prior `.isEmpty` check missed it, letting the
         // whitespace flow into the parser and silently disappear (guard
         // showed "服务端返回空内容" with no diagnostic body).
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
-            throw LlmError.api(http.statusCode, "content 字段为空或仅空白 · body=\(body)")
+            // Detect reasoning-model misuse: model has the
+            // reasoning_content key but only put a partial think trace
+            // in it (max_tokens budget burned on thinking, never emit
+            // final answer). Standard symptom on v4-flash / v4-pro for
+            // long-context tasks like our 50-cue batches.
+            let modelStr = (obj["model"] as? String) ?? "?"
+            let reasoningPresent = !rawReasoning.isEmpty
+            let detail: String
+            if reasoningPresent {
+                detail = "model \(modelStr) 把 token 全花在 reasoning 上没出最终答案 — 字幕分析任务请改用 `deepseek-chat`(不是 reasoning 模型),在 LLM 设置改 model 字段后再试。"
+            } else {
+                let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
+                detail = "content 字段为空或仅空白 · body=\(body)"
+            }
+            throw LlmError.api(http.statusCode, detail)
         }
         return content
     }
