@@ -172,7 +172,22 @@ struct ChatCompletionsClient {
             let reasoningPresent = !rawReasoning.isEmpty
             let detail: String
             if reasoningPresent {
-                detail = "model \(modelStr) 把 token 全花在 reasoning 上没出最终答案 — 字幕分析任务请改用 `deepseek-chat`(不是 reasoning 模型),在 LLM 设置改 model 字段后再试。"
+                // Reasoning models burn the max_tokens budget on the
+                // think trace and leave content empty. Hint is
+                // vendor-agnostic — the user's BYOK could be DeepSeek,
+                // OpenAI, Qwen, GLM, Moonshot, 火山, etc.
+                detail = """
+                model `\(modelStr)` 是 reasoning 模型 — token 全花在思考上,没出最终答案。
+                字幕分析这种结构化输出任务要用 **非 reasoning 模型**,在 LLM 设置改 model 字段。各家常见的非 reasoning 模型:
+                · DeepSeek → deepseek-chat
+                · OpenAI → gpt-4o-mini / gpt-4o
+                · Anthropic → claude-sonnet-4-6 / claude-haiku-4-5
+                · Qwen → qwen-plus / qwen-turbo
+                · GLM → glm-4-plus / glm-4-flash
+                · Moonshot → kimi-k2 / moonshot-v1-32k
+                · 火山豆包 → doubao-1.5-pro
+                通用判定:名字带 think/reasoning/r1/o1/o3/qwq 的都不要选;名字带 chat/pro/plus/turbo/flash 的通常可以。
+                """
             } else {
                 let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
                 detail = "content 字段为空或仅空白 · body=\(body)"
