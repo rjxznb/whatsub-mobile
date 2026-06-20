@@ -68,6 +68,9 @@ struct LibraryView: View {
                             }
                         }
                 }
+                // Swipe-down-to-dismiss was triggering accidental close on
+                // the idle/select page; explicit "关闭" button stays.
+                .interactiveDismissDisabled()
             }
         }
     }

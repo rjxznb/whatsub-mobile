@@ -241,7 +241,17 @@ struct ContentView: View {
                 ImportView(initialURL: item.url)
                     .environmentObject(appState)
                     .environmentObject(store)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("关闭") { pendingImport = nil }
+                        }
+                    }
             }
+            // Disable swipe-down dismiss so users don't accidentally close
+            // mid-extract / mid-AI / mid-preview. Explicit "关闭" button
+            // gives them a deliberate exit. Mirrors the LibraryView import
+            // sheet's interactive-dismiss policy.
+            .interactiveDismissDisabled()
         }
         // (AI consent sheet moved to the OUTER body — see comment there
         // for the build-294 bug rationale. Don't add it here again or the
