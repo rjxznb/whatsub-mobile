@@ -163,36 +163,8 @@ struct ChatCompletionsClient {
         // whitespace flow into the parser and silently disappear (guard
         // showed "服务端返回空内容" with no diagnostic body).
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Detect reasoning-model misuse: model has the
-            // reasoning_content key but only put a partial think trace
-            // in it (max_tokens budget burned on thinking, never emit
-            // final answer). Standard symptom on v4-flash / v4-pro for
-            // long-context tasks like our 50-cue batches.
-            let modelStr = (obj["model"] as? String) ?? "?"
-            let reasoningPresent = !rawReasoning.isEmpty
-            let detail: String
-            if reasoningPresent {
-                // Reasoning models burn the max_tokens budget on the
-                // think trace and leave content empty. Hint is
-                // vendor-agnostic — the user's BYOK could be DeepSeek,
-                // OpenAI, Qwen, GLM, Moonshot, 火山, etc.
-                detail = """
-                model `\(modelStr)` 是 reasoning 模型 — token 全花在思考上,没出最终答案。
-                字幕分析这种结构化输出任务要用 **非 reasoning 模型**,在 LLM 设置改 model 字段。各家常见的非 reasoning 模型:
-                · DeepSeek → deepseek-chat
-                · OpenAI → gpt-4o-mini / gpt-4o
-                · Anthropic → claude-sonnet-4-6 / claude-haiku-4-5
-                · Qwen → qwen-plus / qwen-turbo
-                · GLM → glm-4-plus / glm-4-flash
-                · Moonshot → kimi-k2 / moonshot-v1-32k
-                · 火山豆包 → doubao-1.5-pro
-                通用判定:名字带 think/reasoning/r1/o1/o3/qwq 的都不要选;名字带 chat/pro/plus/turbo/flash 的通常可以。
-                """
-            } else {
-                let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
-                detail = "content 字段为空或仅空白 · body=\(body)"
-            }
-            throw LlmError.api(http.statusCode, detail)
+            let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
+            throw LlmError.api(http.statusCode, "content 字段为空或仅空白 · body=\(body)")
         }
         return content
     }
@@ -228,6 +200,120 @@ struct ChatCompletionsClient {
             throw LlmError.api(status, "SSE 空内容 · sawTerminator=\(sawTerminator) head=\(head)")
         }
         return collected
+    }
+
+    // MARK: - real streaming (used by AnalysisEngine for V4 reasoning models)
+
+    /// True streaming surface. Walks the SSE response chunk-by-chunk and
+    /// yields each `delta.content` (and `delta.reasoning_content` when
+    /// `content` is empty — DeepSeek v4 puts the JSONL output there for
+    /// long batches when the model decides to "think out loud").
+    ///
+    /// Why a new entry point and not folded into `chat()`: the existing
+    /// callers (QuickChat, CollectSheet, Roleplay, Photo) need the full
+    /// concatenated text and use `chat()`; only AnalysisEngine wants
+    /// per-line incremental delivery to feed `JsonLineParser`. Two
+    /// surfaces > a re-entry-able boolean.
+    ///
+    /// Trade-off vs the old simulated `stream()` used by QuickChat: SSE
+    /// connection is held open ~10-60s for a long batch. URLSession
+    /// timeout is bumped (300s here vs `chat()`'s 120s) because the
+    /// import flow is willing to wait for a full transcript to land.
+    func streamChat(_ messages: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard AIConsentStore.hasAcceptedRaw else { throw LlmError.consentRequired }
+                    guard let r = resolveConfig() else { throw LlmError.notConfigured }
+                    guard let url = URL(string: "\(r.baseUrl)/chat/completions") else {
+                        throw LlmError.notConfigured
+                    }
+                    var req = URLRequest(url: url)
+                    req.httpMethod = "POST"
+                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    req.setValue("Bearer \(r.bearer)", forHTTPHeaderField: "Authorization")
+                    req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    req.timeoutInterval = 300
+
+                    var body: [String: Any] = [
+                        "model": r.model,
+                        "temperature": 0.3,
+                        // Streaming uncaps the per-batch length so the
+                        // 50-cue JSONL output isn't truncated mid-stream.
+                        "max_tokens": 16384,
+                        "stream": true,
+                        "messages": messages.map { ["role": $0.role, "content": $0.content] },
+                    ]
+                    if r.usesRelaySSE {
+                        body["stream_options"] = ["include_usage": true]
+                    }
+                    req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+                    let (asyncBytes, resp) = try await session.bytes(for: req)
+                    guard let http = resp as? HTTPURLResponse else {
+                        throw LlmError.network("no http response · url=\(url.absoluteString)")
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        // Drain a small head of the error body for diagnostic
+                        // detail — same shape as chat() so user-facing errors
+                        // stay consistent across the two surfaces.
+                        var head = ""
+                        var byteBudget = 600
+                        for try await byte in asyncBytes {
+                            head.append(Character(UnicodeScalar(byte)))
+                            byteBudget -= 1
+                            if byteBudget <= 0 { break }
+                        }
+                        if let policy = Self.parsePolicy(body: Data(head.utf8), status: http.statusCode) {
+                            throw policy
+                        }
+                        throw LlmError.api(http.statusCode, head)
+                    }
+
+                    // Walk SSE line-by-line. For each `data:` JSON frame,
+                    // yield delta.content (preferred) or delta.reasoning_content
+                    // (DeepSeek v4 fallback for long batches).
+                    var emitted = false
+                    for try await line in asyncBytes.lines {
+                        if Task.isCancelled { break }
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        guard trimmed.hasPrefix("data:") else { continue }
+                        let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                        if payload == "[DONE]" { break }
+                        guard let payloadData = payload.data(using: .utf8),
+                              let obj = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+                              let choices = obj["choices"] as? [[String: Any]],
+                              let delta = choices.first?["delta"] as? [String: Any]
+                        else { continue }
+                        // Prefer `content` (normal models). For v4 reasoning
+                        // models that emit JSONL via reasoning_content,
+                        // fall back. Either way we yield raw text — the
+                        // downstream JsonLineParser only cares about lines
+                        // that look like JSON; "thinking" prose between
+                        // them is silently dropped.
+                        if let c = delta["content"] as? String, !c.isEmpty {
+                            emitted = true
+                            continuation.yield(c)
+                        } else if let r = delta["reasoning_content"] as? String, !r.isEmpty {
+                            emitted = true
+                            continuation.yield(r)
+                        }
+                    }
+                    if !emitted {
+                        throw LlmError.api(0, "SSE stream produced no content chunks")
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch let urlError as URLError {
+                    let detail = "[\(urlError.code.rawValue)] \(urlError.localizedDescription)"
+                    continuation.finish(throwing: LlmError.network(detail))
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     // MARK: - simulated streaming (used by QuickChat)

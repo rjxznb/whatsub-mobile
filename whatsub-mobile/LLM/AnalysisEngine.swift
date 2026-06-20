@@ -1,5 +1,22 @@
 import Foundation
 
+/// Subtitle analysis pipeline. Mirrors `whatsub-releases/Get_Video/client/
+/// src/llm/analyze.ts`'s shape: streamed JSONL per cue (phase 1) +
+/// one streamed summary call at the end (phase 2).
+///
+/// Pre-2026-06-21 this used `client.chat()` (non-streaming) which capped
+/// at max_tokens=4096 and locked us out of DeepSeek v4 reasoning models
+/// (the V4 family burns the budget on a reasoning trace and leaves
+/// `content` empty for long batches). The streaming path:
+///   - Removes the per-batch length cap (max_tokens=16384, plus the
+///     server streams whatever fits).
+///   - Yields each cue as soon as the LLM emits its JSON line,
+///     giving the UI per-cue progress (you see translations land
+///     in real time, not in 50-cue chunks).
+///   - Tolerates DeepSeek v4-flash's `reasoning_content` channel —
+///     ChatCompletionsClient.streamChat falls back to
+///     reasoning_content when content is empty so any "think out
+///     loud + emit JSONL" model just works.
 struct AnalysisEngine {
     let client: ChatCompletionsClient
 
@@ -7,54 +24,85 @@ struct AnalysisEngine {
         stride(from: 0, to: cues.count, by: size).map { Array(cues[$0..<min($0 + size, cues.count)]) }
     }
 
-    /// Decode JSON-Lines per-cue output into Cue[]. Skips blank/non-JSON lines
-    /// and any stray summary line. Reuses the existing tolerant `Cue` decoder.
-    static func parseCueLines(_ raw: String) -> [Cue] {
-        var out: [Cue] = []
-        for line in raw.split(separator: "\n") {
-            let s = line.trimmingCharacters(in: .whitespaces)
-            guard s.hasPrefix("{"), let data = s.data(using: .utf8) else { continue }
-            // skip summary lines
-            if s.contains("\"type\":\"summary\"") || s.contains("\"keyPhrases\"") { continue }
-            if let cue = try? JSONDecoder().decode(Cue.self, from: data) { out.append(cue) }
+    /// Decode one JSON object (from the streaming parser) into a Cue
+    /// when its shape matches our cue schema. Returns nil for summary
+    /// objects (which carry `keyPhrases` instead of `text`/`time`).
+    static func parseCue(_ obj: Any) -> Cue? {
+        guard let dict = obj as? [String: Any] else { return nil }
+        // Summary lines carry keyPhrases — skip cleanly so they don't
+        // pollute the cue list.
+        if dict["keyPhrases"] != nil || (dict["type"] as? String) == "summary" {
+            return nil
         }
-        return out
+        guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+        return try? JSONDecoder().decode(Cue.self, from: data)
     }
 
-    static func parseSummaryLine(_ raw: String) -> [KeyPhrase] {
-        for line in raw.split(separator: "\n") {
-            let s = line.trimmingCharacters(in: .whitespaces)
-            guard s.contains("\"keyPhrases\""), let data = s.data(using: .utf8) else { continue }
-            struct S: Decodable { let keyPhrases: [KeyPhrase] }
-            if let parsed = try? JSONDecoder().decode(S.self, from: data) { return parsed.keyPhrases }
-        }
-        return []
+    /// Try to decode a summary object's keyPhrases.
+    static func parseSummary(_ obj: Any) -> [KeyPhrase]? {
+        guard let dict = obj as? [String: Any],
+              dict["keyPhrases"] != nil,
+              let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+        struct S: Decodable { let keyPhrases: [KeyPhrase] }
+        return (try? JSONDecoder().decode(S.self, from: data))?.keyPhrases
     }
 
-    /// Full analysis. `onProgress(done, total)` for the UI.
+    /// Run the analysis. `onProgress(done, total)` ticks at cue
+    /// granularity now (was per-batch before the streaming switch), so
+    /// the UI sees a smooth bar instead of long pauses between jumps.
     func analyze(_ cues: [Cue], onProgress: @escaping (Int, Int) -> Void) async throws -> AnalysisJson {
         let batched = Self.batches(cues)
         var subtitles: [Cue] = []
-        for (i, batch) in batched.enumerated() {
-            let content = try await client.chat([
+        let totalCues = cues.count
+        // Phase 1: per-cue stream, batch by batch.
+        for batch in batched {
+            let parser = JsonLineParser()
+            let stream = client.streamChat([
                 ChatMessage(role: "system", content: AnalysisPrompts.system),
                 ChatMessage(role: "user", content: AnalysisPrompts.userPrompt(batch)),
             ])
-            subtitles.append(contentsOf: Self.parseCueLines(content))
-            onProgress(i + 1, batched.count + 1)
+            for try await chunk in stream {
+                parser.feed(chunk) { obj in
+                    if let cue = Self.parseCue(obj) {
+                        subtitles.append(cue)
+                        onProgress(subtitles.count, totalCues + 1)
+                    }
+                }
+            }
+            parser.flush { obj in
+                if let cue = Self.parseCue(obj) {
+                    subtitles.append(cue)
+                    onProgress(subtitles.count, totalCues + 1)
+                }
+            }
         }
         // Re-index sequentially (LLM should preserve, but be safe).
         for i in subtitles.indices { subtitles[i].index = i }
-        // Summary (keyPhrases).
+
+        // Phase 2: streamed summary call across the whole transcript.
+        // Wrapped: losing the summary should NOT abort the run since the
+        // cue analyses are usable on their own.
         var keyPhrases: [KeyPhrase] = []
         if !subtitles.isEmpty {
-            let summary = try await client.chat([
-                ChatMessage(role: "system", content: AnalysisPrompts.system),
-                ChatMessage(role: "user", content: AnalysisPrompts.summaryPrompt(subtitles)),
-            ])
-            keyPhrases = Self.parseSummaryLine(summary)
+            do {
+                let parser = JsonLineParser()
+                let stream = client.streamChat([
+                    ChatMessage(role: "system", content: AnalysisPrompts.system),
+                    ChatMessage(role: "user", content: AnalysisPrompts.summaryPrompt(subtitles)),
+                ])
+                for try await chunk in stream {
+                    parser.feed(chunk) { obj in
+                        if let kp = Self.parseSummary(obj) { keyPhrases = kp }
+                    }
+                }
+                parser.flush { obj in
+                    if let kp = Self.parseSummary(obj) { keyPhrases = kp }
+                }
+            } catch {
+                // Summary lost — keep the cues we collected.
+            }
         }
-        onProgress(batched.count + 1, batched.count + 1)
+        onProgress(totalCues + 1, totalCues + 1)
         return AnalysisJson.assembled(subtitles: subtitles, keyPhrases: keyPhrases)
     }
 }
