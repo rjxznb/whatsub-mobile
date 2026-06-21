@@ -32,6 +32,9 @@ struct CueRowEditing: View {
     /// SwiftUI fires on every keystroke for TextField(text:)).
     @State private var englishDraft: String = ""
     @State private var chineseDraft: String = ""
+    /// Tracks whether either textfield in this row has focus so the
+    /// keyboard toolbar "完成" button only renders when relevant.
+    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -53,12 +56,36 @@ struct CueRowEditing: View {
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.whatsubInk)
                 .textFieldStyle(.plain)
+                .focused($focused)
                 .onChange(of: englishDraft) { newValue in onTextChange(newValue) }
             TextField("中文", text: $chineseDraft, axis: .vertical)
                 .font(.system(size: 14))
                 .foregroundStyle(.whatsubInkMuted)
                 .textFieldStyle(.plain)
+                .focused($focused)
                 .onChange(of: chineseDraft) { newValue in onTranslationChange(newValue) }
+        }
+        // TextField(axis: .vertical) doesn't provide a built-in "return
+        // dismisses keyboard" — return inserts a newline. Without this
+        // toolbar there's literally no way to dismiss the keyboard from
+        // the row itself, leaving users stuck. Per the feedback memo
+        // about @FocusState desync, we ALSO fire sendAction on the
+        // global responder chain (no-op when nothing's focused) for
+        // belt-and-suspenders.
+        .toolbar {
+            if focused {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") {
+                        focused = false
+                        UIApplication.shared.sendAction(
+                            #selector(UIResponder.resignFirstResponder),
+                            to: nil, from: nil, for: nil
+                        )
+                    }
+                    .foregroundStyle(.whatsubAccent)
+                }
+            }
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)

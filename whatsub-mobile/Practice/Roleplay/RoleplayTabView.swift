@@ -89,15 +89,9 @@ struct RoleplayTabView: View {
     // MARK: - subviews
 
     private var loadingView: some View {
-        VStack(spacing: 14) {
-            Spacer()
-            ProgressView().tint(.whatsubAccent)
-            Text("正在为这个视频量身设计场景…")
-                .font(.footnote)
-                .foregroundStyle(.whatsubInkMuted)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 5s stall → "可能 VPN 拦了" + 查 VPN 规则按钮.
+        // 见 Components/RelayLoadingView.swift.
+        RelayLoadingView(label: "正在为这个视频量身设计场景…")
     }
 
     @ViewBuilder

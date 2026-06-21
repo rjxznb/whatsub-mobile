@@ -65,12 +65,9 @@ struct EntryCollectionsList: View {
         Group {
             switch phase {
             case .loading:
-                VStack {
-                    Spacer()
-                    ProgressView().tint(.whatsubAccent)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 5s stall → "可能 VPN 拦了 eversay.cc + 查 VPN 规则" 按钮.
+                // 见 Components/RelayLoadingView.swift.
+                RelayLoadingView(label: "正在拉取这个视频的收藏…")
 
             case .error(let msg):
                 VStack(spacing: 8) {
