@@ -6,13 +6,9 @@ final class ImportViewModel: ObservableObject {
     enum State {
         case idle
         case extracting
-        /// Captions extracted + cached, waiting for user confirmation to
-        /// start the AI step. Shows the raw English cues so the user can
-        /// (a) verify extraction succeeded and (b) toggle VPN before the
-        /// LLM call fires — Chinese users hit eversay.cc which VPN often
-        /// MITMs, and they need this gap to switch routing.
-        case captionsReady
-        case analyzing(done: Int, total: Int)
+        /// Streaming AI analysis. `cueCount` lets the UI render a time
+        /// estimate ("约 1 分钟") in addition to the live done/total bar.
+        case analyzing(done: Int, total: Int, cueCount: Int)
         case preview
         case syncing
         case done
@@ -47,7 +43,7 @@ final class ImportViewModel: ObservableObject {
 
     // MARK: - Step 1: Extract + Analyse
 
-    func run(urlOrId: String) async {
+    func run(urlOrId: String, token: String, email: String? = nil) async {
         let trimmed = urlOrId.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Non-YouTube URLs have no phone-side caption path (Bilibili CC is
@@ -107,50 +103,47 @@ final class ImportViewModel: ObservableObject {
             return
         }
 
-        // Step 3: Wait for user confirmation. The previous flow auto-ran
-        // AI analysis here; that left China users no window to switch off
-        // VPN between caption (needs VPN) and AI (needs VPN OFF for relay
-        // users), and also obscured whether extraction actually succeeded.
-        // captionsReady shows the raw cues + a "开始 AI 解析" button.
-        state = .captionsReady
+        // Step 3: Run AI analysis + auto-sync. Per user feedback
+        // 2026-06-21: drop the manual "开始 AI 解析" + "同步到云库"
+        // confirmation steps — once captions are extracted the user's
+        // intent is obviously to land the entry in the cloud library.
+        // Two manual taps were friction without value.
+        await performAnalysis(rawCues, token: token)
     }
 
-    /// User tapped 「开始 AI 解析」 from the captionsReady screen. Runs the
-    /// LLM step on the in-memory rawCues.
-    func startAnalysis() async {
-        await performAnalysis(rawCues)
-    }
-
-    /// Re-run just the LLM analysis on the in-memory `rawCues`. Used by
+    /// Re-run JUST the LLM analysis on the in-memory `rawCues`. Used by
     /// the error-screen「重试 AI 解析」button so a network-stage failure
     /// (VPN routing, key issue, etc.) doesn't force the user back through
     /// URL input + caption extraction. If somehow rawCues is empty (e.g.,
     /// after a process restart), falls back to .idle so the URL screen
     /// shows up.
-    func retryAnalysisOnly() async {
+    func retryAnalysisOnly(token: String) async {
         guard !rawCues.isEmpty else {
             state = .idle
             return
         }
-        await performAnalysis(rawCues)
+        await performAnalysis(rawCues, token: token)
     }
 
-    private func performAnalysis(_ cues: [Cue]) async {
+    private func performAnalysis(_ cues: [Cue], token: String) async {
         let settings = LlmSettingsStore.load()
         guard settings.isConfigured else {
             state = .error("请先配置 LLM（我的 → LLM 设置）")
             return
         }
-        state = .analyzing(done: 0, total: 1)
+        let cueCount = cues.count
+        state = .analyzing(done: 0, total: 1, cueCount: cueCount)
         let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
         do {
             let analysis = try await engine.analyze(cues) { [weak self] done, total in
                 Task { @MainActor [weak self] in
-                    self?.state = .analyzing(done: done, total: total)
+                    self?.state = .analyzing(done: done, total: total, cueCount: cueCount)
                 }
             }
             result = analysis
-            state = .preview
+            // Auto-sync immediately on analysis success — user requested
+            // removal of the preview/sync confirmation step.
+            await sync(token: token)
         } catch {
             // Captions stay in memory (rawCues) so the error-screen retry
             // skips straight back to performAnalysis. The hint differs by

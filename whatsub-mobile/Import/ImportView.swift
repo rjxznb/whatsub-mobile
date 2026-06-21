@@ -36,12 +36,10 @@ struct ImportView: View {
                 idleBody
             case .extracting:
                 extractingBody
-            case .captionsReady:
-                captionsReadyBody
-            case .analyzing(let done, let total):
+            case .analyzing(let done, let total, let cueCount):
                 progressBody(
                     icon: "sparkles",
-                    label: "AI 解析中 \(done)/\(total)",
+                    label: "AI 解析中 \(done)/\(total)\n\(Self.eta(forCues: cueCount))",
                     progress: total > 0 ? Double(done) / Double(total) : nil
                 )
             case .preview:
@@ -213,143 +211,32 @@ struct ImportView: View {
 
     // MARK: - Captions Ready (NEW — between extract and AI analysis)
 
-    /// Bridges caption extraction → AI analysis. Two jobs:
-    ///   1. Prove to the user that captions did download (was a real ask
-    ///      after the disk-cache-vs-memory-cache confusion).
-    ///   2. Give China relay users an explicit "switch VPN off NOW" gap
-    ///      between the YouTube hit (needs VPN) and the eversay.cc hit
-    ///      (works best WITHOUT VPN). Previously the two ran back-to-back
-    ///      so the user couldn't toggle.
-    private var captionsReadyBody: some View {
-        VStack(spacing: 0) {
-            // Header
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.green)
-                    Text("字幕已下载 · \(vm.rawCues.count) 条")
-                        .font(.headline)
-                        .foregroundStyle(.whatsubInk)
-                }
-                if LlmSettingsStore.load().useManagedRelay {
-                    Text("⚡ 下一步会调用 AI 解析(eversay.cc, 国内直连)。在用 VPN 的话, **建议现在关掉再开始** —— 否则 VPN 会拐 eversay.cc 去海外节点, TLS 握手会跪。")
-                        .font(.footnote)
-                        .foregroundStyle(.whatsubInkMuted)
-                        .multilineTextAlignment(.leading)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
-                } else {
-                    Text("下一步会调用 AI 解析。如果用 VPN 访问 LLM 厂商, 保持现状即可。")
-                        .font(.footnote)
-                        .foregroundStyle(.whatsubInkMuted)
-                        .padding(.horizontal, 16)
-                }
-            }
-            .padding(.top, 12)
-            .padding(.bottom, 10)
-
-            // Scrollable raw cue list — English only, no AI annotations.
-            // Long-press a cue → 复制 (textSelection + contextMenu).
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(vm.rawCues) { cue in
-                        rawCueRow(cue)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 130)
-            }
-
-            // Bottom action bar (sticky)
-            VStack(spacing: 0) {
-                Divider().background(Color.white.opacity(0.08))
-                Button {
-                    Task { await vm.startAnalysis() }
-                } label: {
-                    Label("开始 AI 解析", systemImage: "sparkles")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.whatsubAccent)
-                        .foregroundStyle(.black)
-                        .cornerRadius(12)
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 10)
-                .background(Color.whatsubBg)
-            }
-        }
-    }
-
-    private func rawCueRow(_ cue: Cue) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text(formatTimestamp(cue.time))
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.whatsubInkFaint)
-                .frame(width: 46, alignment: .leading)
-            Text(cue.text)
-                .font(.system(size: 15))
-                .foregroundStyle(.whatsubInkSoft)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 8))
-        .contextMenu {
-            Button {
-                UIPasteboard.general.string = cue.text
-            } label: { Label("复制", systemImage: "doc.on.doc") }
-        }
-    }
-
-    private func formatTimestamp(_ sec: Double) -> String {
-        let total = Int(sec)
-        let m = total / 60
-        let s = total % 60
-        return String(format: "%d:%02d", m, s)
-    }
-
     // MARK: - Preview
 
+    /// Vestigial — the new auto-sync flow transitions from .analyzing
+    /// straight to .syncing, so .preview is never set in normal use.
+    /// Kept as a safety net (renders the annotated cues with no sync
+    /// button — sync already triggers automatically on analyze success
+    /// upstream in `performAnalysis`). Removed the「同步到云库」button
+    /// per user feedback 2026-06-21: "解析完之后…我觉得不要这个了直接就同步".
     private var previewBody: some View {
-        VStack(spacing: 0) {
-            if let subtitles = vm.result?.subtitles {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(subtitles) { cue in
-                            CueRow(
-                                cue: cue,
-                                isCurrent: false,
-                                onTapCue: {},
-                                onTapHighlight: { _, _, _, _ in },  // import preview: no gloss sheet
-                                onCollect: {}                    // import preview: no notebook yet
-                            )
-                        }
+        ScrollView {
+            LazyVStack(spacing: 8) {
+                if let subtitles = vm.result?.subtitles {
+                    ForEach(subtitles) { cue in
+                        CueRow(
+                            cue: cue,
+                            isCurrent: false,
+                            onTapCue: {},
+                            onTapHighlight: { _, _, _, _ in },
+                            onCollect: {}
+                        )
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 12)
-                    .padding(.bottom, 100)
                 }
             }
-
-            // Floating sync button at the bottom.
-            VStack(spacing: 0) {
-                Divider().background(Color.white.opacity(0.08))
-                Button(action: startSync) {
-                    Text("同步到云库")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.whatsubAccent)
-                        .foregroundStyle(.black)
-                        .cornerRadius(12)
-                }
-                .padding()
-                .background(Color.whatsubBg)
-            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
         }
     }
 
@@ -398,7 +285,8 @@ struct ImportView: View {
             // cues. Otherwise reset to idle so URL input shows.
             if !vm.rawCues.isEmpty {
                 Button("重试 AI 解析") {
-                    Task { await vm.retryAnalysisOnly() }
+                    guard let token = appState.session?.sessionToken else { return }
+                    Task { await vm.retryAnalysisOnly(token: token) }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.whatsubAccent)
@@ -591,7 +479,26 @@ struct ImportView: View {
     // MARK: - Actions
 
     private func startImport() {
-        Task { await vm.run(urlOrId: urlInput) }
+        guard let token = appState.session?.sessionToken else {
+            vm.state = .error("请先登录")
+            return
+        }
+        // run() now auto-flows extract → analyze → sync → done; needs the
+        // token + email up front so it can chain into sync without
+        // bouncing through a manual "同步到云库" confirmation.
+        Task { await vm.run(urlOrId: urlInput, token: token, email: appState.session?.email) }
+    }
+
+    /// Coarse time estimate for the streaming analyze stage. ~1s per cue
+    /// on deepseek-v4-flash + ~5s phase-2 summary. Floor at 30s so a
+    /// 5-cue short doesn't look like "约 10 秒" then take 25s anyway.
+    static func eta(forCues count: Int) -> String {
+        let est = max(30, count + 5)
+        if est < 60 { return "预计约 \(est) 秒" }
+        let m = est / 60
+        let s = est % 60
+        if s < 15 { return "预计约 \(m) 分钟" }
+        return "预计约 \(m) 分 \(s) 秒"
     }
 
     private func startPush() {
@@ -600,14 +507,6 @@ struct ImportView: View {
             return
         }
         Task { await vm.pushURL(urlInput, token: token, email: appState.session?.email) }
-    }
-
-    private func startSync() {
-        guard let token = appState.session?.sessionToken else {
-            vm.state = .error("请先登录")
-            return
-        }
-        Task { await vm.sync(token: token) }
     }
 
     private func pushToDesktop() {
