@@ -10,9 +10,12 @@ SwiftUI native, iOS 16+. Project file generated from `project.yml` by [XcodeGen]
 
 ```bash
 brew install xcodegen
+./scripts/setup-frameworks.sh   # one-time: download sherpa-onnx + onnxruntime XCFrameworks (~200MB)
 xcodegen generate
 open whatsub-mobile.xcodeproj
 ```
+
+The setup script is idempotent — re-run after `rm -rf frameworks/` to force a fresh download. The two XCFrameworks are git-ignored (>100MB each, above GitHub's per-file limit); CI downloads them on every build via the same logic inlined in `.github/workflows/{ci,testflight}.yml`.
 
 ## Local dev (on Windows — no Xcode needed)
 

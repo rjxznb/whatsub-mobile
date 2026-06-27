@@ -216,6 +216,38 @@ clients have minimal anti-scraping for ecosystem-compatibility
 reasons. If that also locks: backend yt-dlp service (architecturally
 designed earlier; unbuilt by choice — keeps server costs flat).
 
+**2026-06-20 update**: ANDROID_TESTSUITE got fully removed from yt-dlp's `INNERTUBE_CLIENTS` dict late 2024; YouTube progressively tightened it through 2026. We migrated to a 4-client fallback chain that mirrors yt-dlp's 2026 defaults: `ANDROID_VR` (Oculus Quest YouTube VR app — primary, no PO_TOKEN) → `TVHTML5_SIMPLY_EMBEDDED_PLAYER` (best at age-gate / kids-mode bypass) → `IOS` (clientVersion 21.02.3 / iPhone16,2 / iOS 18.2 — bumped from stale 19.x metadata that started returning HTTP 400) → `MWEB` (mobile-web safety net). The chain catches **all** `CaptionError` types (HTTP 4xx, URLError, parse), not just status-based `UNPLAYABLE` / `LOGIN_REQUIRED` — earlier transport-error logic propagated out before subsequent clients could try. Status-based exhaustion still takes precedence over transport-error exhaustion when both occur (more accurate UX). When YouTube changes anything next, mirror `yt-dlp/yt_dlp/extractor/youtube/_base.py` `INNERTUBE_CLIENTS` constants.
+
+### Streaming LLM analysis + JsonLineParser (DeepSeek v4, 2026-06-21)
+
+Mirror of desktop `Get_Video/client/src/llm/analyze.ts` + `streamingJson.ts`. **Why**: `deepseek-chat` + `deepseek-reasoner` retire 2026-07-24; V4 replacements (`deepseek-v4-flash` / `deepseek-v4-pro`) emit long JSONL outputs that overflow non-stream `max_tokens=4096` and put substantial content in `reasoning_content` for long batches.
+
+Three pieces:
+- **`JsonLineParser.swift`** — buffers SSE text chunks, splits on `\n`, fires handler per complete `{...}` line. Tolerates prose interleaved with JSONL (DeepSeek BYOK occasionally narrates "Now emitting next cue:" between objects).
+- **`ChatCompletionsClient.streamChat`** — real `URLSession.bytes(for:) + .lines` over SSE. Yields `delta.content` (preferred) or `delta.reasoning_content` (v4 fallback). `max_tokens=16384` + 300s timeout uncaps batch length.
+- **`AnalysisEngine.analyze`** — streams batches through `JsonLineParser` → `parseCue(obj:)` / `parseSummary(obj:)`. Progress ticks per-cue (was per-batch) for a smooth UI. Summary failure keeps the per-cue results.
+
+Trade-off: chat-style single-shot calls (QuickChat, CollectSheet, Roleplay, Photo) still use the simpler non-streaming `chat()` — only AnalysisEngine wants per-line incremental delivery.
+
+### Import flow auto-sync (2026-06-21)
+
+After streaming LLM landed, the captionsReady preview stage + "同步到云库" confirmation button both turned out to be friction without value. New flow:
+
+```
+粘 URL → 「手机解析」 → extract → analyze (streaming + ETA) → sync → done
+```
+
+Zero user confirmation between stages. `ImportViewModel.run(urlOrId:, token:, email:)` threads the token through so it can chain into `sync()` without bouncing back to the View. `state = .analyzing(done, total, cueCount)` carries cueCount so the UI renders "预计约 N 秒 / N 分钟" alongside the live bar (heuristic ~1s/cue + 5s phase-2 floor at 30s). Error path: `.error` screen surfaces a「重试 AI 解析」button that calls `retryAnalysisOnly(token:)` — skips re-extract because rawCues stay in memory (and disk cache).
+
+### VPN routing UX (Chinese users, 2026-06-21)
+
+iOS can't bypass system VPN per-request (no public API — `URLSessionConfiguration.connectionProxyDictionary` only covers HTTP proxies, not packet tunnels). When user's VPN routes `whatsub.eversay.cc` through HK exit → TLS -1200. Two pieces:
+
+- **`VPNRuleHelpSheet.swift`** — one-screen sheet with copy-button rule snippets for Clash/Stash/Mihomo + Shadowrocket + Surge + Quantumult X + Loon (>95% of CN power-user base). The single durable fix is `DOMAIN-SUFFIX,eversay.cc,DIRECT` in the user's VPN app — adds eversay.cc to the direct-connect rule, YouTube still routes via VPN. BYOK users (who hit their LLM vendor directly) get a separate one-line hint pointing at their own LLM settings.
+- **`RelayLoadingView.swift`** — 5s stall hint. Normal spinner + label first; after 5s without progress flips to a yellow shield icon + "可能 VPN 拦了 eversay.cc" copy + 「查看 VPN 直连规则」 button. No active probe of eversay.cc — the real network call IS the probe. Wired into Library 详情→收藏 tab (`EntryCollectionsList`) and Library 详情→角色扮演 tab (`RoleplayTabView`).
+
+Plus a BYOK-shadowed-by-relay warning in `LlmSettingsView` (yellow Section + one-tap "关掉托管" button): user fills BYOK fields but forgets to flip the relay toggle off → settings are persisted but `ChatCompletionsClient.resolveConfig()` ignores them. Without the banner the only signal was the error host showing `eversay.cc` instead of the BYOK vendor.
+
 ## 踩过的坑 (avoid repeating)
 
 ### CI / GitHub Actions / iOS toolchain
@@ -262,6 +294,8 @@ designed earlier; unbuilt by choice — keeps server costs flat).
 
 - **Dragdown-to-dismiss keyboard guarded on `@FocusState` can fall silent — `@FocusState` desyncs from the actual keyboard state.** Symptom: swipe-down does nothing while the keyboard is clearly up. Cause: the TextField loses focus due to a state transition (re-render, sheet appearing, etc.) but the IME stays mapped to the same first responder, so the keyboard hangs around while `typingFieldFocused == false`. Fix: don't gate on `@FocusState` — dismiss unconditionally on the gesture via `UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)`. It's a no-op when nothing has focus, so there's no harm.
 
+- **`TextField(axis: .vertical)` 不能用回车收键盘 — 必须显式加 `.toolbar(.keyboard)` Done 按钮.** 2026-06-21 字幕编辑撞的：单行 `TextField` 回车会触发 `onSubmit` 默认收键盘，但 `axis: .vertical` 把回车当换行插入,用户根本没法收键盘。模板: `@FocusState private var focused: Bool` + `.focused($focused)` 绑 textfield + `.toolbar { if focused { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focused = false; UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) } } } }`。`sendAction` 是 belt-and-suspenders（per [[feedback_keyboard]] memo：`@FocusState` 偶尔跟实际键盘状态脱节）。代码模板看 `CueRowEditing.swift`。
+
 - **Swift `Result<Success, Failure>` requires `Failure: Error` — `Result<[T], String>` is a compile error.** Symptom (build 247): `'String' does not conform to protocol 'Error'` 1m57s into CI on a `RoleplayScenarioClient` that wanted to surface human-readable failure messages via the `Result` API. There's no clean way to make `String` conform retroactively. Fix: define a tiny custom enum (`enum DerivationOutcome { case success([T]); case failure(String) }`) — it keeps the string channel the UI banner wants without inventing a one-case error type that'd add zero value. Existing switch-on-result call sites are binary-compatible since case names match.
 
 - **Refactoring `Networking/DTOs.swift` breaks the test target silently — `@testable import` exposes the same DTOs to both sides.** Hit 3× in one push cycle on 2026-06-03 while shipping the per-video roleplay feature (Stage 2 added `libraryEntryId/youtubeId` to `CorpusSource` + made `url` Optional; `PhraseSelectorTests.swift` and `CorpusDecodeTests.swift` both still used the old init / forced non-Optional unwrap → 3 sequential CI failures, ~30 min wasted + 3 cert touches). Before pushing a DTO change: `grep -rn "CorpusSource(\|MineItem(\|\\.source\\.url\\b" whatsub-mobileTests` — explicit init call-sites need the new field (nil is fine), force-unwrap rotted-Optional fixtures with `!` rather than `?? ""` so a regressed fixture screams instead of silently degrading.
@@ -281,6 +315,8 @@ designed earlier; unbuilt by choice — keeps server costs flat).
 - **Share extension that opens a deep-link can lock up the host app's UI on return (YouTube ~30s frozen).** 2026-06-19 撞的: 从 YouTube 分享到 whatSub → whatSub 打开 → 用户返回 YouTube → YouTube 不响应任何触摸,等 ~30s iOS GC 掉 orphan view 才恢复。三个叠加因素,缺一不可: (1) `viewDidLoad` 太早就发起 `extensionContext.open(url)` — extension VC 还没 present 完,host app 拿回前台时我们的(透明) view 还挂着吃触摸。改成 `viewDidAppear` 等 present 完才发。(2) `extensionContext.completeRequest(returningItems: nil)` 无 completion handler — iOS 不等 view 拆完就 resume host app。改成 `completeRequest(...) { _ in ... }` + `withCheckedContinuation`。(3) responder-chain `perform("openURL:")` fallback hack — 在 iOS 14+ 已经不需要(ctx.open 全平台稳),留着只会戳到 host app 的 responder 状态,是 YouTube freeze 的主嫌疑。直接删,改靠 AppGroup + main app scenePhase safety-net 兜底。模板看 `whatsub-share/ShareViewController.swift`。
 
 - **`NSSupportsLiveActivities` 是 Live Activity / 灵动岛功能的「准入证」,没声明 iOS 静默不显示。** 2026-06-19 build 232+ Live Activity 整套 APNs/coordinator/widget chain 跑得好好的,但锁屏和灵动岛永远空白 —— 因为 `whatsub-mobile/Info.plist` 漏了 `NSSupportsLiveActivities=YES`。Apple 把这当成 capability declaration,没声明就 silently 拒绝每个 `Activity.request(...)` 调用 (no error, no console log, no token delivery)。**通用经验**: 任何用 ActivityKit 的功能,Phase 0 入口的第一行 checklist 就该是「Info.plist 里加 `NSSupportsLiveActivities: true`」。我们之前 plan Phase 0.2 只加了 `aps-environment` entitlement(APNs push 用),把 capability declaration 忘了。`project.yml` 用 `info.properties.NSSupportsLiveActivities: true` 落地。
+
+- **DeepSeek v4 reasoning 模型把答案放 `reasoning_content`, `content` 是 ""; `??` nil-coalesce 不触发.** 2026-06-21 用户切到自配 `deepseek-v4-flash` 报「服务返回错误 200」, response body 里 `content:""` + `reasoning_content:"We need to output one JSON line per cue..."`。`deepseek-chat` 和 `deepseek-reasoner` 2026-07-24 下架,只能用 v4 系列。我们原 parser `let c = msg["content"] as? String ?? msg["reasoning_content"]` 是 no-op —— `""` 非 nil,`??` 不触发。**修复**: 先 trim `content`,trim 后为空才 fallback 到 `reasoning_content`。**但真正根治是改流式** —— v4 batch 输出 8-15K token 一次性 fetch 撑爆 4096 max_tokens；流式不限长 + 边收边 parse JSONL。模板看 `ChatCompletionsClient.streamChat` + `JsonLineParser.swift` + `AnalysisEngine.analyze`（mirror 桌面 `analyze.ts` + `streamingJson.ts`）。
 
 - **iOS YouTube Innertube fallback chain: 区分"状态码 OK 但视频不可播" vs "transport 错"。** 2026-06-20 撞的: `X_-Q1hOYeCo` 这种视频 ANDROID_TESTSUITE 返 UNPLAYABLE → 试 IOS 返 HTTP 400 → fallback chain 直接抛错,根本没试到 TVHTML5。**原因**: 早期版本的 chain 只在 200 + UNPLAYABLE/LOGIN_REQUIRED 这种 status 错误上 continue,transport 层(HTTP 4xx / URLError / parse error)的 throw 会直接 propagate 出循环。**修复**: catch CaptionError → log → 记下 lastError → continue;只有所有 client 都失败时才抛 lastError(status-based exhaustion 优先于 transport-error exhaustion,UX 更准)。**附带教训**: chain 顺序也得调,2026 年 IOS client 比 TVHTML5 更容易被 YouTube 拒(因为 Apple 平台是 YouTube 的可控生态)。当前正确顺序: ANDROID_TESTSUITE → TVHTML5 → IOS。IOS client metadata 也得跟上 yt-dlp 当前版本(19.45.4 / iPhone16,2 / iOS 18.1.x),老的 19.09.x + iPhone14,3 现在直接被拒 HTTP 400。
 
