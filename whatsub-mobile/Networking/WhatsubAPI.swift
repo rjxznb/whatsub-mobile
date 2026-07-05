@@ -62,6 +62,15 @@ actor WhatsubAPI {
         return try decode(LibraryListResponse.self, from: data).entries
     }
 
+    /// Per-owner list fingerprint — one tiny aggregate instead of the full
+    /// /list (which re-signs a CDN URL per entry). LibraryViewModel compares
+    /// it against the cached copy and only refetches /list when it differs
+    /// (mirror of the corpus /versions flow).
+    func libraryVersion(token: String) async throws -> Int {
+        let data = try await get(Endpoints.library("version"), bearer: token)
+        return try decode(LibraryVersionResponse.self, from: data).version
+    }
+
     func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
         let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let data = try await get(Endpoints.library("entry/\(encoded)"), bearer: token)

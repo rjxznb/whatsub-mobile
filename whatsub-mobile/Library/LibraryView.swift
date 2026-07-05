@@ -76,8 +76,8 @@ struct LibraryView: View {
     }
 
     private func reload() async {
-        guard let token = appState.session?.sessionToken else { return }
-        await vm.load(token: token)
+        guard let session = appState.session else { return }
+        await vm.load(token: session.sessionToken, email: session.email)
     }
 
     @ViewBuilder

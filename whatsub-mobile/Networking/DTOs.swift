@@ -55,7 +55,12 @@ struct RateLimitErrorBody: Decodable {
 
 // ----- Library -----
 
-struct LibraryListItem: Decodable, Identifiable {
+/// Codable (not just Decodable) since 2026-07-05: rows are persisted into
+/// `Caches/library_cache.json` by LibraryCache for the cache-first list.
+/// NOTE: a cached `videoUrl`/`audioUrl` is a signed CDN URL with a 2h TTL —
+/// stale copies are fine because playback always re-fetches `/entry/:id`
+/// for fresh URLs; the list only uses videoUrl's nil-ness (VPN badge).
+struct LibraryListItem: Codable, Identifiable {
     let id: String
     let youtubeId: String
     let sourceUrl: String
@@ -75,6 +80,13 @@ struct LibraryListItem: Decodable, Identifiable {
 
 struct LibraryListResponse: Decodable {
     let entries: [LibraryListItem]
+}
+
+/// `GET /api/library/version` — cheap per-owner fingerprint
+/// (MAX(synced_at)+COUNT(*), same shape as the corpus /versions numbers).
+/// The list cache compares it by equality; any sync/edit/delete shifts it.
+struct LibraryVersionResponse: Decodable {
+    let version: Int
 }
 
 /// A CodingKey that accepts any string — lets us iterate a JSON object's keys
