@@ -12,7 +12,10 @@ options:
 settings:
   base:
     DEVELOPMENT_TEAM: Q3BK52FQT9
-    MARKETING_VERSION: "1.0.0"
+    # 1.0.0 已公开上架 → Apple 锁 train,同版本号不能再传 TestFlight
+    # (CLAUDE.md「MARKETING_VERSION train 锁」gotcha)。每次给已上架版本
+    # 发后续 build 都要 bump 这里。
+    MARKETING_VERSION: "1.0.1"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.10"
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
