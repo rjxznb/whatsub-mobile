@@ -310,7 +310,7 @@ struct ImportView: View {
                 Button {
                     showVPNHelp = true
                 } label: {
-                    Label("查看 VPN 直连规则（一次配置永久解决）", systemImage: "network.badge.shield.half.filled")
+                    Label("查看 VPN 设置方法（切到规则模式即可）", systemImage: "network.badge.shield.half.filled")
                         .font(.footnote)
                 }
                 .buttonStyle(.borderless)

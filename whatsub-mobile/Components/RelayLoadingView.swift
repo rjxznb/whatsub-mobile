@@ -57,7 +57,7 @@ struct RelayLoadingView: View {
                     Button {
                         showVPNHelp = true
                     } label: {
-                        Label("查看 VPN 直连规则", systemImage: "network.badge.shield.half.filled")
+                        Label("查看 VPN 设置方法", systemImage: "network.badge.shield.half.filled")
                             .font(.footnote.weight(.semibold))
                     }
                     .buttonStyle(.borderedProminent)

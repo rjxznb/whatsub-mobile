@@ -182,7 +182,7 @@ struct MeView: View {
                             showVPNHelp = true
                         } label: {
                             HStack {
-                                Label("VPN 分流设置（免开关切换）", systemImage: "network.badge.shield.half.filled")
+                                Label("VPN 设置（不用反复开关）", systemImage: "network.badge.shield.half.filled")
                                     .foregroundStyle(.whatsubInk)
                                 Spacer()
                                 Image(systemName: "chevron.right")
