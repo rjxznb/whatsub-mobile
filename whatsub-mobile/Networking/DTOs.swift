@@ -256,6 +256,17 @@ struct ImportQueueItem: Decodable, Identifiable {
 
 struct ImportQueueListResponse: Decodable {
     let items: [ImportQueueItem]
+    /// Seconds since the user's DESKTOP client last touched the queue
+    /// (its 30s poll / claim / status writes). nil = never seen OR an old
+    /// backend without the field. Drives the "桌面端似乎不在线" banner.
+    let desktopSeenSecondsAgo: Int?
+}
+
+/// `POST /api/library/import-queue` response. desktopSeenSecondsAgo: see
+/// ImportQueueListResponse — nil-tolerant for old backends.
+struct EnqueueImportResponse: Decodable {
+    let id: String
+    let desktopSeenSecondsAgo: Int?
 }
 
 struct LibraryQuota: Decodable {

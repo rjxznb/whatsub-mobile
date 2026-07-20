@@ -20,7 +20,11 @@ final class ImportViewModel: ObservableObject {
         case extractFailed(message: String, debug: [String])
         case pushing
         /// URL successfully enqueued to the backend import queue.
-        case pushedToDesktop
+        /// `desktopOffline` = the backend hasn't seen the user's desktop
+        /// client touch the queue recently (poll cadence is 30s; we warn
+        /// past 120s) — the success screen shows a prominent "打开桌面端"
+        /// reminder so the task doesn't sit in the queue unnoticed forever.
+        case pushedToDesktop(desktopOffline: Bool)
         /// A non-YouTube source (Bilibili / other) that has no client-side
         /// caption path — offer to push it to the desktop queue.
         case needsDesktop(message: String)
@@ -195,7 +199,7 @@ final class ImportViewModel: ObservableObject {
         let url = resolvedSourceURL.isEmpty ? "https://www.youtube.com/watch?v=\(videoId)" : resolvedSourceURL
         state = .pushing
         do {
-            try await WhatsubAPI.shared.enqueueImport(url: url, token: token)
+            let seenSecondsAgo = try await WhatsubAPI.shared.enqueueImport(url: url, token: token)
             // Start (or refresh) the Live Activity for the import queue so the
             // user has lock-screen / Dynamic Island visibility into desktop
             // processing. Best-effort — Activity failure means the in-app
@@ -217,7 +221,12 @@ final class ImportViewModel: ObservableObject {
                     )
                 }
             }
-            state = .pushedToDesktop
+            // Desktop poll cadence is 30s — not seen for 120s (4 missed
+            // polls) or never seen ⇒ treat as offline. nil also covers an
+            // old backend without the field: we then show the softer copy
+            // only when we KNOW the desktop was just alive.
+            let offline = seenSecondsAgo == nil || seenSecondsAgo! > 120
+            state = .pushedToDesktop(desktopOffline: offline)
         } catch APIError.quotaExceeded(let used, let limit) {
             state = .quotaWall(used: used, limit: limit)
         } catch let e as APIError {

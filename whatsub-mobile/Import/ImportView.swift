@@ -56,8 +56,8 @@ struct ImportView: View {
                 pushOfferBody(title: "需在桌面端处理", message: msg)
             case .pushing:
                 progressBody(icon: "desktopcomputer.and.arrow.down", label: "推送到桌面端…", progress: nil)
-            case .pushedToDesktop:
-                pushedToDesktopBody
+            case .pushedToDesktop(let desktopOffline):
+                pushedToDesktopBody(desktopOffline: desktopOffline)
             case .quotaWall(let used, let limit):
                 quotaWallBody(used: used, limit: limit)
             }
@@ -88,11 +88,12 @@ struct ImportView: View {
             // Concise two-line summary — was a paragraph with parens that
             // users found too dense (2026-06-07 feedback). Bold the
             // requirements that block the path so they're scannable.
+            // Order mirrors the buttons below (手机解析 first).
             VStack(spacing: 4) {
-                Text("**「推送到桌面」需保持电脑端 whatSub 开启**")
+                Text("**「手机解析」仅支持 YouTube 链接**")
                     .font(.caption)
                     .foregroundStyle(.whatsubInkMuted)
-                Text("**「手机解析」仅支持 YouTube 链接**")
+                Text("**「推送到桌面」需保持电脑端 whatSub 开启**")
                     .font(.caption)
                     .foregroundStyle(.whatsubInkMuted)
             }
@@ -108,37 +109,22 @@ struct ImportView: View {
             let isEmpty = trimmed.isEmpty
             let isYouTube = VideoSource.from(url: trimmed) == .youtube || VideoSource.isLikelyYouTubeId(trimmed)
 
-            Button(action: startPush) {
-                Label("推送到桌面端（免 VPN 流畅观看）", systemImage: "desktopcomputer.and.arrow.down")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(isEmpty ? Color.whatsubAccent.opacity(0.4) : Color.whatsubAccent)
-                    .foregroundStyle(.black)
-                    .cornerRadius(12)
-            }
-            .padding(.horizontal)
-            .disabled(isEmpty)
-
-            // 「手机解析」 always visible but disabled when the URL isn't
-            // YouTube. Was conditionally rendered (only shown for YT URLs)
-            // — user feedback 2026-06-06: "弹出页面只有推送到桌面端,没有
-            // 手机端解析按钮了". Hiding it confused users: they thought it
-            // was a missing feature rather than a gated one. Now both
-            // surfaces are always visible; non-YT URLs see the button
-            // greyed with a one-line explanation.
+            // 「手机解析」 is the PRIMARY action (top slot, solid accent) as
+            // of 2026-07-05 — it needs no desktop and finishes in ~1min, but
+            // when it sat below the desktop button most users never picked
+            // it. Still always visible but greyed for non-YouTube URLs
+            // (user feedback 2026-06-06: hiding it read as a missing
+            // feature rather than a gated one).
             VStack(spacing: 4) {
                 Button(action: startImport) {
-                    Label("手机解析（看时需挂 VPN）", systemImage: "iphone")
+                    Label("手机解析（推荐 · 无需电脑）", systemImage: "iphone")
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(isYouTube ? Color.whatsubAccent : Color.whatsubInkFaint,
-                                        lineWidth: 1.5)
-                        )
-                        .foregroundStyle(isYouTube ? Color.whatsubAccent : Color.whatsubInkFaint)
+                        .background((isEmpty || !isYouTube)
+                                    ? Color.whatsubAccent.opacity(0.4)
+                                    : Color.whatsubAccent)
+                        .foregroundStyle(.black)
                         .cornerRadius(12)
                 }
                 .disabled(isEmpty || !isYouTube)
@@ -150,6 +136,25 @@ struct ImportView: View {
                 }
             }
             .padding(.horizontal)
+
+            // 「推送到桌面端」 secondary (outline). Its OSS-hosted result
+            // plays without VPN — worth keeping discoverable, but it needs
+            // the desktop app running, which trips users who don't have it.
+            Button(action: startPush) {
+                Label("推送到桌面端（免 VPN 流畅观看）", systemImage: "desktopcomputer.and.arrow.down")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isEmpty ? Color.whatsubInkFaint : Color.whatsubAccent,
+                                    lineWidth: 1.5)
+                    )
+                    .foregroundStyle(isEmpty ? Color.whatsubInkFaint : Color.whatsubAccent)
+                    .cornerRadius(12)
+            }
+            .padding(.horizontal)
+            .disabled(isEmpty)
 
             Spacer()
         }
@@ -409,7 +414,7 @@ struct ImportView: View {
 
     // MARK: - Pushed to Desktop
 
-    private var pushedToDesktopBody: some View {
+    private func pushedToDesktopBody(desktopOffline: Bool) -> some View {
         VStack(spacing: 20) {
             Spacer()
 
@@ -422,11 +427,31 @@ struct ImportView: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.whatsubInk)
 
-            Text("已加入桌面处理队列。桌面端在线时会自动下载+解析；若当前不在线，任务会排队，等下次上线自动处理。可在「我的 → 导入队列」查看进度。")
-                .font(.subheadline)
-                .foregroundStyle(.whatsubInkMuted)
-                .multilineTextAlignment(.center)
+            if desktopOffline {
+                // The backend hasn't seen this account's desktop client
+                // recently — without this callout the task queues silently
+                // forever and the user never learns why nothing happened.
+                VStack(spacing: 8) {
+                    Label("你的桌面端似乎不在线", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.yellow)
+                    Text("任务已排队，但只有打开电脑上的 whatSub 并登录同一账号（\(appState.session?.email ?? "当前账号")）后才会开始下载和解析。")
+                        .font(.subheadline)
+                        .foregroundStyle(.whatsubInk)
+                        .multilineTextAlignment(.center)
+                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.yellow.opacity(0.5), lineWidth: 1))
                 .padding(.horizontal)
+            } else {
+                Text("检测到桌面端在线，马上会自动开始下载+解析。可在「我的 → 导入队列」查看进度。")
+                    .font(.subheadline)
+                    .foregroundStyle(.whatsubInkMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
 
             Button("完成") { dismiss() }
                 .buttonStyle(.bordered)

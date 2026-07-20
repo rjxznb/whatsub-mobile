@@ -87,17 +87,25 @@ actor WhatsubAPI {
         return try decode(LibraryQuota.self, from: data)
     }
 
-    func enqueueImport(url: String, token: String) async throws {
-        _ = try await postExpectingOk(
+    /// Returns how many seconds ago the user's desktop client last touched
+    /// the queue (nil = never / old backend) so the success screen can warn
+    /// when the desktop looks offline.
+    @discardableResult
+    func enqueueImport(url: String, token: String) async throws -> Int? {
+        let data = try await postExpectingOk(
             Endpoints.library("import-queue"),
             body: try JSONSerialization.data(withJSONObject: ["url": url]),
             bearer: token
         )
+        // Lenient: an old backend replies {id} only — treat decode failure
+        // as "presence unknown" rather than failing an already-queued push.
+        return (try? decode(EnqueueImportResponse.self, from: data))?.desktopSeenSecondsAgo
     }
 
-    func listImportQueue(token: String) async throws -> [ImportQueueItem] {
+    func listImportQueue(token: String) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {
         let data = try await get(Endpoints.library("import-queue"), bearer: token)
-        return try decode(ImportQueueListResponse.self, from: data).items
+        let resp = try decode(ImportQueueListResponse.self, from: data)
+        return (resp.items, resp.desktopSeenSecondsAgo)
     }
 
     /// Retry a failed item by resetting it to `pending`; the desktop's atomic

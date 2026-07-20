@@ -6,11 +6,33 @@ struct ImportQueueView: View {
     @State private var loading = false
     @State private var loadError: String?
     @State private var retryingIds: Set<String> = []
+    /// Seconds since the backend last saw this account's desktop client
+    /// touch the queue. nil = never. Drives the offline banner below.
+    @State private var desktopSeenSecondsAgo: Int?
+
+    /// Show the banner only when it's actionable: there ARE queued tasks
+    /// waiting AND the desktop hasn't polled within 4 cycles (30s × 4).
+    private var showDesktopOfflineBanner: Bool {
+        let hasWaiting = items.contains { $0.status == "pending" || $0.status == "processing" }
+        guard hasWaiting else { return false }
+        guard let ago = desktopSeenSecondsAgo else { return true }
+        return ago > 120
+    }
 
     var body: some View {
         ZStack {
             Color.whatsubBg.ignoresSafeArea()
             List {
+                if showDesktopOfflineBanner {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text("桌面端似乎不在线 — 打开电脑上的 whatSub 并登录同一账号后，排队任务才会开始处理。")
+                            .font(.footnote)
+                            .foregroundStyle(.whatsubInk)
+                    }
+                    .listRowBackground(Color.yellow.opacity(0.12))
+                }
                 if let loadError {
                     Text(loadError).foregroundStyle(.whatsubInkMuted)
                         .listRowBackground(Color.whatsubBgElev)
@@ -91,8 +113,11 @@ struct ImportQueueView: View {
     private func load() async {
         guard let token = appState.session?.sessionToken else { loadError = "请先登录"; return }
         loading = true; loadError = nil
-        do { items = try await WhatsubAPI.shared.listImportQueue(token: token) }
-        catch { loadError = error.localizedDescription }
+        do {
+            let resp = try await WhatsubAPI.shared.listImportQueue(token: token)
+            items = resp.items
+            desktopSeenSecondsAgo = resp.desktopSeenSecondsAgo
+        } catch { loadError = error.localizedDescription }
         loading = false
     }
 
