@@ -124,4 +124,38 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertEqual(result.keyPhrases.count, 1)
         XCTAssertEqual(result.keyPhrases[0].expression, "save up")
     }
+
+    // MARK: - Cancellation
+
+    /// Closing the import sheet mid-analysis must actually STOP the run.
+    /// Before this, `analyze` had no cancellation checks: the detached Task
+    /// kept streaming, then auto-synced the finished entry to the cloud —
+    /// the user "cancelled" and still got a video (and a quota slot) they
+    /// never asked for.
+    ///
+    /// Deterministic by construction: the body spins until cancellation is
+    /// observable, THEN calls analyze — so the first checkCancellation must
+    /// throw before any network request is attempted (the BYOK settings
+    /// below point nowhere, so a request would fail differently).
+    func testAnalyzeThrowsCancellationBeforeAnyNetworkCall() async {
+        var settings = LlmSettings()
+        settings.useManagedRelay = false
+        settings.baseUrl = "https://127.0.0.1:1/v1"   // never reachable
+        settings.apiKey = "test-key"
+        settings.model = "test-model"
+        let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
+        let cues = (0..<3).map { i in cueFixture(index: i) }
+
+        let task = Task { () -> Result<AnalysisJson, Error> in
+            while !Task.isCancelled { await Task.yield() }
+            do { return .success(try await engine.analyze(cues) { _, _ in }) }
+            catch { return .failure(error) }
+        }
+        task.cancel()
+
+        guard case .failure(let err) = await task.value else {
+            return XCTFail("analyze should throw once the task is cancelled")
+        }
+        XCTAssertTrue(err is CancellationError, "expected CancellationError, got \(err)")
+    }
 }

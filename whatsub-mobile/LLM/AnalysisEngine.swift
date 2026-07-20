@@ -51,11 +51,19 @@ struct AnalysisEngine {
     /// granularity now (was per-batch before the streaming switch), so
     /// the UI sees a smooth bar instead of long pauses between jumps.
     func analyze(_ cues: [Cue], onProgress: @escaping (Int, Int) -> Void) async throws -> AnalysisJson {
+        // Cancellation (2026-07-20): closing the import sheet cancels the
+        // owning Task. Without these checks the run continued in the
+        // background and auto-synced a cloud entry the user thought they'd
+        // cancelled — burning one of their 3 free video slots.
+        try Task.checkCancellation()
         let batched = Self.batches(cues)
         var subtitles: [Cue] = []
         let totalCues = cues.count
         // Phase 1: per-cue stream, batch by batch.
         for batch in batched {
+            // Between batches is the cheapest place to bail: the previous
+            // batch's tokens are already paid for, the next one isn't.
+            try Task.checkCancellation()
             let parser = JsonLineParser()
             let stream = client.streamChat([
                 ChatMessage(role: "system", content: AnalysisPrompts.system),
@@ -84,6 +92,7 @@ struct AnalysisEngine {
         // cue analyses are usable on their own.
         var keyPhrases: [KeyPhrase] = []
         if !subtitles.isEmpty {
+            try Task.checkCancellation()
             do {
                 let parser = JsonLineParser()
                 let stream = client.streamChat([
@@ -98,6 +107,11 @@ struct AnalysisEngine {
                 parser.flush { obj in
                     if let kp = Self.parseSummary(obj) { keyPhrases = kp }
                 }
+            } catch is CancellationError {
+                // Must NOT be swallowed like a summary failure — otherwise a
+                // cancel landing during phase 2 would still return a result
+                // and the caller would sync it.
+                throw CancellationError()
             } catch {
                 // Summary lost — keep the cues we collected.
             }

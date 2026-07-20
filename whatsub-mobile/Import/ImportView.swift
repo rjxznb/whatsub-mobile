@@ -70,6 +70,11 @@ struct ImportView: View {
             urlInput = url
             // No auto-run: the user chooses 手机解析 vs 推送桌面 on the idle screen.
         }
+        // Closing the sheet must actually cancel the run (2026-07-20).
+        // Attached to the ROOT of ImportView: a sheet presented ON TOP of us
+        // (diagnostics / VPN help) does NOT fire onDisappear, so those can't
+        // kill an in-flight import by accident.
+        .onDisappear { vm.cancelWork() }
     }
 
     // MARK: - Idle
@@ -291,7 +296,7 @@ struct ImportView: View {
             if !vm.rawCues.isEmpty {
                 Button("重试 AI 解析") {
                     guard let token = appState.session?.sessionToken else { return }
-                    Task { await vm.retryAnalysisOnly(token: token) }
+                    vm.startRetryAnalysis(token: token)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.whatsubAccent)
@@ -511,7 +516,7 @@ struct ImportView: View {
         // run() now auto-flows extract → analyze → sync → done; needs the
         // token + email up front so it can chain into sync without
         // bouncing through a manual "同步到云库" confirmation.
-        Task { await vm.run(urlOrId: urlInput, token: token, email: appState.session?.email) }
+        vm.start(urlOrId: urlInput, token: token, email: appState.session?.email)
     }
 
     /// Coarse time estimate for the streaming analyze stage. ~1s per cue

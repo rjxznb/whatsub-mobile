@@ -26,10 +26,16 @@ struct VPNRuleHelpSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     /// Where each client hides its mode switch (tier 1).
+    /// `screenshot` is an OPTIONAL asset-catalog name — a labelled screenshot
+    /// beats any amount of prose for "which row do I tap". Rows whose asset
+    /// isn't in the bundle simply render text-only (see `screenshotView`), so
+    /// adding a new one is: drop the PNG into
+    /// `Assets.xcassets/VPNGuide<App>.imageset/` and name it here.
     private struct ModeHint: Identifiable {
         let id = UUID()
         let app: String
         let path: String
+        var screenshot: String? = nil
     }
 
     /// The explicit direct rule per client (tier 2 fallback).
@@ -43,8 +49,9 @@ struct VPNRuleHelpSheet: View {
     @State private var showFallback = false
 
     private let modeHints: [ModeHint] = [
+        .init(app: "Shadowrocket", path: "首页「全局路由」→ 选「配置」",
+              screenshot: "VPNGuideShadowrocket"),
         .init(app: "Clash / Mihomo / Stash", path: "首页模式切换 → 选「规则」(Rule)"),
-        .init(app: "Shadowrocket", path: "首页底部「全局路由」→ 选「配置」"),
         .init(app: "Surge", path: "首页出站模式 → 选「规则模式」"),
         .init(app: "Quantumult X", path: "首页「分流」→ 关闭全局代理"),
         .init(app: "Loon", path: "首页出站模式 → 选「规则判定」"),
@@ -110,18 +117,21 @@ struct VPNRuleHelpSheet: View {
                 .foregroundStyle(.whatsubInkMuted)
                 .textSelection(.enabled)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(modeHints) { h in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(h.app)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.whatsubInk)
-                            .frame(width: 132, alignment: .leading)
-                        Text(h.path)
-                            .font(.footnote)
-                            .foregroundStyle(.whatsubInkMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(h.app)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.whatsubInk)
+                                .frame(width: 132, alignment: .leading)
+                            Text(h.path)
+                                .font(.footnote)
+                                .foregroundStyle(.whatsubInkMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                        screenshotView(h.screenshot)
                     }
                 }
             }
@@ -134,6 +144,27 @@ struct VPNRuleHelpSheet: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.whatsubAccent.opacity(0.35), lineWidth: 1)
         )
+    }
+
+    /// Renders a labelled screenshot when that asset actually ships in the
+    /// bundle. `UIImage(named:)` is the existence check — SwiftUI's
+    /// `Image(name)` would draw an empty box for a missing asset, so a hint
+    /// whose PNG hasn't been added yet stays clean text instead of a hole.
+    @ViewBuilder
+    private func screenshotView(_ name: String?) -> some View {
+        if let name, let ui = UIImage(named: name) {
+            Image(uiImage: ui)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.whatsubInkFaint.opacity(0.3), lineWidth: 1)
+                )
+                .padding(.leading, 132)
+                .accessibilityLabel("设置位置示意图")
+        }
     }
 
     /// Tier 2 — collapsed by default so it never competes with tier 1.

@@ -35,6 +35,38 @@ final class ImportViewModel: ObservableObject {
 
     @Published var state: State = .idle
 
+    /// The in-flight extract→analyse→sync run. Owned here (not created ad-hoc
+    /// by the View) so dismissing the import sheet can actually CANCEL it.
+    /// Before 2026-07-20 the View spawned a detached `Task {}`: closing the
+    /// sheet only tore down the UI while the run kept going and auto-synced a
+    /// cloud entry the user believed they'd cancelled — silently consuming one
+    /// of the 3 free video slots.
+    private var workTask: Task<Void, Never>?
+
+    /// Start the full import run, replacing any previous one.
+    func start(urlOrId: String, token: String, email: String? = nil) {
+        workTask?.cancel()
+        workTask = Task { [weak self] in
+            await self?.run(urlOrId: urlOrId, token: token, email: email)
+        }
+    }
+
+    /// Start a re-run of JUST the analysis (error-screen retry button).
+    func startRetryAnalysis(token: String) {
+        workTask?.cancel()
+        workTask = Task { [weak self] in
+            await self?.retryAnalysisOnly(token: token)
+        }
+    }
+
+    /// Cancel whatever is running. Safe to call when nothing is.
+    /// The extracted captions stay in the on-disk cache — that's harmless and
+    /// makes a later re-import instant; only the network work stops.
+    func cancelWork() {
+        workTask?.cancel()
+        workTask = nil
+    }
+
     /// Extracted + analysed result, set once analysis completes.
     private(set) var result: AnalysisJson?
     /// Raw extracted cues (pre-analysis); kept for SRT generation.
@@ -145,9 +177,18 @@ final class ImportViewModel: ObservableObject {
                 }
             }
             result = analysis
+            // Cancelled while the last chunk was in flight? Then the sheet is
+            // already gone — do NOT upload. This is the check that keeps a
+            // "cancelled" import out of the user's cloud library + quota.
+            try Task.checkCancellation()
             // Auto-sync immediately on analysis success — user requested
             // removal of the preview/sync confirmation step.
             await sync(token: token)
+        } catch is CancellationError {
+            // User closed the sheet. No error UI: nothing is on screen, and
+            // the next open should start clean rather than land on a stale
+            // failure page.
+            state = .idle
         } catch {
             // Captions stay in memory (rawCues) so the error-screen retry
             // skips straight back to performAnalysis. The hint differs by
