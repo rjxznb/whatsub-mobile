@@ -60,18 +60,52 @@ class ShareViewController: UIViewController {
         return nil
     }
 
-    /// Open the containing app via the `whatsub://` scheme. iOS routes the
-    /// scheme to whatSub. If the system declines (some iOS versions return
-    /// false mid-share-sheet-dismiss), the URL is still saved to the App
-    /// Group and the main app's scenePhase safety-net picks it up on next
-    /// launch — we deliberately do NOT fall back to the responder-chain
-    /// `perform("openURL:")` hack, which has been a root cause of host-app
-    /// (YouTube) UI lockups on iOS 16+.
+    /// Open the containing app via the `whatsub://` scheme.
+    ///
+    /// Two-step, in this order:
+    ///  1. `NSExtensionContext.open` — the official API. Apple only DOCUMENTS
+    ///     it for the Today extension point; from a Share Extension it often
+    ///     calls back `false` and does nothing, which is why step 2 exists.
+    ///  2. Responder-chain `perform("openURL:")` — the long-standing
+    ///     workaround, used ONLY when step 1 reported failure.
+    ///
+    /// History (2026-07-20): step 2 was REMOVED in 042058d while fixing the
+    /// "YouTube frozen ~30s after returning" bug, on the assumption that
+    /// `ctx.open` alone suffices. It doesn't — auto-launch regressed to
+    /// "nothing happens, user must switch apps manually". That fix bundled
+    /// three changes; the other two (start the open in `viewDidAppear` once
+    /// presentation finished + await `completeRequest` teardown) are the ones
+    /// that plausibly cured the freeze, since both addressed our view
+    /// lingering in the host's hierarchy. Step 2 is restored on top of them,
+    /// and now runs strictly AFTER `ctx.open` declined rather than racing it.
+    ///
+    /// ⚠️ If the YouTube freeze reappears on device, this fallback is the
+    /// culprit — drop it again and switch to a tap-to-open confirmation UI
+    /// inside the extension instead of auto-launching.
+    ///
+    /// Either way the URL is already in the App Group, so the main app's
+    /// scenePhase safety-net still imports it whenever the user next opens
+    /// whatSub — auto-launch is a convenience layer, never the only path.
     @discardableResult
     private func openHostApp() async -> Bool {
-        guard let url = URL(string: "whatsub://import"), let ctx = extensionContext else { return false }
-        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            ctx.open(url) { cont.resume(returning: $0) }
+        guard let url = URL(string: "whatsub://import") else { return false }
+        if let ctx = extensionContext {
+            let opened = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                ctx.open(url) { cont.resume(returning: $0) }
+            }
+            if opened { return true }
         }
+        // Skip our own VC: `UIViewController` responds to openURL: only via
+        // the chain above it, and performing it on self would recurse.
+        var responder: UIResponder? = self.next
+        let selector = NSSelectorFromString("openURL:")
+        while let r = responder {
+            if r.responds(to: selector) {
+                r.perform(selector, with: url)
+                return true
+            }
+            responder = r.next
+        }
+        return false
     }
 }
