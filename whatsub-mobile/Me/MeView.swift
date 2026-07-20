@@ -17,6 +17,7 @@ struct MeView: View {
     /// who swipe-dismissed it or wants to re-read needs a non-restart path.
     /// 2026-06-09 (App Store Guideline 5.1.1/5.1.2 follow-up).
     @State private var showAIConsent = false
+    @State private var showVPNHelp = false
     /// 锁屏继续播放 — 2026-06-17. Persists to UserDefaults via @AppStorage.
     /// Default false to match pre-2026-06-17 behavior (video pauses on lock)
     /// and to give Apple Review the user-opt-in framing for the re-added
@@ -173,6 +174,23 @@ struct MeView: View {
                             Label("语音设置", systemImage: "speaker.wave.2")
                                 .foregroundStyle(.whatsubInk)
                         }
+                        // VPN 分流设置 (2026-07-20) — the permanent home of
+                        // VPNRuleHelpSheet. Previously reachable only from
+                        // error paths (relay stall, import failure), so users
+                        // who most needed it couldn't find it proactively.
+                        Button {
+                            showVPNHelp = true
+                        } label: {
+                            HStack {
+                                Label("VPN 分流设置（免开关切换）", systemImage: "network.badge.shield.half.filled")
+                                    .foregroundStyle(.whatsubInk)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.whatsubInkFaint)
+                            }
+                        }
+                        .buttonStyle(.borderless)
                         // Bound to AppState so the whatsub://import-queue
                         // deep link (Live Activity tap → ContentView.onOpenURL
                         // sets the flag) pushes the same destination as a
@@ -295,6 +313,9 @@ struct MeView: View {
             // re-sets the flag to true (no-op).
             .sheet(isPresented: $showAIConsent) {
                 AIConsentGate(presenting: $showAIConsent)
+            }
+            .sheet(isPresented: $showVPNHelp) {
+                VPNRuleHelpSheet()
             }
             // (photo + live-scene sheets moved to CameraTabView 2026-06-05;
             //  待同步暂存 sheet removed 2026-06-07.)

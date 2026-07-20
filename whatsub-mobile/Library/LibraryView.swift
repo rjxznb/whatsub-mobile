@@ -8,6 +8,10 @@ struct LibraryView: View {
     /// — new users hit it from the empty Library state). Sheet (not nav
     /// push) so it doesn't deepen the Library tab's navigation stack.
     @State private var showImport = false
+    /// VPN split-routing guidance (2026-07-20). Two triggers: the load-error
+    /// state when a VPN tunnel is detected (the VPN routed eversay.cc
+    /// overseas → our API fails), and tapping a 需VPN badge on a row.
+    @State private var showVPNHelp = false
     // Migrate-vocab-before-delete flow removed (build 248+) — the local
     // vocab notebook is retired; corpus phrases that referenced the deleted
     // video keep their data + can fall back to YT embed via source.youtubeId.
@@ -56,6 +60,9 @@ struct LibraryView: View {
             }
             .task { if !vm.loadedOnce { await reload() } }
             .refreshable { await reload() }
+            .sheet(isPresented: $showVPNHelp) {
+                VPNRuleHelpSheet()
+            }
             .sheet(isPresented: $showImport) {
                 // ImportView expects to be inside a NavigationStack — it
                 // uses .navigationTitle internally. Wrap so the sheet
@@ -94,6 +101,27 @@ struct LibraryView: View {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.whatsubInkMuted)
                     Text(err).font(.callout).foregroundStyle(.whatsubInkMuted).multilineTextAlignment(.center)
+                    // VPN-aware diagnosis (2026-07-20): when a tunnel is up
+                    // and our API failed, the overwhelmingly likely cause is
+                    // the VPN routing eversay.cc overseas. Name the cause +
+                    // hand over the one-time fix instead of a mute "重试".
+                    if VPNDetector.isVPNActive() {
+                        VStack(spacing: 8) {
+                            Text("检测到 VPN 开启 — 可能是它把 whatSub 的国内服务器也代理了")
+                                .font(.footnote)
+                                .foregroundStyle(.yellow)
+                                .multilineTextAlignment(.center)
+                            Button {
+                                showVPNHelp = true
+                            } label: {
+                                Label("一次设置，免开关 VPN", systemImage: "network.badge.shield.half.filled")
+                                    .font(.footnote.weight(.semibold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.whatsubAccent)
+                        }
+                        .padding(.top, 4)
+                    }
                     Text("下拉重试").font(.footnote).foregroundStyle(.whatsubInkFaint)
                 }
                 .padding(32)
@@ -141,7 +169,8 @@ struct LibraryView: View {
         } else {
             List(vm.entries) { entry in
                 NavigationLink(value: entry.id) {
-                    LibraryRow(entry: entry, refreshNonce: vm.thumbRefreshNonce)
+                    LibraryRow(entry: entry, refreshNonce: vm.thumbRefreshNonce,
+                               onNeedsVPNTap: { showVPNHelp = true })
                 }
                 .listRowBackground(Color.whatsubBgElev)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -199,6 +228,9 @@ private struct LibraryRow: View {
     /// thumbnail to re-fetch (bypassing URLCache + iOS DNS staleness
     /// after a VPN flip). See `Components/RemoteImage.swift`.
     let refreshNonce: Int
+    /// Tap on the 需VPN badge → parent presents VPNRuleHelpSheet. Turns
+    /// every "为什么这个要 VPN?" moment into the one-time-setup pitch.
+    let onNeedsVPNTap: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -226,10 +258,14 @@ private struct LibraryRow: View {
     }
 
     /// Self-hosted (OSS, has videoUrl) → plays without VPN; else YouTube-embed → needs VPN.
+    /// The 需VPN variant is TAPPABLE (2026-07-20) — opens the split-routing
+    /// guide. `.borderless` so the badge captures its own touch instead of
+    /// firing together with the row's NavigationLink (documented List-row
+    /// multi-button gotcha).
     @ViewBuilder
     private var vpnBadge: some View {
         let selfHosted = entry.videoUrl != nil
-        Text(selfHosted ? "免 VPN" : "需 VPN")
+        let label = Text(selfHosted ? "免 VPN" : "需 VPN")
             .font(.caption2.weight(.medium))
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
@@ -238,5 +274,18 @@ private struct LibraryRow: View {
                 in: Capsule()
             )
             .foregroundStyle(selfHosted ? Color.green : Color.whatsubInkMuted)
+        if selfHosted {
+            label
+        } else {
+            Button(action: onNeedsVPNTap) {
+                HStack(spacing: 2) {
+                    label
+                    Image(systemName: "questionmark.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.whatsubInkFaint)
+                }
+            }
+            .buttonStyle(.borderless)
+        }
     }
 }

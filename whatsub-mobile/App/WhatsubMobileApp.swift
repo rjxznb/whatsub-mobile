@@ -60,6 +60,13 @@ struct ContentView: View {
     @State private var showAIConsent = false
     @ObservedObject private var consentStore = AIConsentStore.shared
 
+    /// One-time VPN split-routing onboarding (2026-07-20). Presented once,
+    /// only when a VPN tunnel is detected at launch — the single biggest
+    /// acquisition blocker for CN users was "反复开关 VPN", and the durable
+    /// fix (rule-mode + one DIRECT rule) lives in VPNRuleHelpSheet.
+    @AppStorage("vpn.onboarding.shown") private var vpnOnboardingShown = false
+    @State private var showVPNOnboarding = false
+
     // 2026-05-28 policy shift: dropped the hard paywall after the 1-day trial.
     // The app is fully usable post-install — free tier covers basic Library
     // sync (3 videos / 100MB / 20min) + personal corpus (50 entries). Pro-only
@@ -161,6 +168,23 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAIConsent) {
             AIConsentGate(presenting: $showAIConsent)
+        }
+        // One-time VPN split-routing onboarding (2026-07-20). TARGETED: only
+        // fires when a VPN tunnel is actually detected — non-VPN users never
+        // see it. Deferred behind the AI-consent sheet (two stacked sheets on
+        // first launch would fight); since the shown-flag is only set when we
+        // actually present, a launch that skipped it re-attempts next launch.
+        // Mounted at the outer body level for the same reason as AI consent
+        // (see comment above).
+        .task(id: gateReady) {
+            if gateReady && consentStore.hasAccepted
+                && !vpnOnboardingShown && VPNDetector.isVPNActive() {
+                vpnOnboardingShown = true
+                showVPNOnboarding = true
+            }
+        }
+        .sheet(isPresented: $showVPNOnboarding) {
+            VPNRuleHelpSheet()
         }
     }
 

@@ -51,10 +51,10 @@ struct VPNRuleHelpSheet: View {
 
     private var intro: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("一次配置，永久解决")
+            Text("一次配置，永不切换 VPN")
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
-            Text("中国大陆使用时，VPN 默认会把 `whatsub.eversay.cc` 拐去海外节点，触发 TLS 握手错误（-1200）。给 VPN 加一条「eversay.cc 走直连」就能让 YouTube 走 VPN、AI 解析走国内直连，两者同时工作。")
+            Text("whatSub 的数据（视频库同步、AI 解析、语料库）走国内服务器 `whatsub.eversay.cc`，播放 YouTube 走海外。VPN 开「全局模式」会把国内服务器也拐去海外节点，导致加载失败（TLS -1200）——但你**不需要**反复开关 VPN：把 VPN 切到「规则/分流模式」，再加一条「eversay.cc 走直连」，YouTube 走 VPN、whatSub 数据走直连，从此两边同时工作。")
                 .font(.subheadline)
                 .foregroundStyle(.whatsubInkMuted)
                 .textSelection(.enabled)
