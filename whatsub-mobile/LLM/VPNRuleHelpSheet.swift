@@ -39,11 +39,16 @@ struct VPNRuleHelpSheet: View {
     }
 
     /// The explicit direct rule per client (tier 2 fallback).
+    /// `steps` is an optional walkthrough — asset name + caption per screen.
+    /// Only Shadowrocket ships one today; the others stay note-only until
+    /// someone contributes screenshots (see `stepStrip`, which renders
+    /// nothing when the assets are absent).
     private struct AppRule: Identifiable {
         let id = UUID()
         let app: String
         let rule: String
         let note: String?
+        var steps: [(asset: String, caption: String)] = []
     }
 
     @State private var showFallback = false
@@ -58,8 +63,17 @@ struct VPNRuleHelpSheet: View {
     ]
 
     private let rules: [AppRule] = [
+        .init(app: "Shadowrocket", rule: "DOMAIN-SUFFIX,eversay.cc,DIRECT",
+              note: "按下面三步操作，最后点右上角「保存」",
+              steps: [
+                (asset: "VPNRuleShadowrocket1",
+                 caption: "① 首页「全局路由 → 配置」进入配置文件，点当前配置右侧的 ⓘ"),
+                (asset: "VPNRuleShadowrocket2",
+                 caption: "② 选「规则」，再点右上角「+」新增一条"),
+                (asset: "VPNRuleShadowrocket3",
+                 caption: "③ 类型选 DOMAIN-SUFFIX，策略选 DIRECT，域名填 eversay.cc，保存"),
+              ]),
         .init(app: "Clash / Mihomo / Stash", rule: "DOMAIN-SUFFIX,eversay.cc,DIRECT", note: "加在 rules 段最上面，覆盖默认匹配"),
-        .init(app: "Shadowrocket", rule: "DOMAIN-SUFFIX,eversay.cc,DIRECT", note: "配置 → 规则 → 添加"),
         .init(app: "Surge", rule: "DOMAIN-SUFFIX,eversay.cc,DIRECT", note: "[Rule] 段顶部添加"),
         .init(app: "Quantumult X", rule: "host-suffix, eversay.cc, direct", note: "分流 → 规则 → 添加（注意小写）"),
         .init(app: "Loon", rule: "DOMAIN-SUFFIX,eversay.cc,DIRECT", note: "[Rule] 段顶部添加"),
@@ -167,6 +181,37 @@ struct VPNRuleHelpSheet: View {
         }
     }
 
+    /// Caption + screenshot per step, in order. Same missing-asset tolerance
+    /// as `screenshotView`: a step whose PNG isn't in the bundle is skipped
+    /// entirely rather than drawing an empty frame.
+    @ViewBuilder
+    private func stepStrip(_ steps: [(asset: String, caption: String)]) -> some View {
+        if !steps.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                    if let ui = UIImage(named: step.asset) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(step.caption)
+                                .font(.caption)
+                                .foregroundStyle(.whatsubInkMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Image(uiImage: ui)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: .infinity)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.whatsubInkFaint.opacity(0.3), lineWidth: 1)
+                                )
+                        }
+                    }
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
     /// Tier 2 — collapsed by default so it never competes with tier 1.
     private var fallbackSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -233,6 +278,7 @@ struct VPNRuleHelpSheet: View {
                     .font(.caption2)
                     .foregroundStyle(.whatsubInkFaint)
             }
+            stepStrip(r.steps)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
