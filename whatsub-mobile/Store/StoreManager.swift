@@ -1,8 +1,8 @@
 import Foundation
 import StoreKit
 
-/// StoreKit 2 wrapper for whatSub Pro subscriptions (¥22/月, ¥168/年, bumped
-/// from ¥12/¥88 on 2026-06-04 to fund the managed-LLM relay — spec at
+/// StoreKit 2 wrapper for whatSub Pro subscriptions (¥38/月, ¥348/年, bumped
+/// from ¥22/¥168 on 2026-07-25 — spec at
 /// `Get_Video/docs/superpowers/specs/2026-06-03-whatsub-managed-llm-relay.md`).
 /// All UI shows `product.displayPrice` (StoreKit-driven, picks up ASC tier
 /// changes automatically), so this comment is the only iOS-side place that
