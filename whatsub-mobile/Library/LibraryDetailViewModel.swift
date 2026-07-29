@@ -8,6 +8,29 @@ enum DesktopReplacementState: Equatable {
     case failed(String)
 }
 
+enum DesktopReplacementToolbarIndicator: Equatable {
+    case none
+    case progress
+    case failure
+}
+
+enum DesktopReplacementToolbarPresentation {
+    static func indicator(
+        state: DesktopReplacementState,
+        activeStatus: DesktopReplacementActiveStatus?
+    ) -> DesktopReplacementToolbarIndicator {
+        if activeStatus != nil { return .progress }
+        switch state {
+        case .sending, .queued:
+            return .progress
+        case .failed:
+            return .failure
+        case .idle:
+            return .none
+        }
+    }
+}
+
 @MainActor
 final class LibraryDetailViewModel: ObservableObject {
     @Published var entry: LibraryEntryDetail?

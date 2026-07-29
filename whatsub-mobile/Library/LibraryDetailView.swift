@@ -38,6 +38,7 @@ struct LibraryDetailView: View {
     /// untouched edit session without a noisy "are you sure" prompt.
     @State private var confirmCancelEdit: Bool = false
     @State private var confirmDesktopReplacement: Bool = false
+    @State private var showDesktopReplacementSheet: Bool = false
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
     // (showPendingSheet + 「待同步 N 条」 banner removed 2026-06-07.
     // PendingPhraseStore is still used — observed inside
@@ -84,6 +85,18 @@ struct LibraryDetailView: View {
         // video is truly edge-to-edge; portrait restores them.
         .toolbar(isLandscape ? .hidden : .automatic, for: .navigationBar)
         .toolbar(isLandscape ? .hidden : .automatic, for: .tabBar)
+        .toolbar {
+            if vm.entry?.needsDesktopDownload == true {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showDesktopReplacementSheet = true
+                    } label: {
+                        desktopReplacementToolbarIcon
+                    }
+                    .accessibilityLabel("发送到桌面端下载")
+                }
+            }
+        }
         .statusBarHidden(isLandscape)
         .task {
             guard let token = appState.session?.sessionToken else { return }
@@ -123,24 +136,9 @@ struct LibraryDetailView: View {
             guard phase == .active, vm.entry?.needsDesktopDownload == true else { return }
             Task { await reloadDetail() }
         }
-        .confirmationDialog(
-            "发送到桌面端下载？",
-            isPresented: $confirmDesktopReplacement,
-            titleVisibility: .visible
-        ) {
-            Button("发送到桌面端下载") {
-                guard let token = appState.session?.sessionToken else { return }
-                Task {
-                    await vm.enqueueReplacement(
-                        maxVideoSeconds: appState.currentUser?.libraryLimits?.maxVideoSeconds,
-                        token: token,
-                        email: appState.session?.email
-                    )
-                }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("需要打开电脑上的 whatSub 并登录同一账号。桌面端会重新下载、转写和解析视频；完成后将原子替换当前视频文件、字幕和解析结果。Library 条目身份与已收藏内容仍会保持关联。")
+        .sheet(isPresented: $showDesktopReplacementSheet) {
+            desktopReplacementSheet
+                .presentationDetents([.medium, .large])
         }
         // (词汇本 toolbar button removed build 248+ — local vocab notebook
         // retired. Collections from this video are now in the [收藏] tab
@@ -365,10 +363,6 @@ struct LibraryDetailView: View {
     @ViewBuilder
     private func contentArea(_ entry: LibraryEntryDetail) -> some View {
         VStack(spacing: 0) {
-            if entry.needsDesktopDownload {
-                desktopReplacementCard
-            }
-
             Picker("", selection: $contentTab) {
                 Text("字幕").tag(ContentTab.subtitles)
                 Text("收藏").tag(ContentTab.collections)
@@ -397,56 +391,113 @@ struct LibraryDetailView: View {
         }
     }
 
-    private var desktopReplacementCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "desktopcomputer")
-                    .foregroundStyle(.whatsubAccent)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(activeReplacementText ?? "下载后免 VPN 播放")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.whatsubInk)
-                    Text("需要电脑上的 whatSub 在线处理。完成后会替换视频文件、字幕和解析结果；Library 条目与已收藏内容仍会保持关联。")
-                        .font(.caption)
-                        .foregroundStyle(.whatsubInkMuted)
-                }
-            }
+    @ViewBuilder
+    private var desktopReplacementToolbarIcon: some View {
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: "desktopcomputer")
+                .font(.body.weight(.medium))
 
-            if case .failed(let message) = vm.desktopReplacementState {
-                Text(message)
-                    .font(.footnote)
+            switch DesktopReplacementToolbarPresentation.indicator(
+                state: vm.desktopReplacementState,
+                activeStatus: vm.activeReplacementStatus
+            ) {
+            case .none:
+                EmptyView()
+            case .progress:
+                ProgressView()
+                    .controlSize(.mini)
+                    .scaleEffect(0.7)
+                    .offset(x: 7, y: -7)
+            case .failure:
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.caption2)
                     .foregroundStyle(.red)
+                    .offset(x: 7, y: -7)
             }
-
-            if case .queued(let desktopOffline) = vm.desktopReplacementState {
-                if desktopOffline {
-                    desktopOfflineWarning
-                } else {
-                    Text("检测到桌面端在线，马上会自动开始下载+解析。可在「我的 → 导入队列」查看进度。")
-                        .font(.caption)
-                        .foregroundStyle(.whatsubInkMuted)
-                }
-            }
-
-            Button {
-                confirmDesktopReplacement = true
-            } label: {
-                HStack(spacing: 8) {
-                    if vm.desktopReplacementState == .sending {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text("发送到桌面端下载")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.whatsubAccent)
-            .disabled(replacementActionDisabled)
         }
-        .padding(12)
-        .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .frame(width: 26, height: 24)
+    }
+
+    private var desktopReplacementSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Label {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(activeReplacementText ?? "下载后免 VPN 播放")
+                                .font(.headline)
+                                .foregroundStyle(.whatsubInk)
+                            Text("需要电脑上的 whatSub 在线处理。完成后会替换视频文件、字幕和解析结果；Library 条目与已收藏内容仍会保持关联。")
+                                .font(.subheadline)
+                                .foregroundStyle(.whatsubInkMuted)
+                        }
+                    } icon: {
+                        Image(systemName: "desktopcomputer")
+                            .font(.title2)
+                            .foregroundStyle(.whatsubAccent)
+                    }
+
+                    if case .failed(let message) = vm.desktopReplacementState {
+                        Label(message, systemImage: "exclamationmark.circle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+
+                    if case .queued(let desktopOffline) = vm.desktopReplacementState {
+                        if desktopOffline {
+                            desktopOfflineWarning
+                        } else {
+                            Text("检测到桌面端在线，马上会自动开始下载、解析。可在「我的 → 导入队列」查看进度。")
+                                .font(.subheadline)
+                                .foregroundStyle(.whatsubInkMuted)
+                        }
+                    }
+
+                    Button {
+                        confirmDesktopReplacement = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            if vm.desktopReplacementState == .sending {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(activeReplacementText ?? "发送到桌面端下载")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.whatsubAccent)
+                    .disabled(replacementActionDisabled)
+                }
+                .padding(20)
+            }
+            .background(Color.whatsubBg)
+            .navigationTitle("桌面端下载")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { showDesktopReplacementSheet = false }
+                }
+            }
+        }
+        .confirmationDialog(
+            "发送到桌面端下载？",
+            isPresented: $confirmDesktopReplacement,
+            titleVisibility: .visible
+        ) {
+            Button("发送到桌面端下载") {
+                guard let token = appState.session?.sessionToken else { return }
+                Task {
+                    await vm.enqueueReplacement(
+                        maxVideoSeconds: appState.currentUser?.libraryLimits?.maxVideoSeconds,
+                        token: token,
+                        email: appState.session?.email
+                    )
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("需要打开电脑上的 whatSub 并登录同一账号。桌面端会重新下载、转写和解析视频；完成后将原子替换当前视频文件、字幕和解析结果。Library 条目身份与已收藏内容仍会保持关联。")
+        }
     }
 
     private var activeReplacementText: String? {
@@ -472,6 +523,7 @@ struct LibraryDetailView: View {
                 .foregroundStyle(.whatsubInk)
 
             Button("查看导入队列") {
+                showDesktopReplacementSheet = false
                 appState.selectedTab = 3
                 appState.meShowImportQueue = true
             }
