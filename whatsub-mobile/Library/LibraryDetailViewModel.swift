@@ -1,6 +1,13 @@
 import Foundation
 import SwiftUI
 
+enum DesktopReplacementState: Equatable {
+    case idle
+    case sending
+    case queued(desktopOffline: Bool)
+    case failed(String)
+}
+
 @MainActor
 final class LibraryDetailViewModel: ObservableObject {
     @Published var entry: LibraryEntryDetail?
@@ -8,6 +15,8 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var currentIndex: Int?
     @Published var seek: SeekRequest?
+    @Published var desktopReplacementState: DesktopReplacementState = .idle
+    @Published var activeReplacementStatus: DesktopReplacementActiveStatus?
 
     // Popup for a tapped highlight.
     @Published var popupWord: String?
@@ -45,6 +54,7 @@ final class LibraryDetailViewModel: ObservableObject {
         loading = true; errorMessage = nil
         do {
             entry = try await WhatsubAPI.shared.libraryEntry(id: id, token: token)
+            await refreshDesktopReplacementStatus(token: token)
         } catch APIError.unauthorized {
             errorMessage = "登录已过期，请到「我的」重新登录"
         } catch let e as APIError {
@@ -53,6 +63,91 @@ final class LibraryDetailViewModel: ObservableObject {
             errorMessage = "加载失败"
         }
         loading = false
+    }
+
+    /// Reads the existing shared import queue once on detail load/refresh. The
+    /// unfiltered GET does not touch desktop presence and adds no polling loop.
+    func refreshDesktopReplacementStatus(token: String) async {
+        guard let entry, entry.needsDesktopDownload else {
+            activeReplacementStatus = nil
+            desktopReplacementState = .idle
+            return
+        }
+        do {
+            let response = try await WhatsubAPI.shared.listImportQueue(token: token)
+            activeReplacementStatus = DesktopReplacementQueue.activeStatus(
+                in: response.items,
+                targetLibraryEntryId: entry.id
+            )
+            if activeReplacementStatus != nil {
+                desktopReplacementState = .queued(
+                    desktopOffline: DesktopPresence.isOffline(
+                        secondsAgo: response.desktopSeenSecondsAgo
+                    )
+                )
+            } else if desktopReplacementState != .sending {
+                desktopReplacementState = .idle
+            }
+        } catch {
+            // Queue status is supplemental. Keep the playable detail usable and
+            // let the enqueue endpoint's atomic duplicate handling remain the
+            // final authority if this best-effort read fails.
+        }
+    }
+
+    /// Human-approved duration precheck runs before the enqueue call. Unknown
+    /// duration/limit values intentionally pass through to backend + desktop
+    /// final validation.
+    func enqueueReplacement(
+        maxVideoSeconds: Int?,
+        token: String,
+        email: String?
+    ) async {
+        guard let entry,
+              entry.needsDesktopDownload,
+              let url = entry.canonicalYouTubeURL else { return }
+        guard activeReplacementStatus == nil else { return }
+
+        if let message = DesktopReplacementDurationPolicy.blockingMessage(
+            durationSec: entry.durationSec,
+            maxVideoSeconds: maxVideoSeconds
+        ) {
+            desktopReplacementState = .failed(message)
+            return
+        }
+
+        desktopReplacementState = .sending
+        do {
+            let secondsAgo = try await WhatsubAPI.shared.enqueueReplacement(
+                url: url,
+                targetLibraryEntryId: entry.id,
+                token: token
+            )
+            let offline = DesktopPresence.isOffline(secondsAgo: secondsAgo)
+            activeReplacementStatus = .pending
+
+            // Reuse the aggregate import-queue Live Activity. The backend also
+            // pushes queue state; this local seed makes progress visible in the
+            // same tick as the detail confirmation.
+            if #available(iOS 16.2, *), let email {
+                let initial = ImportActivityAttributes.ContentState(
+                    inProgress: 1,
+                    completed: 0,
+                    failed: 0,
+                    recentTitle: entry.title
+                )
+                await LiveActivityCoordinator.shared.ensureActivity(
+                    forUserEmail: email,
+                    initialState: initial
+                )
+            }
+
+            desktopReplacementState = .queued(desktopOffline: offline)
+        } catch let error as APIError {
+            desktopReplacementState = .failed(error.chinese)
+        } catch {
+            desktopReplacementState = .failed(error.localizedDescription)
+        }
     }
 
     /// Called by the player bridge ~4x/sec. Updates currentIndex when the
@@ -168,6 +263,7 @@ final class LibraryDetailViewModel: ObservableObject {
             entry = LibraryEntryDetail(
                 id: e.id,
                 youtubeId: e.youtubeId,
+                sourceUrl: e.sourceUrl,
                 title: e.title,
                 durationSec: e.durationSec,
                 transcriptSrt: srt,

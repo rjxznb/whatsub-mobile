@@ -6,6 +6,7 @@ struct LibraryDetailView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryDetailViewModel()
     @Environment(\.verticalSizeClass) private var vSize
+    @Environment(\.scenePhase) private var scenePhase
     @State private var playerReady = false
     @State private var playerTimedOut = false
     @State private var showCaptions = true
@@ -36,6 +37,7 @@ struct LibraryDetailView: View {
     /// Skipping the alert when `!vm.dirty` lets users back out of an
     /// untouched edit session without a noisy "are you sure" prompt.
     @State private var confirmCancelEdit: Bool = false
+    @State private var confirmDesktopReplacement: Bool = false
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
     // (showPendingSheet + 「待同步 N 条」 banner removed 2026-06-07.
     // PendingPhraseStore is still used — observed inside
@@ -101,6 +103,44 @@ struct LibraryDetailView: View {
                 player.automaticallyWaitsToMinimizeStalling = false
                 avPlayer = player
             }
+        }
+        .onChange(of: vm.entry?.videoUrl) { newValue in
+            // Replacement completion is discovered by an ordinary detail
+            // refresh. Swap from YouTube embed to native AVPlayer once; later
+            // signed-URL refreshes must not interrupt current playback.
+            guard avPlayer == nil,
+                  let newValue,
+                  let url = URL(string: newValue) else { return }
+            playerReady = false
+            playerTimedOut = false
+            let player = AVPlayer(url: url)
+            player.automaticallyWaitsToMinimizeStalling = false
+            avPlayer = player
+        }
+        .onChange(of: scenePhase) { phase in
+            // One foreground refresh is enough to discover desktop completion;
+            // no detail polling loop is added.
+            guard phase == .active, vm.entry?.needsDesktopDownload == true else { return }
+            Task { await reloadDetail() }
+        }
+        .confirmationDialog(
+            "发送到桌面端下载？",
+            isPresented: $confirmDesktopReplacement,
+            titleVisibility: .visible
+        ) {
+            Button("发送到桌面端下载") {
+                guard let token = appState.session?.sessionToken else { return }
+                Task {
+                    await vm.enqueueReplacement(
+                        maxVideoSeconds: appState.currentUser?.libraryLimits?.maxVideoSeconds,
+                        token: token,
+                        email: appState.session?.email
+                    )
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("需要打开电脑上的 whatSub 并登录同一账号。桌面端下载和处理完成后，会原子替换当前需 VPN 的 YouTube 播放源；现有字幕、收藏和条目身份都会保留。")
         }
         // (词汇本 toolbar button removed build 248+ — local vocab notebook
         // retired. Collections from this video are now in the [收藏] tab
@@ -317,6 +357,7 @@ struct LibraryDetailView: View {
                 // per-row ☁️ upload button. A top-of-page banner +
                 // separate sheet was redundant.)
                 contentArea(entry)
+                    .refreshable { await reloadDetail() }
             }
         }
     }
@@ -324,6 +365,10 @@ struct LibraryDetailView: View {
     @ViewBuilder
     private func contentArea(_ entry: LibraryEntryDetail) -> some View {
         VStack(spacing: 0) {
+            if entry.needsDesktopDownload {
+                desktopReplacementCard
+            }
+
             Picker("", selection: $contentTab) {
                 Text("字幕").tag(ContentTab.subtitles)
                 Text("收藏").tag(ContentTab.collections)
@@ -350,6 +395,99 @@ struct LibraryDetailView: View {
                 RoleplayTabView(entry: entry, onSessionStart: { avPlayer?.pause() })
             }
         }
+    }
+
+    private var desktopReplacementCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "desktopcomputer")
+                    .foregroundStyle(.whatsubAccent)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(activeReplacementText ?? "下载后免 VPN 播放")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.whatsubInk)
+                    Text("需要电脑上的 whatSub 在线处理。完成时会原子替换视频文件，现有字幕和收藏不会改变。")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                }
+            }
+
+            if case .failed(let message) = vm.desktopReplacementState {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+
+            if case .queued(let desktopOffline) = vm.desktopReplacementState {
+                if desktopOffline {
+                    desktopOfflineWarning
+                } else {
+                    Text("检测到桌面端在线，马上会自动开始下载+解析。可在「我的 → 导入队列」查看进度。")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                }
+            }
+
+            Button {
+                confirmDesktopReplacement = true
+            } label: {
+                HStack(spacing: 8) {
+                    if vm.desktopReplacementState == .sending {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text("发送到桌面端下载")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.whatsubAccent)
+            .disabled(replacementActionDisabled)
+        }
+        .padding(12)
+        .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+
+    private var activeReplacementText: String? {
+        switch vm.activeReplacementStatus {
+        case .some(.pending): return "已发送，等待桌面端"
+        case .some(.processing): return "桌面端处理中"
+        case .none: return nil
+        }
+    }
+
+    private var replacementActionDisabled: Bool {
+        if vm.activeReplacementStatus != nil { return true }
+        return vm.desktopReplacementState == .sending
+    }
+
+    private var desktopOfflineWarning: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("你的桌面端似乎不在线", systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.yellow)
+            Text("任务已排队，但只有打开电脑上的 whatSub 并登录同一账号（\(appState.session?.email ?? "当前账号")）后才会开始下载和解析。")
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInk)
+
+            Button("查看导入队列") {
+                appState.selectedTab = 3
+                appState.meShowImportQueue = true
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.borderless)
+            .foregroundStyle(.whatsubAccent)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yellow.opacity(0.5), lineWidth: 1))
+    }
+
+    private func reloadDetail() async {
+        guard let token = appState.session?.sessionToken else { return }
+        await vm.load(id: entryId, token: token)
     }
 
     // Landscape = fullscreen: the player fills the screen (video letterboxed on

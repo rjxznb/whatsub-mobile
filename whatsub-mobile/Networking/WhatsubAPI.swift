@@ -102,6 +102,30 @@ actor WhatsubAPI {
         return (try? decode(EnqueueImportResponse.self, from: data))?.desktopSeenSecondsAgo
     }
 
+    /// Enqueue an atomic replacement for an existing YouTube-fallback Library
+    /// entry. The queue id is intentionally not exposed here; detail UI only
+    /// needs desktop presence and discovers active status through the shared
+    /// queue list used by ImportQueueView and Live Activity.
+    @discardableResult
+    func enqueueReplacement(
+        url: String,
+        targetLibraryEntryId: String,
+        token: String
+    ) async throws -> Int? {
+        let body = try JSONEncoder().encode(
+            EnqueueReplacementRequest(
+                url: url,
+                targetLibraryEntryId: targetLibraryEntryId
+            )
+        )
+        let data = try await postExpectingOk(
+            Endpoints.library("import-queue"),
+            body: body,
+            bearer: token
+        )
+        return (try? decode(EnqueueImportResponse.self, from: data))?.desktopSeenSecondsAgo
+    }
+
     func listImportQueue(token: String) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {
         let data = try await get(Endpoints.library("import-queue"), bearer: token)
         let resp = try decode(ImportQueueListResponse.self, from: data)

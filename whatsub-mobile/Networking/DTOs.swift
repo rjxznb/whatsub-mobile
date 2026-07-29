@@ -34,6 +34,11 @@ struct MeResponse: Decodable {
     // or tempted into a second StoreKit charge. Optional — an older backend
     // that omits it decodes to nil (treated as not-subscribed).
     let hasActiveSubscription: Bool?
+    /// Server-authoritative Library caps for this account. Optional keeps
+    /// decoding compatible with older backends; an unknown limit deliberately
+    /// skips client-side replacement preflight and leaves final validation to
+    /// the backend/desktop pipeline.
+    let libraryLimits: LibraryLimits?
 }
 
 /// POST body for /api/license/iap/verify.
@@ -248,10 +253,31 @@ struct AnalysisJson: Decodable {
 struct ImportQueueItem: Decodable, Identifiable {
     let id: String
     let url: String
+    /// `import` for ordinary queue work; `replace` atomically fills the OSS
+    /// video of an existing Library entry. Defaults to import for queue rows
+    /// returned by older backend versions.
+    let mode: String
+    let targetLibraryEntryId: String?
     let status: String        // pending | processing | done | failed
     let error: String?
     let createdAt: Int64
     let updatedAt: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case id, url, mode, targetLibraryEntryId, status, error, createdAt, updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        url = try c.decode(String.self, forKey: .url)
+        mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "import"
+        targetLibraryEntryId = try c.decodeIfPresent(String.self, forKey: .targetLibraryEntryId)
+        status = try c.decode(String.self, forKey: .status)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+        createdAt = try c.decode(Int64.self, forKey: .createdAt)
+        updatedAt = try c.decode(Int64.self, forKey: .updatedAt)
+    }
 }
 
 struct ImportQueueListResponse: Decodable {
@@ -269,9 +295,56 @@ struct EnqueueImportResponse: Decodable {
     let desktopSeenSecondsAgo: Int?
 }
 
+enum DesktopPresence {
+    /// Desktop polls every 30 seconds. Four missed polls means offline;
+    /// exactly 120 seconds is still considered online to match ImportView.
+    static func isOffline(secondsAgo: Int?) -> Bool {
+        guard let secondsAgo else { return true }
+        return secondsAgo > 120
+    }
+}
+
+enum DesktopReplacementActiveStatus: Equatable {
+    case pending
+    case processing
+}
+
+enum DesktopReplacementQueue {
+    static func activeStatus(
+        in items: [ImportQueueItem],
+        targetLibraryEntryId: String
+    ) -> DesktopReplacementActiveStatus? {
+        let matching = items.filter {
+            $0.mode == "replace" && $0.targetLibraryEntryId == targetLibraryEntryId
+        }
+        if matching.contains(where: { $0.status == "processing" }) { return .processing }
+        if matching.contains(where: { $0.status == "pending" }) { return .pending }
+        return nil
+    }
+}
+
+/// Exact wire body for replacing an existing VPN-required YouTube entry with
+/// a desktop-produced OSS video. The backend performs owner/identity checks
+/// and commits the replacement atomically after desktop processing completes.
+struct EnqueueReplacementRequest: Encodable {
+    let url: String
+    let mode = "replace"
+    let targetLibraryEntryId: String
+}
+
+/// Library limits returned by `/me.libraryLimits` and `/api/library/quota.limits`.
+/// `/me` is already refreshed at login/foreground, so detail preflight reads
+/// the current account's server-selected tier instead of recreating tier rules.
+struct LibraryLimits: Decodable {
+    let maxVideos: Int
+    let maxVideoBytes: Int64
+    let maxVideoSeconds: Int
+}
+
 struct LibraryQuota: Decodable {
     let used: Int
     let limit: Int
+    let limits: LibraryLimits?
 }
 
 /// Personal-corpus quota. `limit` is server-authoritative (hasActiveSubscription
@@ -380,6 +453,7 @@ struct PhraseSource: Encodable {
 struct LibraryEntryDetail: Decodable {
     let id: String
     let youtubeId: String
+    let sourceUrl: String
     let title: String
     let durationSec: Int?
     let transcriptSrt: String?
@@ -388,6 +462,53 @@ struct LibraryEntryDetail: Decodable {
     /// Signed CDN URL for the audio-only .m4a sidecar. Practice modes
     /// (跟读/听抄) prefer this over videoUrl. nil = older entry, falls back.
     let audioUrl: String?
+}
+
+extension LibraryEntryDetail {
+    /// Canonical URL used by the replacement enqueue contract. A backend-safe
+    /// URL is derived from the validated 11-character YouTube id instead of
+    /// trusting a stale/free-form source URL cached by an older client.
+    var canonicalYouTubeURL: String? {
+        guard case .youtube = VideoSource.from(url: sourceUrl),
+              VideoSource.isLikelyYouTubeId(youtubeId) else { return nil }
+        return "https://www.youtube.com/watch?v=\(youtubeId)"
+    }
+
+    /// Only YouTube-fallback entries need desktop replacement. OSS-backed
+    /// entries already play without VPN; non-YouTube entries must never be
+    /// routed into the YouTube replacement contract.
+    var needsDesktopDownload: Bool {
+        videoUrl == nil && canonicalYouTubeURL != nil
+    }
+}
+
+enum DesktopReplacementDurationPolicy {
+    /// Returns nil when enqueue may proceed. Unknown values intentionally
+    /// proceed so unchanged backend/desktop validation remains authoritative.
+    static func blockingMessage(durationSec: Int?, maxVideoSeconds: Int?) -> String? {
+        guard let actual = durationSec,
+              let allowed = maxVideoSeconds,
+              actual > allowed else { return nil }
+        return "视频时长 \(format(actual))，当前账号单个视频上限为 \(format(allowed))，无法发送到桌面端下载。"
+    }
+
+    private static func format(_ totalSeconds: Int) -> String {
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+
+        if seconds == 0 {
+            if hours > 0, minutes > 0 { return "\(hours) 小时 \(minutes) 分钟" }
+            if hours > 0 { return "\(hours) 小时" }
+            return "\(minutes) 分钟"
+        }
+
+        var parts: [String] = []
+        if hours > 0 { parts.append("\(hours) 小时") }
+        if minutes > 0 { parts.append("\(minutes) 分") }
+        parts.append("\(seconds) 秒")
+        return parts.joined(separator: " ")
+    }
 }
 
 // ----- Corpus -----
