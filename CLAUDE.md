@@ -222,6 +222,36 @@ iOS can't bypass system VPN per-request (no public API for packet tunnels), so g
 - **Alpine.js `x-for` evaluates eagerly even under a false `x-show`** — `x-for="a in detail.activations"` on a null `detail` throws and breaks the whole component's handlers. Use `x-for="a in (detail?.activations || [])"`.
 - **Alpine.js `x-if` on modals nested inside `x-show` sections fails silently** (2026-07-25) — Admin panel's subscription expiry editor modal used `<template x-if="expiryEditor">` inside `<section x-show="tab === 'subs'">`. Button click set `expiryEditor = {...}` but the modal never appeared. Alpine's `x-if` reactivity breaks when the template is inside a conditional parent. **Fix**: (1) move modal to Alpine root element top level (outside all `x-show` sections), OR (2) replace `<template x-if>` with `<div x-show>` + `x-cloak`. Option 2 is simpler for modals (keeps them near their trigger). Guard `x-text`/`x-model` inside with `expiryEditor?.field` or `expiryEditor && method(expiryEditor.field)` since `x-show` keeps the element in DOM even when hidden (vs `x-if` which removes it). Trade-off: `x-show` renders on page load (hidden), `x-if` only when truthy — for heavy modals prefer `x-if` at root level; for simple ones `x-show` is fine.
 
+## Desktop replacement of a YouTube Library entry (2026-07-29)
+
+An iOS Library detail whose authoritative `sourceUrl` is an allowed YouTube host,
+whose parsed ID matches `youtubeId`, and which has no OSS `videoUrl` can send the
+existing entry to the same-account desktop client. It enqueues exactly
+`{ url, mode: "replace", targetLibraryEntryId }`; this is not a new Library
+import. Pending or processing replacements for that target disable another send.
+The detail refreshes on foreground/pull-to-refresh and switches to the existing
+OSS AVPlayer path once the completed entry exposes `videoUrl`.
+
+`maxVideoSeconds` is server-authoritative. Before enqueue, iOS blocks only when
+both the entry duration and that account limit are known and the duration is
+greater than the limit; equality and an unknown value proceed to backend and
+desktop validation. After enqueue, the existing desktop-presence signal warns
+when it is absent or older than 120 seconds, but it does not prevent the request.
+
+Replacement work is deliberately fail-safe: the desktop stages queue-scoped
+media and asks the backend to atomically update the same Library row and finish
+the queue job. A failed download, analysis, staging, or completion leaves the
+Library row, its ID, and its corpus collections unchanged; only the replacement
+queue job becomes failed. Retrying a failed replacement reuses the queue through
+the backend's guarded reset, with fresh staging keys; completed jobs are terminal.
+
+Compatibility and release order are mandatory: deploy the additive backend
+schema/API and capability gate first, then release a desktop build that polls
+with `supportedModes=import,replace`, and only then ship/expose this iOS action.
+Legacy desktop pollers default to `import` and therefore cannot claim a
+replacement job. Do not deploy the iOS UI before a compatible desktop release is
+available.
+
 ## Companion docs
 
 - `docs/superpowers/specs/` — v1 design + Innertube caption + Live Activity specs
