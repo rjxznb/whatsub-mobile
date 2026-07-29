@@ -36,6 +36,9 @@ secrets/
 *.swo
 Thumbs.db
 
+# Isolated feature worktrees
+.worktrees/
+
 # Stray setup screenshots (kept locally, not in repo)
 *.png
 !whatsub-mobile/**/*.png
