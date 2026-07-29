@@ -8,6 +8,9 @@ final class YouTubeIDTests: XCTestCase {
     func testWatchURLWithExtraParams() {
         XCTAssertEqual(extractYouTubeID("https://www.youtube.com/watch?v=ECXAFUmdJkI&t=90s&list=xx"), "ECXAFUmdJkI")
     }
+    func testMusicWatchURL() {
+        XCTAssertEqual(extractYouTubeID("https://music.youtube.com/watch?v=ECXAFUmdJkI"), "ECXAFUmdJkI")
+    }
     func testShortURL() {
         XCTAssertEqual(extractYouTubeID("https://youtu.be/ECXAFUmdJkI?t=12"), "ECXAFUmdJkI")
     }

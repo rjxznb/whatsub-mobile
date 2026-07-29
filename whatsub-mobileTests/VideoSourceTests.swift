@@ -6,6 +6,7 @@ final class VideoSourceTests: XCTestCase {
         XCTAssertEqual(VideoSource.from(url: "https://youtube.com/watch?v=dQw4w9WgXcQ"), .youtube)
         XCTAssertEqual(VideoSource.from(url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"), .youtube)
         XCTAssertEqual(VideoSource.from(url: "https://m.youtube.com/watch?v=dQw4w9WgXcQ"), .youtube)
+        XCTAssertEqual(VideoSource.from(url: "https://music.youtube.com/watch?v=dQw4w9WgXcQ"), .youtube)
         XCTAssertEqual(VideoSource.from(url: "https://youtu.be/dQw4w9WgXcQ"), .youtube)
     }
     func testYouTubeLookalikeHostsAreOther() {

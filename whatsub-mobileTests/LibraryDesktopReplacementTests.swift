@@ -127,6 +127,19 @@ final class LibraryDesktopReplacementTests: XCTestCase {
         XCTAssertNil(mismatched.canonicalYouTubeURL)
     }
 
+    func testMusicYouTubeEntryIsEligibleWhenSourceIDMatchesEntryID() throws {
+        let musicEntry = try entry(
+            youtubeId: "dQw4w9WgXcQ",
+            sourceUrl: "https://music.youtube.com/watch?v=dQw4w9WgXcQ"
+        )
+
+        XCTAssertTrue(musicEntry.needsDesktopDownload)
+        XCTAssertEqual(
+            musicEntry.canonicalYouTubeURL,
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        )
+    }
+
     func testStrictHelperRecognizesOnlySupportedOfficialYouTubeHosts() {
         XCTAssertEqual(VideoSource.youtubeVideoID(from: "https://youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ")
         XCTAssertEqual(VideoSource.youtubeVideoID(from: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ")
