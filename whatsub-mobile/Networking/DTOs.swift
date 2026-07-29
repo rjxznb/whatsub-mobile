@@ -293,6 +293,9 @@ struct ImportQueueListResponse: Decodable {
 struct EnqueueImportResponse: Decodable {
     let id: String
     let desktopSeenSecondsAgo: Int?
+    /// The backend returns the existing row's state when enqueue deduplicates.
+    /// Optional keeps compatibility with an older backend during rollout.
+    let status: String?
 }
 
 enum DesktopPresence {

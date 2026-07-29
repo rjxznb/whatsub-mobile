@@ -140,7 +140,7 @@ struct LibraryDetailView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("需要打开电脑上的 whatSub 并登录同一账号。桌面端下载和处理完成后，会原子替换当前需 VPN 的 YouTube 播放源；现有字幕、收藏和条目身份都会保留。")
+            Text("需要打开电脑上的 whatSub 并登录同一账号。桌面端会重新下载、转写和解析视频；完成后将原子替换当前视频文件、字幕和解析结果。Library 条目身份与已收藏内容仍会保持关联。")
         }
         // (词汇本 toolbar button removed build 248+ — local vocab notebook
         // retired. Collections from this video are now in the [收藏] tab
@@ -406,7 +406,7 @@ struct LibraryDetailView: View {
                     Text(activeReplacementText ?? "下载后免 VPN 播放")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.whatsubInk)
-                    Text("需要电脑上的 whatSub 在线处理。完成时会原子替换视频文件，现有字幕和收藏不会改变。")
+                    Text("需要电脑上的 whatSub 在线处理。完成后会替换视频文件、字幕和解析结果；Library 条目与已收藏内容仍会保持关联。")
                         .font(.caption)
                         .foregroundStyle(.whatsubInkMuted)
                 }

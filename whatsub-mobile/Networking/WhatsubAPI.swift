@@ -12,7 +12,7 @@ protocol LibraryDesktopReplacementAPI {
         url: String,
         targetLibraryEntryId: String,
         token: String
-    ) async throws -> Int?
+    ) async throws -> EnqueueImportResponse
 }
 
 /// All backend HTTP lives here. An actor so concurrent calls serialize their
@@ -126,7 +126,7 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI {
         url: String,
         targetLibraryEntryId: String,
         token: String
-    ) async throws -> Int? {
+    ) async throws -> EnqueueImportResponse {
         let body = try JSONEncoder().encode(
             EnqueueReplacementRequest(
                 url: url,
@@ -138,7 +138,7 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI {
             body: body,
             bearer: token
         )
-        return (try? decode(EnqueueImportResponse.self, from: data))?.desktopSeenSecondsAgo
+        return try decode(EnqueueImportResponse.self, from: data)
     }
 
     func listImportQueue(token: String) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {

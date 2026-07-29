@@ -4,15 +4,25 @@ import XCTest
 private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
     private let detail: LibraryEntryDetail
     private let suspendQueueList: Bool
+    private let enqueueResponse: EnqueueImportResponse
     private var enqueueCalls = 0
     private var listCalls = 0
     private var listStartedWaiter: CheckedContinuation<Void, Never>?
     private var listRelease: CheckedContinuation<Void, Never>?
     private var releaseRequested = false
 
-    init(detail: LibraryEntryDetail, suspendQueueList: Bool = false) {
+    init(
+        detail: LibraryEntryDetail,
+        suspendQueueList: Bool = false,
+        enqueueResponse: EnqueueImportResponse = EnqueueImportResponse(
+            id: "queue-1",
+            desktopSeenSecondsAgo: 0,
+            status: "pending"
+        )
+    ) {
         self.detail = detail
         self.suspendQueueList = suspendQueueList
+        self.enqueueResponse = enqueueResponse
     }
 
     func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
@@ -42,12 +52,13 @@ private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
         url: String,
         targetLibraryEntryId: String,
         token: String
-    ) async throws -> Int? {
+    ) async throws -> EnqueueImportResponse {
         enqueueCalls += 1
-        return 0
+        return enqueueResponse
     }
 
     func enqueueCallCount() -> Int { enqueueCalls }
+    func listCallCount() -> Int { listCalls }
 
     func waitUntilListStarts() async {
         if listCalls > 0 { return }
@@ -253,6 +264,19 @@ final class LibraryDesktopReplacementTests: XCTestCase {
         XCTAssertNil(legacy.targetLibraryEntryId)
     }
 
+    func testEnqueueResponseDecodesDeduplicatedProcessingStatus() throws {
+        let response = try JSONDecoder().decode(EnqueueImportResponse.self, from: Data("""
+            {
+              "id": "queue-processing",
+              "desktopSeenSecondsAgo": 12,
+              "status": "processing"
+            }
+            """.utf8))
+
+        XCTAssertEqual(response.status, "processing")
+        XCTAssertEqual(response.desktopSeenSecondsAgo, 12)
+    }
+
     func testActiveReplacementDetectionIgnoresDoneAndOrdinaryImports() throws {
         let data = Data("""
             {"items": [
@@ -316,6 +340,32 @@ final class LibraryDesktopReplacementTests: XCTestCase {
 
         let calls = await api.enqueueCallCount()
         XCTAssertEqual(calls, 0)
+    }
+
+    func testDeduplicatedProcessingResponseSurfacesProcessingWithoutQueuePolling() async throws {
+        let detail = try entry()
+        let api = LibraryDesktopReplacementAPISpy(
+            detail: detail,
+            enqueueResponse: EnqueueImportResponse(
+                id: "existing-processing",
+                desktopSeenSecondsAgo: 0,
+                status: "processing"
+            )
+        )
+        let viewModel = LibraryDetailViewModel(api: api)
+        viewModel.entry = detail
+
+        await viewModel.enqueueReplacement(
+            maxVideoSeconds: 1_200,
+            token: "token",
+            email: nil
+        )
+
+        let calls = await api.enqueueCallCount()
+        let listCalls = await api.listCallCount()
+        XCTAssertEqual(viewModel.activeReplacementStatus, .processing)
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(listCalls, 0)
     }
 
     func testDurationEqualToLimitCallsEnqueueAPIOnce() async throws {

@@ -148,13 +148,13 @@ final class LibraryDetailViewModel: ObservableObject {
 
         desktopReplacementState = .sending
         do {
-            let secondsAgo = try await replacementAPI.enqueueReplacement(
+            let response = try await replacementAPI.enqueueReplacement(
                 url: url,
                 targetLibraryEntryId: entry.id,
                 token: token
             )
-            let offline = DesktopPresence.isOffline(secondsAgo: secondsAgo)
-            activeReplacementStatus = .pending
+            let offline = DesktopPresence.isOffline(secondsAgo: response.desktopSeenSecondsAgo)
+            activeReplacementStatus = response.status == "processing" ? .processing : .pending
 
             // Reuse the aggregate import-queue Live Activity. The backend also
             // pushes queue state; this local seed makes progress visible in the
