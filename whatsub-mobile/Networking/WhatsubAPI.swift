@@ -1,8 +1,23 @@
 import Foundation
 
+/// Narrow seam for Library detail replacement behavior. Production uses the
+/// shared actor; XCTest injects an actor spy to prove preflight call counts and
+/// first-paint behavior without touching the network.
+protocol LibraryDesktopReplacementAPI {
+    func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail
+    func listImportQueue(
+        token: String
+    ) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?)
+    func enqueueReplacement(
+        url: String,
+        targetLibraryEntryId: String,
+        token: String
+    ) async throws -> Int?
+}
+
 /// All backend HTTP lives here. An actor so concurrent calls serialize their
 /// access to the (rare) shared state and so the type is Sendable-safe.
-actor WhatsubAPI {
+actor WhatsubAPI: LibraryDesktopReplacementAPI {
     static let shared = WhatsubAPI()
 
     private let session: URLSession

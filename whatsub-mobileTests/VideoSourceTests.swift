@@ -3,8 +3,14 @@ import XCTest
 
 final class VideoSourceTests: XCTestCase {
     func testYouTubeHosts() {
+        XCTAssertEqual(VideoSource.from(url: "https://youtube.com/watch?v=dQw4w9WgXcQ"), .youtube)
         XCTAssertEqual(VideoSource.from(url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"), .youtube)
+        XCTAssertEqual(VideoSource.from(url: "https://m.youtube.com/watch?v=dQw4w9WgXcQ"), .youtube)
         XCTAssertEqual(VideoSource.from(url: "https://youtu.be/dQw4w9WgXcQ"), .youtube)
+    }
+    func testYouTubeLookalikeHostsAreOther() {
+        XCTAssertEqual(VideoSource.from(url: "https://notyoutube.com/watch?v=dQw4w9WgXcQ"), .other)
+        XCTAssertEqual(VideoSource.from(url: "https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ"), .other)
     }
     func testBilibiliHosts() {
         XCTAssertEqual(VideoSource.from(url: "https://www.bilibili.com/video/BV1xx411c7mu"), .bilibili)

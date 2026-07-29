@@ -469,9 +469,10 @@ extension LibraryEntryDetail {
     /// URL is derived from the validated 11-character YouTube id instead of
     /// trusting a stale/free-form source URL cached by an older client.
     var canonicalYouTubeURL: String? {
-        guard case .youtube = VideoSource.from(url: sourceUrl),
-              VideoSource.isLikelyYouTubeId(youtubeId) else { return nil }
-        return "https://www.youtube.com/watch?v=\(youtubeId)"
+        VideoSource.canonicalYouTubeURL(
+            from: sourceUrl,
+            expectedVideoID: youtubeId
+        )
     }
 
     /// Only YouTube-fallback entries need desktop replacement. OSS-backed

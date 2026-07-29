@@ -42,7 +42,14 @@ final class LibraryDetailViewModel: ObservableObject {
     /// row UI can show a spinner. nil = idle.
     @Published var analyzingCueIndex: Int?
 
+    private let replacementAPI: any LibraryDesktopReplacementAPI
+    private var replacementStatusTask: Task<Void, Never>?
+    private var loadRevision = 0
     private var cues: [Cue] { entry?.analysisJson.subtitles ?? [] }
+
+    init(api: any LibraryDesktopReplacementAPI = WhatsubAPI.shared) {
+        replacementAPI = api
+    }
 
     /// The cue at the current playhead (for the on-video caption overlay).
     var currentCue: Cue? {
@@ -51,30 +58,53 @@ final class LibraryDetailViewModel: ObservableObject {
     }
 
     func load(id: String, token: String) async {
+        loadRevision += 1
+        let revision = loadRevision
+        replacementStatusTask?.cancel()
         loading = true; errorMessage = nil
         do {
-            entry = try await WhatsubAPI.shared.libraryEntry(id: id, token: token)
-            await refreshDesktopReplacementStatus(token: token)
+            let fetchedEntry = try await replacementAPI.libraryEntry(id: id, token: token)
+            guard revision == loadRevision else { return }
+
+            // Queue state is supplemental. Publish the playable detail and end
+            // first-paint loading before starting its best-effort queue read.
+            entry = fetchedEntry
+            loading = false
+            replacementStatusTask = Task { [weak self] in
+                await self?.refreshDesktopReplacementStatus(
+                    token: token,
+                    expectedEntryID: fetchedEntry.id
+                )
+            }
+            return
         } catch APIError.unauthorized {
+            guard revision == loadRevision else { return }
             errorMessage = "登录已过期，请到「我的」重新登录"
         } catch let e as APIError {
+            guard revision == loadRevision else { return }
             errorMessage = e.chinese
         } catch {
+            guard revision == loadRevision else { return }
             errorMessage = "加载失败"
         }
-        loading = false
+        if revision == loadRevision { loading = false }
     }
 
     /// Reads the existing shared import queue once on detail load/refresh. The
     /// unfiltered GET does not touch desktop presence and adds no polling loop.
-    func refreshDesktopReplacementStatus(token: String) async {
+    func refreshDesktopReplacementStatus(
+        token: String,
+        expectedEntryID: String? = nil
+    ) async {
         guard let entry, entry.needsDesktopDownload else {
             activeReplacementStatus = nil
             desktopReplacementState = .idle
             return
         }
+        guard expectedEntryID == nil || expectedEntryID == entry.id else { return }
         do {
-            let response = try await WhatsubAPI.shared.listImportQueue(token: token)
+            let response = try await replacementAPI.listImportQueue(token: token)
+            guard !Task.isCancelled, self.entry?.id == entry.id else { return }
             activeReplacementStatus = DesktopReplacementQueue.activeStatus(
                 in: response.items,
                 targetLibraryEntryId: entry.id
@@ -118,7 +148,7 @@ final class LibraryDetailViewModel: ObservableObject {
 
         desktopReplacementState = .sending
         do {
-            let secondsAgo = try await WhatsubAPI.shared.enqueueReplacement(
+            let secondsAgo = try await replacementAPI.enqueueReplacement(
                 url: url,
                 targetLibraryEntryId: entry.id,
                 token: token

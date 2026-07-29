@@ -1,6 +1,67 @@
 import XCTest
 @testable import whatsub_mobile
 
+private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
+    private let detail: LibraryEntryDetail
+    private let suspendQueueList: Bool
+    private var enqueueCalls = 0
+    private var listCalls = 0
+    private var listStartedWaiter: CheckedContinuation<Void, Never>?
+    private var listRelease: CheckedContinuation<Void, Never>?
+    private var releaseRequested = false
+
+    init(detail: LibraryEntryDetail, suspendQueueList: Bool = false) {
+        self.detail = detail
+        self.suspendQueueList = suspendQueueList
+    }
+
+    func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
+        detail
+    }
+
+    func listImportQueue(
+        token: String
+    ) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {
+        listCalls += 1
+        listStartedWaiter?.resume()
+        listStartedWaiter = nil
+
+        if suspendQueueList {
+            await withCheckedContinuation { continuation in
+                if releaseRequested {
+                    continuation.resume()
+                } else {
+                    listRelease = continuation
+                }
+            }
+        }
+        return ([], 0)
+    }
+
+    func enqueueReplacement(
+        url: String,
+        targetLibraryEntryId: String,
+        token: String
+    ) async throws -> Int? {
+        enqueueCalls += 1
+        return 0
+    }
+
+    func enqueueCallCount() -> Int { enqueueCalls }
+
+    func waitUntilListStarts() async {
+        if listCalls > 0 { return }
+        await withCheckedContinuation { listStartedWaiter = $0 }
+    }
+
+    func releaseList() {
+        releaseRequested = true
+        listRelease?.resume()
+        listRelease = nil
+    }
+}
+
+@MainActor
 final class LibraryDesktopReplacementTests: XCTestCase {
     private func entry(
         youtubeId: String = "dQw4w9WgXcQ",
@@ -41,6 +102,37 @@ final class LibraryDesktopReplacementTests: XCTestCase {
             try entry().canonicalYouTubeURL,
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         )
+    }
+
+    func testHostileYouTubeLookalikeHostsAreRejected() throws {
+        XCTAssertFalse(
+            try entry(
+                sourceUrl: "https://notyoutube.com/watch?v=dQw4w9WgXcQ"
+            ).needsDesktopDownload
+        )
+        XCTAssertFalse(
+            try entry(
+                sourceUrl: "https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ"
+            ).needsDesktopDownload
+        )
+    }
+
+    func testSourceURLVideoIDMustMatchEntryYouTubeID() throws {
+        let mismatched = try entry(
+            youtubeId: "dQw4w9WgXcQ",
+            sourceUrl: "https://www.youtube.com/watch?v=ECXAFUmdJkI"
+        )
+
+        XCTAssertFalse(mismatched.needsDesktopDownload)
+        XCTAssertNil(mismatched.canonicalYouTubeURL)
+    }
+
+    func testStrictHelperRecognizesOnlySupportedOfficialYouTubeHosts() {
+        XCTAssertEqual(VideoSource.youtubeVideoID(from: "https://youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        XCTAssertEqual(VideoSource.youtubeVideoID(from: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        XCTAssertEqual(VideoSource.youtubeVideoID(from: "https://m.youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        XCTAssertEqual(VideoSource.youtubeVideoID(from: "https://youtu.be/dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        XCTAssertNil(VideoSource.youtubeVideoID(from: "https://notyoutube.com/watch?v=dQw4w9WgXcQ"))
     }
 
     func testDesktopPresenceUsesExact120SecondBoundary() {
@@ -180,5 +272,84 @@ final class LibraryDesktopReplacementTests: XCTestCase {
             ),
             .processing
         )
+    }
+
+    func testDetailPublishesBeforeSupplementalQueueRequestCompletes() async throws {
+        let detail = try entry()
+        let api = LibraryDesktopReplacementAPISpy(detail: detail, suspendQueueList: true)
+        let viewModel = LibraryDetailViewModel(api: api)
+
+        let load = Task { await viewModel.load(id: detail.id, token: "token") }
+        await api.waitUntilListStarts()
+
+        XCTAssertEqual(viewModel.entry?.id, detail.id)
+        XCTAssertFalse(viewModel.loading)
+
+        await api.releaseList()
+        await load.value
+    }
+
+    func testKnownOverLimitBlocksBeforeCallingEnqueueAPI() async throws {
+        let detail = try entry(durationSec: 1_201)
+        let api = LibraryDesktopReplacementAPISpy(detail: detail)
+        let viewModel = LibraryDetailViewModel(api: api)
+        viewModel.entry = detail
+
+        await viewModel.enqueueReplacement(
+            maxVideoSeconds: 1_200,
+            token: "token",
+            email: nil
+        )
+
+        let calls = await api.enqueueCallCount()
+        XCTAssertEqual(calls, 0)
+    }
+
+    func testDurationEqualToLimitCallsEnqueueAPIOnce() async throws {
+        let detail = try entry(durationSec: 1_200)
+        let api = LibraryDesktopReplacementAPISpy(detail: detail)
+        let viewModel = LibraryDetailViewModel(api: api)
+        viewModel.entry = detail
+
+        await viewModel.enqueueReplacement(
+            maxVideoSeconds: 1_200,
+            token: "token",
+            email: nil
+        )
+
+        let calls = await api.enqueueCallCount()
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testUnknownDurationCallsEnqueueAPIOnce() async throws {
+        let detail = try entry(durationSec: nil)
+        let api = LibraryDesktopReplacementAPISpy(detail: detail)
+        let viewModel = LibraryDetailViewModel(api: api)
+        viewModel.entry = detail
+
+        await viewModel.enqueueReplacement(
+            maxVideoSeconds: 1_200,
+            token: "token",
+            email: nil
+        )
+
+        let calls = await api.enqueueCallCount()
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testUnknownLimitCallsEnqueueAPIOnce() async throws {
+        let detail = try entry(durationSec: 1_201)
+        let api = LibraryDesktopReplacementAPISpy(detail: detail)
+        let viewModel = LibraryDetailViewModel(api: api)
+        viewModel.entry = detail
+
+        await viewModel.enqueueReplacement(
+            maxVideoSeconds: nil,
+            token: "token",
+            email: nil
+        )
+
+        let calls = await api.enqueueCallCount()
+        XCTAssertEqual(calls, 1)
     }
 }
