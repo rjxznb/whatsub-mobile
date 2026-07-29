@@ -74,6 +74,37 @@ private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
 
 @MainActor
 final class LibraryDesktopReplacementTests: XCTestCase {
+    func testToolbarIndicatorReflectsReplacementProgressAndFailure() {
+        XCTAssertEqual(
+            DesktopReplacementToolbarPresentation.indicator(
+                state: .idle,
+                activeStatus: nil
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            DesktopReplacementToolbarPresentation.indicator(
+                state: .sending,
+                activeStatus: nil
+            ),
+            .progress
+        )
+        XCTAssertEqual(
+            DesktopReplacementToolbarPresentation.indicator(
+                state: .idle,
+                activeStatus: .processing
+            ),
+            .progress
+        )
+        XCTAssertEqual(
+            DesktopReplacementToolbarPresentation.indicator(
+                state: .failed("network"),
+                activeStatus: nil
+            ),
+            .failure
+        )
+    }
+
     private func entry(
         youtubeId: String = "dQw4w9WgXcQ",
         sourceUrl: String = "https://youtu.be/dQw4w9WgXcQ",
