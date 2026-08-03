@@ -185,6 +185,29 @@ final class FeatureAccessStoreTests: XCTestCase {
         XCTAssertEqual(store.presentation(for: .quickChat, localPro: false), .subscriptionRequired)
     }
 
+    func testKnownConsumedStateOpensPaywallWithoutAnotherStartRequest() async {
+        let api = FeatureAccessAPISpy(entitlements: .response(.init(
+            isPro: false,
+            features: allStates(.consumed)
+        )))
+        let store = FeatureAccessStore(api: api, persistence: .init(fileURL: tempURL()))
+        await store.refresh(token: "session", email: "free@x.com", localPro: false)
+
+        do {
+            _ = try await store.start(
+                feature: .photoAI,
+                token: "session",
+                email: "free@x.com",
+                localPro: false
+            )
+            XCTFail("expected subscriptionRequired")
+        } catch {
+            XCTAssertEqual(error as? FeatureAccessError, .subscriptionRequired)
+        }
+        let startCount = await api.startCallCount()
+        XCTAssertEqual(startCount, 0)
+    }
+
     func testNetworkFailureBecomesRetryStateNotPaywall() async {
         let api = FeatureAccessAPISpy(start: .networkFailure)
         let store = FeatureAccessStore(api: api, persistence: .init(fileURL: tempURL()))
