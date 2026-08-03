@@ -60,9 +60,13 @@ struct PhotoReviewView: View {
                         }
                     }
                 }
-                .sheet(isPresented: $showSubscribe) {
+                .sheet(
+                    isPresented: $showSubscribe,
+                    onDismiss: { featurePaywallOrigin = nil }
+                ) {
                     SubscribeSheet(onPurchased: {
-                        Task { await handlePurchaseSuccess() }
+                        let origin = featurePaywallOrigin
+                        Task { await handlePurchaseSuccess(origin: origin) }
                     })
                     .environmentObject(store)
                 }
@@ -429,7 +433,14 @@ struct PhotoReviewView: View {
         }
     }
 
-    private func handlePurchaseSuccess() async {
+    private func handlePurchaseSuccess(origin: FeatureKey?) async {
+        if let origin, let session = appState.session {
+            featureAccess.sendEvent(
+                .purchaseSuccess,
+                feature: origin,
+                token: session.sessionToken
+            )
+        }
         await appState.refreshMe()
         if let session = appState.session {
             await featureAccess.refresh(

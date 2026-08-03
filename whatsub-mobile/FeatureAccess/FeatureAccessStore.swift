@@ -70,6 +70,12 @@ final class FeatureAccessStore: ObservableObject {
         if localPro || snapshot?.isPro == true {
             return FeatureAccessGrant(feature: feature, access: .pro)
         }
+        // A known consumed state is already server-authoritative (or backed by
+        // our durable pending-consume marker). Avoid a redundant start request
+        // and make the entry's paywall behavior work even while offline.
+        if !entitlementUnavailable, snapshot?.features[feature] == .consumed {
+            throw FeatureAccessError.subscriptionRequired
+        }
 
         do {
             let response = try await api.startFeature(feature, token: token)

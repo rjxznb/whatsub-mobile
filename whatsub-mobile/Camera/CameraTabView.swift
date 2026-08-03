@@ -10,6 +10,8 @@ import SwiftUI
 ///
 /// 2026-06-05 (was a card-list shell at first; flattened per design ask).
 struct CameraTabView: View {
+    @EnvironmentObject private var store: StoreManager
+    @EnvironmentObject private var featureAccess: FeatureAccessStore
     @State private var showPhotoTranslate = false
 
     var body: some View {
@@ -20,25 +22,37 @@ struct CameraTabView: View {
                 // the two camera-adjacent surfaces feel structurally
                 // consistent. System nav bar stays hidden so the layout
                 // matches Library / 语料库 / 我的.
-                HStack(alignment: .firstTextBaseline) {
-                    Text("实景口语练习")
-                        // 26pt vs the 34pt used elsewhere — the title is
-                        // 6 chars (vs 2-3 for "我的" / "语料库" / "Library")
-                        // and would overflow on small phones at 34. Still
-                        // larger than a body font so the header presence
-                        // is preserved.
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundStyle(.whatsubInk)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("实景口语练习")
+                            // 26pt vs the 34pt used elsewhere — the title is
+                            // 6 chars (vs 2-3 for "我的" / "语料库" / "Library")
+                            // and would overflow on small phones at 34. Still
+                            // larger than a body font so the header presence
+                            // is preserved.
+                            .font(.system(size: 26, weight: .bold))
+                            .foregroundStyle(.whatsubInk)
+                        FeatureTrialBadge(presentation: featureAccess.presentation(
+                            for: .liveScene,
+                            localPro: store.hasLocalSub
+                        ))
+                    }
                     Spacer()
                     Button {
                         showPhotoTranslate = true
                     } label: {
-                        Image(systemName: "camera.viewfinder")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(.whatsubAccent)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .contentShape(Rectangle())
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Image(systemName: "camera.viewfinder")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(.whatsubAccent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                            FeatureTrialBadge(presentation: featureAccess.presentation(
+                                for: .photoAI,
+                                localPro: store.hasLocalSub
+                            ))
+                        }
+                        .contentShape(Rectangle())
                     }
                     .accessibilityLabel("拍照翻译")
                 }

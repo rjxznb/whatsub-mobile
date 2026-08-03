@@ -10,6 +10,7 @@ struct CorpusView: View {
     @State private var showQuiz = false
     @State private var showAddPhrase: Bool = false
     @State private var showSubscribe = false
+    @State private var featurePaywallOrigin: FeatureKey?
     /// 2026-06-03 Stage 4: persisted choice between flat (each phrase a row) and
     /// grouped (each video a card with its phrases nested). UserDefaults so it
     /// survives app launches.
@@ -54,9 +55,15 @@ struct CorpusView: View {
                     }
                     Spacer()
                     Button { Task { await tapQuickChat() } } label: {
-                        Label("对话陪练", systemImage: "bubble.left.and.bubble.right")
-                            .font(.subheadline).fontWeight(.semibold)
-                            .foregroundStyle(.whatsubAccent)
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Label("对话陪练", systemImage: "bubble.left.and.bubble.right")
+                                .font(.subheadline).fontWeight(.semibold)
+                                .foregroundStyle(.whatsubAccent)
+                            FeatureTrialBadge(presentation: featureAccess.presentation(
+                                for: .quickChat,
+                                localPro: store.hasLocalSub
+                            ))
+                        }
                     }
                     Button { showQuiz = true } label: {
                         Label("单词卡", systemImage: "rectangle.stack.badge.play")
@@ -106,9 +113,20 @@ struct CorpusView: View {
             // Pro subscription upsell — presented when user taps "订阅 Pro" on the
             // 公共语料库 lock. Attached at the root so a Picker / List re-render
             // mid-animation can't tear it down (same gotcha noted in MeView).
-            .sheet(isPresented: $showSubscribe) {
+            .sheet(
+                isPresented: $showSubscribe,
+                onDismiss: { featurePaywallOrigin = nil }
+            ) {
                 SubscribeSheet(onPurchased: {
+                    let origin = featurePaywallOrigin
                     Task {
+                        if let origin, let session = appState.session {
+                            featureAccess.sendEvent(
+                                .purchaseSuccess,
+                                feature: origin,
+                                token: session.sessionToken
+                            )
+                        }
                         await appState.refreshMe()
                         if let session = appState.session {
                             await featureAccess.refresh(
@@ -251,6 +269,7 @@ struct CorpusView: View {
                     .font(.footnote).foregroundStyle(.whatsubInkMuted)
                     .multilineTextAlignment(.center)
                 Button {
+                    featurePaywallOrigin = nil
                     showSubscribe = true
                 } label: {
                     Label("订阅 Pro · 解锁公共语料库", systemImage: "star.circle.fill")
@@ -346,6 +365,7 @@ struct CorpusView: View {
             )
             showQuickChatLauncher = true
         } catch FeatureAccessError.subscriptionRequired {
+            featurePaywallOrigin = .quickChat
             featureAccess.sendEvent(
                 .paywallShown,
                 feature: .quickChat,

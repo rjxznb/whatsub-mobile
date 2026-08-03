@@ -30,6 +30,7 @@ struct RoleplayTabView: View {
     /// for tier-related reasons. Attached at view root so phase transitions
     /// don't tear it down.
     @State private var showSubscribe = false
+    @State private var featurePaywallOrigin: FeatureKey?
     @State private var sessionGrant: FeatureAccessGrant?
     @State private var accessMessage: String?
 
@@ -42,24 +43,33 @@ struct RoleplayTabView: View {
     }
 
     var body: some View {
-        Group {
-            switch vm.phase {
-            case .idle, .loading:
-                loadingView
-            case .picker:
-                pickerList
-            case .inSession:
-                // The session sheet is presented via the .sheet modifier;
-                // leave the picker visible underneath so dismiss returns to
-                // a familiar surface.
-                pickerList
-            case .error(let f):
-                // Even on error we render the fallback scenario card so
-                // the user can still play with something. The error banner
-                // shows above.
-                VStack(spacing: 12) {
-                    errorBanner(f)
+        VStack(spacing: 4) {
+            FeatureTrialBadge(presentation: featureAccess.presentation(
+                for: .videoRoleplay,
+                localPro: store.hasLocalSub
+            ))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+
+            Group {
+                switch vm.phase {
+                case .idle, .loading:
+                    loadingView
+                case .picker:
                     pickerList
+                case .inSession:
+                    // The session sheet is presented via the .sheet modifier;
+                    // leave the picker visible underneath so dismiss returns to
+                    // a familiar surface.
+                    pickerList
+                case .error(let f):
+                    // Even on error we render the fallback scenario card so
+                    // the user can still play with something. The error banner
+                    // shows above.
+                    VStack(spacing: 12) {
+                        errorBanner(f)
+                        pickerList
+                    }
                 }
             }
         }
@@ -85,10 +95,33 @@ struct RoleplayTabView: View {
                 }
             }
         }
-        .sheet(isPresented: $showSubscribe) {
+        .sheet(
+            isPresented: $showSubscribe,
+            onDismiss: { featurePaywallOrigin = nil }
+        ) {
             SubscribeSheet(onPurchased: {
+                let origin = featurePaywallOrigin
                 Task {
+                    if let origin, let session = appState.session {
+                        featureAccess.sendEvent(
+                            .purchaseSuccess,
+                            feature: origin,
+                            token: session.sessionToken
+                        )
+                    }
                     await appState.refreshMe()
+                    if let session = appState.session {
+                        await featureAccess.refresh(
+                            token: session.sessionToken,
+                            email: session.email,
+                            localPro: store.hasLocalSub
+                        )
+                        await featureAccess.retryPendingConsumes(
+                            token: session.sessionToken,
+                            email: session.email
+                        )
+                    }
+                    sessionGrant = nil
                     await regenerateWithAccess()
                 }
             })
@@ -175,6 +208,7 @@ struct RoleplayTabView: View {
             Spacer()
             if failure.kind == .subscribeUpsell {
                 Button {
+                    featurePaywallOrigin = nil
                     showSubscribe = true
                 } label: {
                     Text("订阅")
@@ -222,6 +256,7 @@ struct RoleplayTabView: View {
             accessMessage = nil
             return true
         } catch FeatureAccessError.subscriptionRequired {
+            featurePaywallOrigin = .videoRoleplay
             featureAccess.sendEvent(
                 .paywallShown,
                 feature: .videoRoleplay,

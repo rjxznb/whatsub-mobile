@@ -14,15 +14,13 @@ struct SubscribeSheet: View {
                     Text("订阅 whatSub Pro")
                         .font(.title2.weight(.bold)).foregroundStyle(.whatsubInk)
                     VStack(alignment: .leading, spacing: 6) {
-                        // 2026-06-09 — was "内置 DeepSeek AI" (App Store
-                        // review Guideline 5 rejection: brand names of
-                        // foreign LLM services in app metadata can't pass
-                        // China DST/MIIT compliance). Now generic "AI".
-                        Text("• 内置 AI（零配置开箱即用）月度 ≈ 130 次视频解析")
+                        Text("• AI 对话陪练持续使用")
                             .foregroundStyle(.whatsubInk)
-                        Text("• 50 个云端视频额度（免费 3 个）")
-                        Text("• 单个视频 500MB / 60 分钟（免费 100MB / 20 分钟）")
-                        Text("• 1000 个个人语料库额度（免费 50 个）")
+                        Text("• 视频角色扮演持续使用")
+                        Text("• 实景口语与拍照 AI 持续使用")
+                        Text("• whatSub 托管 AI 月度配额")
+                        Text("• 50 个云端视频，单视频 500MB / 60 分钟")
+                        Text("• 1000 条个人语料和公共语料库")
                     }
                     .font(.subheadline).foregroundStyle(.whatsubInkMuted)
                     SubscriptionOptionsView(onPurchased: { onPurchased(); dismiss() })
