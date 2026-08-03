@@ -73,6 +73,27 @@ final class FeatureAccessStoreTests: XCTestCase {
         Dictionary(uniqueKeysWithValues: FeatureKey.allCases.map { ($0, state) })
     }
 
+    func testWireModelsDecodeExactBackendKeys() throws {
+        let response = try JSONDecoder().decode(
+            FeatureEntitlementsResponse.self,
+            from: Data("""
+                {
+                  "isPro": false,
+                  "features": {
+                    "quick_chat": "available",
+                    "video_roleplay": "in_progress",
+                    "live_scene": "consumed",
+                    "photo_ai": "available"
+                  }
+                }
+                """.utf8)
+        )
+        XCTAssertEqual(response.features[.quickChat], .available)
+        XCTAssertEqual(response.features[.videoRoleplay], .inProgress)
+        XCTAssertEqual(response.features[.liveScene], .consumed)
+        XCTAssertEqual(Endpoints.features("quick_chat/start").path, "/api/license/features/quick_chat/start")
+    }
+
     func testPresentationMapsEveryServerStateAndUnknownIsNotPro() async {
         let api = FeatureAccessAPISpy(entitlements: .response(.init(
             isPro: false,

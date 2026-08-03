@@ -12,6 +12,7 @@ struct IdentifiedImportURL: Identifiable {
 struct WhatsubMobileApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var store = StoreManager()
+    @StateObject private var featureAccess = FeatureAccessStore()
 
     init() {
         // Force pure-black bars (TabBar + NavigationBar) to match the brand
@@ -38,6 +39,7 @@ struct WhatsubMobileApp: App {
             ContentView()
                 .environmentObject(appState)
                 .environmentObject(store)
+                .environmentObject(featureAccess)
                 .tint(.whatsubAccent)
                 .preferredColorScheme(.dark)
         }
@@ -47,6 +49,7 @@ struct WhatsubMobileApp: App {
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: StoreManager
+    @EnvironmentObject var featureAccess: FeatureAccessStore
     @Environment(\.scenePhase) private var scenePhase
     // `selectedTab` lives on AppState now so the URL handler can drive
     // tab switches from `whatsub://library` / `whatsub://import-queue`
@@ -97,7 +100,11 @@ struct ContentView: View {
         // offline launch behavior + would flag the 60s freeze as a 4.0
         // ("Apps may not freeze on launch") rejection.
         .task(id: appState.isAuthenticated) {
-            guard appState.isAuthenticated else { gateReady = false; return }
+            guard appState.isAuthenticated else {
+                gateReady = false
+                featureAccess.resetMemory()
+                return
+            }
             // 2026-06-11 — was `try? await ...` which silently swallowed every
             // backend /verify failure. Apple's reviewer purchased successfully
             // via StoreKit but the call to /api/license/iap/verify failed
@@ -134,6 +141,7 @@ struct ContentView: View {
                     }
                 }
                 await appState.refreshMe()
+                await refreshFeatureAccess()
             }
             store.start()
             // Enter UI right away. The detached Task refreshes /me in the
@@ -142,7 +150,14 @@ struct ContentView: View {
             // currentUser update from a successful refresh trickles into
             // dependent views on its own.
             gateReady = true
-            Task { await appState.refreshMe() }
+            Task {
+                await appState.refreshMe()
+                await refreshFeatureAccess()
+            }
+        }
+        .onChange(of: store.hasLocalSub) { _ in
+            guard appState.isAuthenticated else { return }
+            Task { await refreshFeatureAccess() }
         }
         // AI consent — presented at the OUTER body level (not inside
         // mainTabs) so the sheet modifier is mounted on a view that's
@@ -258,6 +273,10 @@ struct ContentView: View {
                 if #available(iOS 16.2, *) {
                     Task { await LiveActivityCoordinator.shared.endIfStale() }
                 }
+                Task {
+                    await appState.refreshMe()
+                    await refreshFeatureAccess()
+                }
             }
         }
         .sheet(item: $pendingImport) { item in
@@ -281,8 +300,27 @@ struct ContentView: View {
         // for the build-294 bug rationale. Don't add it here again or the
         // false→true transition gets missed during the mainTabs mount.)
     }
+
+    private func refreshFeatureAccess() async {
+        guard let session = appState.session else {
+            featureAccess.resetMemory()
+            return
+        }
+        await featureAccess.refresh(
+            token: session.sessionToken,
+            email: session.email,
+            localPro: store.hasLocalSub
+        )
+        await featureAccess.retryPendingConsumes(
+            token: session.sessionToken,
+            email: session.email
+        )
+    }
 }
 
 #Preview {
-    ContentView().environmentObject(AppState()).environmentObject(StoreManager())
+    ContentView()
+        .environmentObject(AppState())
+        .environmentObject(StoreManager())
+        .environmentObject(FeatureAccessStore())
 }

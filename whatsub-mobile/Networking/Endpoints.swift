@@ -6,6 +6,7 @@ import Foundation
 enum Endpoints {
     static let authBase = "https://whatsub.eversay.cc/api/license/auth"
     static let iapBase = "https://whatsub.eversay.cc/api/license/iap"
+    static let featuresBase = "https://whatsub.eversay.cc/api/license/features"
     static let corpusBase = "https://whatsub.eversay.cc/api/corpus"
     static let libraryBase = "https://whatsub.eversay.cc/api/library"
     /// Managed-LLM relay (2026-06-04). `/api/llm/v1/chat/completions`
@@ -24,6 +25,7 @@ enum Endpoints {
 
     static func auth(_ path: String) -> URL { URL(string: "\(authBase)/\(path)")! }
     static func iap(_ path: String) -> URL { URL(string: "\(iapBase)/\(path)")! }
+    static func features(_ path: String) -> URL { URL(string: "\(featuresBase)/\(path)")! }
     static func corpus(_ path: String) -> URL { URL(string: "\(corpusBase)/\(path)")! }
     static func library(_ path: String) -> URL { URL(string: "\(libraryBase)/\(path)")! }
     static func llm(_ path: String) -> URL { URL(string: "\(llmBase)/\(path)")! }

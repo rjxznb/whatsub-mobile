@@ -17,7 +17,7 @@ protocol LibraryDesktopReplacementAPI {
 
 /// All backend HTTP lives here. An actor so concurrent calls serialize their
 /// access to the (rare) shared state and so the type is Sendable-safe.
-actor WhatsubAPI: LibraryDesktopReplacementAPI {
+actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI {
     static let shared = WhatsubAPI()
 
     private let session: URLSession
@@ -68,6 +68,43 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI {
     func verifyPurchase(token: String, signedTransactionInfo: String) async throws {
         let body = try JSONEncoder().encode(VerifyPurchaseRequest(signedTransactionInfo: signedTransactionInfo))
         _ = try await post(Endpoints.iap("verify"), body: body, bearer: token)
+    }
+
+    // ----- Pro AI feature trials -----
+
+    func featureEntitlements(token: String) async throws -> FeatureEntitlementsResponse {
+        let data = try await get(Endpoints.features("entitlements"), bearer: token)
+        return try decode(FeatureEntitlementsResponse.self, from: data)
+    }
+
+    func startFeature(_ feature: FeatureKey, token: String) async throws -> FeatureStartResponse {
+        let data = try await post(
+            Endpoints.features("\(feature.rawValue)/start"),
+            body: Data("{}".utf8),
+            bearer: token
+        )
+        return try decode(FeatureStartResponse.self, from: data)
+    }
+
+    func consumeFeature(_ feature: FeatureKey, token: String) async throws {
+        _ = try await postExpectingOk(
+            Endpoints.features("\(feature.rawValue)/consume"),
+            body: Data("{}".utf8),
+            bearer: token
+        )
+    }
+
+    func sendFeatureEvent(
+        _ event: FeatureFunnelEvent,
+        feature: FeatureKey,
+        token: String
+    ) async throws {
+        let body = try JSONEncoder().encode(FeatureEventRequest(event: event))
+        _ = try await postExpectingOk(
+            Endpoints.features("\(feature.rawValue)/event"),
+            body: body,
+            bearer: token
+        )
     }
 
     // ----- Library -----
