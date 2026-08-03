@@ -59,14 +59,25 @@ final class LiveSceneViewModel: ObservableObject {
 
     private let promptClient: LiveScenePromptClient
     private let grader: LiveSceneGrader
+    private var onSuccessfulGrade: () -> Void
+    private var reportedSuccessfulGrade = false
     private var recorder: VoiceActivityRecorder?
 
     init(
         promptClient: LiveScenePromptClient = .live(),
-        grader: LiveSceneGrader = .live()
+        grader: LiveSceneGrader = .live(),
+        onSuccessfulGrade: @escaping () -> Void = {}
     ) {
         self.promptClient = promptClient
         self.grader = grader
+        self.onSuccessfulGrade = onSuccessfulGrade
+    }
+
+    /// The SwiftUI host installs a grant-scoped callback immediately before
+    /// processing the image. Keeping the success boundary in this VM ensures
+    /// the durable consume marker is written before `.review` is published.
+    func setOnSuccessfulGrade(_ handler: @escaping () -> Void) {
+        onSuccessfulGrade = handler
     }
 
     // MARK: - phase transitions
@@ -161,12 +172,18 @@ final class LiveSceneViewModel: ObservableObject {
         Task { await runGrader(scene: scene, prompt: prompt, transcript: cleaned) }
     }
 
-    private func runGrader(scene: SceneContext, prompt: SpeakingPrompt, transcript: String) async {
+    /// Internal for lifecycle tests; callers outside the VM still reach this
+    /// through the recording state machine.
+    func runGrader(scene: SceneContext, prompt: SpeakingPrompt, transcript: String) async {
         let result = await grader.grade(prompt: prompt, userTranscript: transcript)
         switch result {
         case .failure(let f):
             phase = .error(f)
         case .success(let grade):
+            if !reportedSuccessfulGrade {
+                reportedSuccessfulGrade = true
+                onSuccessfulGrade()
+            }
             phase = .review(scene: scene, prompt: prompt, transcript: transcript, grade: grade)
         }
     }
@@ -179,6 +196,7 @@ final class LiveSceneViewModel: ObservableObject {
         recorder = nil
         audioLevel = 0
         capturedImage = nil
+        reportedSuccessfulGrade = false
         phase = .picker
     }
 

@@ -48,9 +48,21 @@ final class PhotoReviewViewModel: ObservableObject {
     private(set) var localPhotoId: String = UUID().uuidString
 
     private let analyzer: PhotoAnalyzer
+    private var onSuccessfulAnalysis: () -> Void
+    private var reportedSuccessfulAnalysis = false
 
-    init(analyzer: PhotoAnalyzer = .live()) {
+    init(
+        analyzer: PhotoAnalyzer = .live(),
+        onSuccessfulAnalysis: @escaping () -> Void = {}
+    ) {
         self.analyzer = analyzer
+        self.onSuccessfulAnalysis = onSuccessfulAnalysis
+    }
+
+    /// Installed by the view after it obtains a flow-scoped access grant.
+    /// The callback runs before `analysis`/`.reviewing` become observable.
+    func setOnSuccessfulAnalysis(_ handler: @escaping () -> Void) {
+        onSuccessfulAnalysis = handler
     }
 
     // MARK: - lifecycle
@@ -63,6 +75,7 @@ final class PhotoReviewViewModel: ObservableObject {
         analysis = nil
         selected.removeAll()
         localPhotoId = UUID().uuidString
+        reportedSuccessfulAnalysis = false
         phase = .ocring
         do {
             let result = try await PhotoOCR.recognize(img)
@@ -88,6 +101,17 @@ final class PhotoReviewViewModel: ObservableObject {
         let result = await analyzer.analyze(ocrText: ocrText)
         switch result {
         case .success(let r):
+            let hasDisplayableContent = !r.translation
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !r.phrases.isEmpty
+            guard hasDisplayableContent else {
+                phase = .error(.message("AI 没有返回可展示的分析，换一张或稍后再试。"))
+                return
+            }
+            if !reportedSuccessfulAnalysis {
+                reportedSuccessfulAnalysis = true
+                onSuccessfulAnalysis()
+            }
             analysis = r
             // Pre-select nothing — user explicitly opts in.
             selected.removeAll()

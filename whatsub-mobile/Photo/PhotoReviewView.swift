@@ -9,6 +9,7 @@ import PhotosUI
 struct PhotoReviewView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var store: StoreManager
+    @EnvironmentObject private var featureAccess: FeatureAccessStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = PhotoReviewViewModel()
 
@@ -20,6 +21,10 @@ struct PhotoReviewView: View {
     /// `.subscribeUpsell` kind. Sheet attached at view root so phase
     /// churn underneath doesn't tear it down.
     @State private var showSubscribe = false
+    @State private var featurePaywallOrigin: FeatureKey?
+    @State private var photoGrant: FeatureAccessGrant?
+    @State private var pendingAnalyze = false
+    @State private var accessMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -54,6 +59,24 @@ struct PhotoReviewView: View {
                             await vm.setImage(img)
                         }
                     }
+                }
+                .sheet(isPresented: $showSubscribe) {
+                    SubscribeSheet(onPurchased: {
+                        Task { await handlePurchaseSuccess() }
+                    })
+                    .environmentObject(store)
+                }
+                .alert(
+                    "暂时无法开始",
+                    isPresented: Binding(
+                        get: { accessMessage != nil },
+                        set: { if !$0 { accessMessage = nil } }
+                    )
+                ) {
+                    Button("重试") { Task { await analyzeWithAccess() } }
+                    Button("取消", role: .cancel) { accessMessage = nil }
+                } message: {
+                    Text(accessMessage ?? "")
                 }
         }
     }
@@ -173,7 +196,7 @@ struct PhotoReviewView: View {
                 .scrollContentBackground(.hidden)
 
                 Button {
-                    Task { await vm.analyze() }
+                    Task { await analyzeWithAccess() }
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "wand.and.stars")
@@ -304,6 +327,7 @@ struct PhotoReviewView: View {
             VStack(spacing: 12) {
                 if failure.kind == .subscribeUpsell {
                     Button {
+                        featurePaywallOrigin = nil
                         showSubscribe = true
                     } label: {
                         Label("订阅 Pro", systemImage: "star.circle.fill")
@@ -326,15 +350,6 @@ struct PhotoReviewView: View {
             .padding(.bottom, 36)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showSubscribe) {
-            SubscribeSheet(onPurchased: {
-                Task {
-                    await appState.refreshMe()
-                    resetToEmpty()
-                }
-            })
-            .environmentObject(store)
-        }
     }
 
     // MARK: - helpers
@@ -359,9 +374,79 @@ struct PhotoReviewView: View {
         pickedImage = nil
         galleryPick = nil
         showCamera = false
+        photoGrant = nil
+        pendingAnalyze = false
         // We can't replace @StateObject; instead drive VM to a clean
         // state. Easiest: dismiss the sheet entirely (re-open gives a
         // fresh VM).
         dismiss()
+    }
+
+    private func analyzeWithAccess() async {
+        pendingAnalyze = true
+        guard let session = appState.session else { return }
+        do {
+            let grant: FeatureAccessGrant
+            if let current = photoGrant, current.matches(.photoAI) {
+                grant = current
+            } else {
+                grant = try await featureAccess.start(
+                    feature: .photoAI,
+                    token: session.sessionToken,
+                    email: session.email,
+                    localPro: store.hasLocalSub
+                )
+                photoGrant = grant
+            }
+
+            let accessStore = featureAccess
+            let state = appState
+            vm.setOnSuccessfulAnalysis { [weak accessStore, weak state] in
+                guard let session = state?.session else { return }
+                accessStore?.recordSuccessfulResult(
+                    feature: .photoAI,
+                    grant: grant,
+                    token: session.sessionToken,
+                    email: session.email
+                )
+            }
+            pendingAnalyze = false
+            accessMessage = nil
+            await vm.analyze()
+        } catch FeatureAccessError.subscriptionRequired {
+            featurePaywallOrigin = .photoAI
+            featureAccess.sendEvent(
+                .paywallShown,
+                feature: .photoAI,
+                token: session.sessionToken
+            )
+            showSubscribe = true
+        } catch FeatureAccessError.unauthorized {
+            pendingAnalyze = false
+            appState.forceLogout()
+        } catch {
+            accessMessage = FeatureAccessError.temporarilyUnavailable.errorDescription
+        }
+    }
+
+    private func handlePurchaseSuccess() async {
+        await appState.refreshMe()
+        if let session = appState.session {
+            await featureAccess.refresh(
+                token: session.sessionToken,
+                email: session.email,
+                localPro: store.hasLocalSub
+            )
+            await featureAccess.retryPendingConsumes(
+                token: session.sessionToken,
+                email: session.email
+            )
+        }
+        photoGrant = nil
+        if pendingAnalyze {
+            await analyzeWithAccess()
+        } else {
+            resetToEmpty()
+        }
     }
 }

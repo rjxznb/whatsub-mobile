@@ -21,6 +21,7 @@ struct LiveSceneView: View {
     @StateObject private var vm = LiveSceneViewModel()
     @EnvironmentObject private var store: StoreManager
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var featureAccess: FeatureAccessStore
 
     // Picker presentation state — local to the view, kept out of vm
     // because they're pure UI surfaces, not business state.
@@ -31,6 +32,10 @@ struct LiveSceneView: View {
     /// `.subscribeUpsell` kind (see RemoteFailure). The 重新选图片 button
     /// stays available alongside; this is opt-in, not blocking.
     @State private var showSubscribe = false
+    @State private var featurePaywallOrigin: FeatureKey?
+    @State private var sceneGrant: FeatureAccessGrant?
+    @State private var pendingSceneImage: UIImage?
+    @State private var accessMessage: String?
 
     /// Progressive-scaffolding 提示 cycle (build 2026-06-06+):
     ///   .none           → only the English prompt + vocab chips visible
@@ -82,7 +87,7 @@ struct LiveSceneView: View {
         .onChange(of: cameraImage) { newImage in
             if let img = newImage {
                 cameraImage = nil
-                Task { await vm.didPickImage(img) }
+                Task { await acceptSceneImage(img) }
             }
         }
         .onChange(of: photoPickerItem) { newItem in
@@ -90,7 +95,7 @@ struct LiveSceneView: View {
             photoPickerItem = nil
             Task {
                 if let img = await PhotoLibraryPicker.resolve(item) {
-                    await vm.didPickImage(img)
+                    await acceptSceneImage(img)
                 }
             }
         }
@@ -127,6 +132,24 @@ struct LiveSceneView: View {
             // after a few seconds of inactivity; we re-prepare after
             // each tap too (see orbBlock).
             pressHaptic.prepare()
+        }
+        .sheet(isPresented: $showSubscribe) {
+            SubscribeSheet(onPurchased: {
+                Task { await handlePurchaseSuccess() }
+            })
+            .environmentObject(store)
+        }
+        .alert(
+            "暂时无法开始",
+            isPresented: Binding(
+                get: { accessMessage != nil },
+                set: { if !$0 { accessMessage = nil } }
+            )
+        ) {
+            Button("重试") { Task { await continuePendingScene() } }
+            Button("取消", role: .cancel) { accessMessage = nil }
+        } message: {
+            Text(accessMessage ?? "")
         }
     }
 
@@ -519,7 +542,7 @@ struct LiveSceneView: View {
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 12) {
                 Button {
-                    vm.restart()
+                    restartFlow()
                 } label: {
                     Text("再来一张")
                         .frame(maxWidth: .infinity)
@@ -606,6 +629,7 @@ struct LiveSceneView: View {
                 switch failure.kind {
                 case .subscribeUpsell:
                     Button {
+                        featurePaywallOrigin = nil
                         showSubscribe = true
                     } label: {
                         Label("订阅 Pro", systemImage: "star.circle.fill")
@@ -614,7 +638,7 @@ struct LiveSceneView: View {
                             .foregroundStyle(.black)
                             .font(.body.weight(.semibold))
                     }
-                    Button("换一张照片") { vm.dismissError() }
+                    Button("换一张照片") { restartFlow() }
                         .font(.subheadline)
                         .foregroundStyle(.whatsubInkMuted)
 
@@ -623,7 +647,7 @@ struct LiveSceneView: View {
                     // themselves. We just point at it; primary button still
                     // restarts the flow.
                     Button {
-                        vm.dismissError()
+                        restartFlow()
                     } label: {
                         Text("换一张照片")
                             .padding(.horizontal, 32).padding(.vertical, 12)
@@ -642,7 +666,7 @@ struct LiveSceneView: View {
                     // (or a future code path skipped it). Reset to picker —
                     // next AI tap will re-trigger the same flow.
                     Button {
-                        vm.dismissError()
+                        restartFlow()
                     } label: {
                         Text("重新选图片")
                             .padding(.horizontal, 32).padding(.vertical, 12)
@@ -658,7 +682,7 @@ struct LiveSceneView: View {
 
                 case .generic:
                     Button {
-                        vm.dismissError()
+                        restartFlow()
                     } label: {
                         Text("重新选图片")
                             .padding(.horizontal, 32).padding(.vertical, 12)
@@ -670,19 +694,85 @@ struct LiveSceneView: View {
             }
             Spacer()
         }
-        // SubscribeSheet attached at the view root so a phase transition
-        // (.error → .picker) mid-sheet doesn't tear it down — same pattern
-        // CorpusView / MeView use.
-        .sheet(isPresented: $showSubscribe) {
-            SubscribeSheet(onPurchased: {
-                Task {
-                    await appState.refreshMe()
-                    // Drop the error and bounce back to the picker so the
-                    // user can immediately retry the action that was gated.
-                    vm.dismissError()
-                }
-            })
-            .environmentObject(store)
+    }
+
+    // MARK: - feature access
+
+    private func acceptSceneImage(_ image: UIImage) async {
+        pendingSceneImage = image
+        await continuePendingScene()
+    }
+
+    private func continuePendingScene() async {
+        guard let image = pendingSceneImage, let session = appState.session else { return }
+        do {
+            let grant: FeatureAccessGrant
+            if let current = sceneGrant, current.matches(.liveScene) {
+                grant = current
+            } else {
+                grant = try await featureAccess.start(
+                    feature: .liveScene,
+                    token: session.sessionToken,
+                    email: session.email,
+                    localPro: store.hasLocalSub
+                )
+                sceneGrant = grant
+            }
+
+            let accessStore = featureAccess
+            let state = appState
+            vm.setOnSuccessfulGrade { [weak accessStore, weak state] in
+                guard let session = state?.session else { return }
+                accessStore?.recordSuccessfulResult(
+                    feature: .liveScene,
+                    grant: grant,
+                    token: session.sessionToken,
+                    email: session.email
+                )
+            }
+            pendingSceneImage = nil
+            accessMessage = nil
+            await vm.didPickImage(image)
+        } catch FeatureAccessError.subscriptionRequired {
+            featurePaywallOrigin = .liveScene
+            featureAccess.sendEvent(
+                .paywallShown,
+                feature: .liveScene,
+                token: session.sessionToken
+            )
+            showSubscribe = true
+        } catch FeatureAccessError.unauthorized {
+            pendingSceneImage = nil
+            appState.forceLogout()
+        } catch {
+            accessMessage = FeatureAccessError.temporarilyUnavailable.errorDescription
+        }
+    }
+
+    private func restartFlow() {
+        sceneGrant = nil
+        pendingSceneImage = nil
+        vm.restart()
+    }
+
+    private func handlePurchaseSuccess() async {
+        await appState.refreshMe()
+        if let session = appState.session {
+            await featureAccess.refresh(
+                token: session.sessionToken,
+                email: session.email,
+                localPro: store.hasLocalSub
+            )
+            await featureAccess.retryPendingConsumes(
+                token: session.sessionToken,
+                email: session.email
+            )
+        }
+        sceneGrant = nil
+        if pendingSceneImage != nil {
+            await continuePendingScene()
+        } else {
+            vm.dismissError()
         }
     }
 }

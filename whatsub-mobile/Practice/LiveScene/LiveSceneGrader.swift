@@ -36,6 +36,9 @@ struct LiveSceneGrader {
         }
         do {
             let wire = try JSONDecoder().decode(WireGrade.self, from: data)
+            guard wire.hasDisplayableContent else {
+                return .failure(.message("AI 返回的评分是空的，再试一次。"))
+            }
             return .success(wire.toModel(expectedVocab: expectedVocab))
         } catch {
             return .failure(.message("AI 返回的内容没读懂，再试一次。"))
@@ -48,6 +51,7 @@ struct LiveSceneGrader {
         let score: Int
         let feedback: String
         let vocabHits: [WireHit]
+        let hasDisplayableContent: Bool
 
         enum CodingKeys: String, CodingKey {
             case score, feedback
@@ -57,15 +61,17 @@ struct LiveSceneGrader {
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             // Score: tolerate string "4" or float 3.5 — round + clamp to 1..5.
+            let explicitScore: Int?
             if let i = try? c.decode(Int.self, forKey: .score) {
-                self.score = max(1, min(5, i))
+                explicitScore = max(1, min(5, i))
             } else if let d = try? c.decode(Double.self, forKey: .score) {
-                self.score = max(1, min(5, Int(d.rounded())))
+                explicitScore = max(1, min(5, Int(d.rounded())))
             } else if let s = try? c.decode(String.self, forKey: .score), let i = Int(s) {
-                self.score = max(1, min(5, i))
+                explicitScore = max(1, min(5, i))
             } else {
-                self.score = 3   // neutral default — failure mode is "couldn't tell"
+                explicitScore = nil
             }
+            self.score = explicitScore ?? 3
             self.feedback = (try? c.decode(String.self, forKey: .feedback)) ?? ""
             // modelAnswer field was removed from the grader prompt — review
             // screen now uses `prompt.sampleAnswer` (pre-computed) instead.
@@ -73,6 +79,9 @@ struct LiveSceneGrader {
             self.vocabHits = (try? c.decode([WireHit].self, forKey: .vocabHits))
                 ?? (try? c.decode([WireHit].self, forKey: .vocab_hits))
                 ?? []
+            self.hasDisplayableContent = explicitScore != nil
+                || !feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !vocabHits.isEmpty
         }
 
         /// Pad / trim to match the expected vocab list so the UI can iterate
