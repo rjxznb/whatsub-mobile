@@ -59,6 +59,7 @@ final class QuickChatViewModel: ObservableObject {
     let progressStore: ProductionProgressStore
     private let driver: EngineDriver
     private let now: () -> Double                  // injectable clock
+    private let onFirstValidAssistantReply: () -> Void
     /// Per-session turn cap. nil = unlimited (only end on explicit close or
     /// LLM error). Set in init. Spec §9 #4 default = 5.
     let maxTurns: Int?
@@ -80,6 +81,7 @@ final class QuickChatViewModel: ObservableObject {
     /// only paid where it's used.
     @Published private(set) var turnIndex: Int = 0
     private var written = false                     // ensure single end-of-session write
+    private var reportedFirstValidAssistantReply = false
     /// How many times VAD timed out with no speech. After 2, end the session.
     private(set) var noSpeechRounds: Int = 0
 
@@ -87,12 +89,14 @@ final class QuickChatViewModel: ObservableObject {
          suggestedTag: String?,
          progressStore: ProductionProgressStore,
          engineDriver: EngineDriver,
+         onFirstValidAssistantReply: @escaping () -> Void = {},
          maxTurns: Int? = 5,
          now: @escaping () -> Double = { Date().timeIntervalSince1970 }) {
         self.phrases = phrases
         self.suggestedTag = suggestedTag
         self.progressStore = progressStore
         self.driver = engineDriver
+        self.onFirstValidAssistantReply = onFirstValidAssistantReply
         self.maxTurns = maxTurns
         self.now = now
     }
@@ -199,7 +203,13 @@ final class QuickChatViewModel: ObservableObject {
         // Typewriter display + TTS — chunk the dialog locally for the
         // streaming-display effect we used to get from the AsyncThrowingStream.
         let dialog = result.dialog
-        if !dialog.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let sanitizedDialog = AssistantTextSanitizer.sanitize(dialog)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sanitizedDialog.isEmpty {
+            if !reportedFirstValidAssistantReply {
+                reportedFirstValidAssistantReply = true
+                onFirstValidAssistantReply()
+            }
             if phase == .thinking { phase = .speaking }
             var displayed = ""
             var sentenceChunker = SentenceChunker()

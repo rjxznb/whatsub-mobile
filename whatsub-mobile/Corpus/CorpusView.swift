@@ -3,6 +3,7 @@ import SwiftUI
 struct CorpusView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: StoreManager
+    @EnvironmentObject var featureAccess: FeatureAccessStore
     @StateObject private var vm = CorpusViewModel()
 
     private var token: String? { appState.session?.sessionToken }
@@ -25,6 +26,8 @@ struct CorpusView: View {
     @State private var quickChatPick: PhraseSelector.Pick?
     @State private var quickChatColdStart: Bool = false
     @State private var showQuickChatLauncher: Bool = false
+    @State private var quickChatGrant: FeatureAccessGrant?
+    @State private var quickChatAccessMessage: String?
     @State private var pendingTurnCap: Int? = 5    // set by the launcher, consumed when sheet opens
     /// Pending delete confirmation — set when the user swipes-to-delete a
     /// flat row OR long-presses → Delete in the grouped view. The alert
@@ -50,7 +53,7 @@ struct CorpusView: View {
                         .accessibilityLabel("添加短语")
                     }
                     Spacer()
-                    Button { tapQuickChat() } label: {
+                    Button { Task { await tapQuickChat() } } label: {
                         Label("对话陪练", systemImage: "bubble.left.and.bubble.right")
                             .font(.subheadline).fontWeight(.semibold)
                             .foregroundStyle(.whatsubAccent)
@@ -107,6 +110,17 @@ struct CorpusView: View {
                 SubscribeSheet(onPurchased: {
                     Task {
                         await appState.refreshMe()
+                        if let session = appState.session {
+                            await featureAccess.refresh(
+                                token: session.sessionToken,
+                                email: session.email,
+                                localPro: store.hasLocalSub
+                            )
+                            await featureAccess.retryPendingConsumes(
+                                token: session.sessionToken,
+                                email: session.email
+                            )
+                        }
                         if let t = token { await vm.reload(token: t) }
                     }
                 })
@@ -122,9 +136,19 @@ struct CorpusView: View {
             // applies — fullScreenCover doesn't support swipe-to-dismiss
             // at all, so the keyboard-dismiss gesture and the chat lifecycle
             // can't fight over the same touch.
-            .fullScreenCover(item: $quickChatPick) { pick in
-                QuickChatView(phrases: pick.phrases, suggestedTag: pick.suggestedTag, maxTurns: pendingTurnCap)
+            .fullScreenCover(item: $quickChatPick, onDismiss: {
+                quickChatGrant = nil
+            }) { pick in
+                if let grant = quickChatGrant {
+                    QuickChatView(
+                        phrases: pick.phrases,
+                        suggestedTag: pick.suggestedTag,
+                        featureGrant: grant,
+                        onFirstValidReply: recordQuickChatSuccess,
+                        maxTurns: pendingTurnCap
+                    )
                     .environmentObject(appState)
+                }
             }
             .sheet(isPresented: $showQuickChatLauncher) {
                 QuickChatLauncherView(mine: vm.mine) { pick, turnCap in
@@ -136,6 +160,17 @@ struct CorpusView: View {
                 Button("好") { quickChatColdStart = false }
             } message: {
                 Text("先用插件划词收藏 3 个以上短语就可以开练。")
+            }
+            .alert(
+                "暂时无法开始",
+                isPresented: Binding(
+                    get: { quickChatAccessMessage != nil },
+                    set: { if !$0 { quickChatAccessMessage = nil } }
+                )
+            ) {
+                Button("好", role: .cancel) { quickChatAccessMessage = nil }
+            } message: {
+                Text(quickChatAccessMessage ?? "")
             }
             .alert(
                 "从云端删除？",
@@ -294,14 +329,44 @@ struct CorpusView: View {
         }
     }
 
-    private func tapQuickChat() {
+    private func tapQuickChat() async {
         // Launcher handles both auto-pick and manual flows + turn-cap choice.
         if vm.mine.count < 2 {
             // Even manual mode needs 2 phrases — cold-start prompt.
             quickChatColdStart = true
-        } else {
-            showQuickChatLauncher = true
+            return
         }
+        guard let session = appState.session else { return }
+        do {
+            quickChatGrant = try await featureAccess.start(
+                feature: .quickChat,
+                token: session.sessionToken,
+                email: session.email,
+                localPro: store.hasLocalSub
+            )
+            showQuickChatLauncher = true
+        } catch FeatureAccessError.subscriptionRequired {
+            featureAccess.sendEvent(
+                .paywallShown,
+                feature: .quickChat,
+                token: session.sessionToken
+            )
+            showSubscribe = true
+        } catch FeatureAccessError.unauthorized {
+            appState.forceLogout()
+        } catch {
+            quickChatAccessMessage = FeatureAccessError.temporarilyUnavailable.errorDescription
+        }
+    }
+
+    private func recordQuickChatSuccess(_ grant: FeatureAccessGrant) {
+        guard grant.matches(.quickChat), let session = appState.session else { return }
+        featureAccess.recordSuccessfulResult(
+            feature: .quickChat,
+            grant: grant,
+            token: session.sessionToken,
+            email: session.email
+        )
     }
 
     private func centered(icon: String, title: String, sub: String) -> some View {

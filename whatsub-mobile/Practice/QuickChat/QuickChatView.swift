@@ -20,6 +20,7 @@ private struct TranslationTarget: Identifiable {
 struct QuickChatView: View {
     let phrases: [SessionPhrase]
     let suggestedTag: String?
+    private let featureGrant: FeatureAccessGrant
     /// True when invoked via the roleplay init — renders a "Turn N / max"
     /// pacing indicator above the chip strip so the user can feel the
     /// session approaching its 8-turn cap. Phrase-drill mode hides it
@@ -60,7 +61,10 @@ struct QuickChatView: View {
     private let releaseHaptic = UIImpactFeedbackGenerator(style: .light)
     @State private var continuousHaptic = ContinuousHaptic()
 
-    init(phrases: [SessionPhrase], suggestedTag: String?, maxTurns: Int? = 5,
+    init(phrases: [SessionPhrase], suggestedTag: String?,
+         featureGrant: FeatureAccessGrant,
+         onFirstValidReply: @escaping (FeatureAccessGrant) -> Void,
+         maxTurns: Int? = 5,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
          settings: LlmSettings = LlmSettingsStore.load()) {
         if phrases.isEmpty {
@@ -68,6 +72,7 @@ struct QuickChatView: View {
         }
         self.phrases = phrases
         self.suggestedTag = suggestedTag
+        self.featureGrant = featureGrant
         self.displayTurnCounter = false
         let client = ChatCompletionsClient(settings: settings)
         let systemPrompt = QuickChatPrompts.systemPrompt(phrases: phrases, suggestedTag: suggestedTag)
@@ -76,6 +81,7 @@ struct QuickChatView: View {
             phrases: phrases, suggestedTag: suggestedTag,
             progressStore: progressStore,
             engineDriver: .live(engine),
+            onFirstValidAssistantReply: { onFirstValidReply(featureGrant) },
             maxTurns: maxTurns
         ))
         // (showCompliance init removed 2026-06-09 — see field declaration.)
@@ -90,11 +96,14 @@ struct QuickChatView: View {
     init(roleplayScenarioTitle: String,
          vocabPhrases: [SessionPhrase],
          systemPrompt: String,
+         featureGrant: FeatureAccessGrant,
+         onFirstValidReply: @escaping (FeatureAccessGrant) -> Void,
          maxTurns: Int? = 8,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
          settings: LlmSettings = LlmSettingsStore.load()) {
         self.phrases = vocabPhrases
         self.suggestedTag = roleplayScenarioTitle
+        self.featureGrant = featureGrant
         self.displayTurnCounter = true
         let client = ChatCompletionsClient(settings: settings)
         let engine = ConversationEngine(client: client, systemPrompt: systemPrompt)
@@ -102,6 +111,7 @@ struct QuickChatView: View {
             phrases: vocabPhrases, suggestedTag: roleplayScenarioTitle,
             progressStore: progressStore,
             engineDriver: .live(engine),
+            onFirstValidAssistantReply: { onFirstValidReply(featureGrant) },
             maxTurns: maxTurns
         ))
         // (showCompliance init removed 2026-06-09 — see field declaration.)

@@ -22,6 +22,7 @@ struct RoleplayTabView: View {
 
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var store: StoreManager
+    @EnvironmentObject private var featureAccess: FeatureAccessStore
     @StateObject private var vm: RoleplayTabViewModel
     @State private var loadedCorpusPhrases: [String] = []
     @State private var corpusLoaded = false
@@ -29,6 +30,8 @@ struct RoleplayTabView: View {
     /// for tier-related reasons. Attached at view root so phase transitions
     /// don't tear it down.
     @State private var showSubscribe = false
+    @State private var sessionGrant: FeatureAccessGrant?
+    @State private var accessMessage: String?
 
     init(entry: LibraryEntryDetail, onSessionStart: (() -> Void)? = nil) {
         self.entry = entry
@@ -61,8 +64,7 @@ struct RoleplayTabView: View {
             }
         }
         .task(id: entry.id) {
-            await loadCorpusPhrasesIfNeeded()
-            await vm.loadIfNeeded()
+            await prepareAccessAndLoad()
         }
         // fullScreenCover (NOT sheet) for the session — the orb dialogue
         // is the focal experience, and on iPad a regular sheet renders as
@@ -70,19 +72,39 @@ struct RoleplayTabView: View {
         // for the "I'm in a conversation" mental model. Same orientation
         // shift QuickChat got 2026-06-07.
         .fullScreenCover(item: $vm.picked) { scenario in
-            RoleplaySessionView(scenario: scenario)
+            if let grant = sessionGrant {
+                RoleplaySessionView(
+                    scenario: scenario,
+                    featureGrant: grant,
+                    onFirstValidReply: recordRoleplaySuccess
+                )
                 .onAppear { onSessionStart?() }
-                .onDisappear { vm.dismissSession() }
+                .onDisappear {
+                    vm.dismissSession()
+                    sessionGrant = nil
+                }
+            }
         }
         .sheet(isPresented: $showSubscribe) {
             SubscribeSheet(onPurchased: {
                 Task {
                     await appState.refreshMe()
-                    // Retry the LLM-gated path immediately.
-                    await vm.regenerate()
+                    await regenerateWithAccess()
                 }
             })
             .environmentObject(store)
+        }
+        .alert(
+            "暂时无法开始",
+            isPresented: Binding(
+                get: { accessMessage != nil },
+                set: { if !$0 { accessMessage = nil } }
+            )
+        ) {
+            Button("重试") { Task { await prepareAccessAndLoad() } }
+            Button("取消", role: .cancel) { accessMessage = nil }
+        } message: {
+            Text(accessMessage ?? "")
         }
     }
 
@@ -100,7 +122,7 @@ struct RoleplayTabView: View {
             LazyVStack(spacing: 12) {
                 ForEach(vm.scenarios) { s in
                     RoleplayScenarioCard(scenario: s) {
-                        vm.pick(s)
+                        Task { await pickScenario(s) }
                     }
                 }
 
@@ -117,7 +139,7 @@ struct RoleplayTabView: View {
                             .foregroundStyle(.whatsubInkFaint)
                     }
                     Button {
-                        Task { await vm.regenerate() }
+                        Task { await regenerateWithAccess() }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.clockwise")
@@ -167,6 +189,61 @@ struct RoleplayTabView: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 12)
+    }
+
+    // MARK: - feature access
+
+    private func prepareAccessAndLoad() async {
+        guard await obtainGrantIfNeeded() else { return }
+        await loadCorpusPhrasesIfNeeded()
+        await vm.loadIfNeeded()
+    }
+
+    private func pickScenario(_ scenario: RoleplayScenario) async {
+        guard await obtainGrantIfNeeded() else { return }
+        vm.pick(scenario)
+    }
+
+    private func regenerateWithAccess() async {
+        guard await obtainGrantIfNeeded() else { return }
+        await vm.regenerate()
+    }
+
+    private func obtainGrantIfNeeded() async -> Bool {
+        if sessionGrant?.matches(.videoRoleplay) == true { return true }
+        guard let session = appState.session else { return false }
+        do {
+            sessionGrant = try await featureAccess.start(
+                feature: .videoRoleplay,
+                token: session.sessionToken,
+                email: session.email,
+                localPro: store.hasLocalSub
+            )
+            accessMessage = nil
+            return true
+        } catch FeatureAccessError.subscriptionRequired {
+            featureAccess.sendEvent(
+                .paywallShown,
+                feature: .videoRoleplay,
+                token: session.sessionToken
+            )
+            showSubscribe = true
+        } catch FeatureAccessError.unauthorized {
+            appState.forceLogout()
+        } catch {
+            accessMessage = FeatureAccessError.temporarilyUnavailable.errorDescription
+        }
+        return false
+    }
+
+    private func recordRoleplaySuccess(_ grant: FeatureAccessGrant) {
+        guard grant.matches(.videoRoleplay), let session = appState.session else { return }
+        featureAccess.recordSuccessfulResult(
+            feature: .videoRoleplay,
+            grant: grant,
+            token: session.sessionToken,
+            email: session.email
+        )
     }
 
     // MARK: - data loading

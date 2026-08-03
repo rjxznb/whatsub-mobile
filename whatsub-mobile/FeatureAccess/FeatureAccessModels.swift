@@ -21,6 +21,10 @@ enum FeatureAccessKind: String, Codable, Equatable {
 struct FeatureAccessGrant: Equatable {
     let feature: FeatureKey
     let access: FeatureAccessKind
+
+    func matches(_ expectedFeature: FeatureKey) -> Bool {
+        feature == expectedFeature
+    }
 }
 
 enum FeatureEntryPresentation: Equatable {
