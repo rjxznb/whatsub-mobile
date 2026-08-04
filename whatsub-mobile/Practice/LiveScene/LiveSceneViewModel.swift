@@ -115,6 +115,11 @@ final class LiveSceneViewModel: ObservableObject {
     /// returns immediately; we drive UI via `phase` + `audioLevel`.
     func startRecording() {
         guard case let .ready(scene, prompt) = phase else { return }
+        // A tab switch cancels in-flight work but intentionally preserves a
+        // stable prompt. Starting another recording reactivates that prompt
+        // under a fresh generation so its grader can publish safely.
+        flowActive = true
+        flowGeneration &+= 1
         // Fresh attempt — clear the "刚才没听清" banner if it's up.
         noSpeechWarning = false
         let rec = VoiceActivityRecorder()
@@ -212,6 +217,29 @@ final class LiveSceneViewModel: ObservableObject {
         capturedImage = nil
         reportedSuccessfulGrade = false
         phase = .picker
+    }
+
+    /// The inline camera tab is no longer visible. Cancel only work that may
+    /// still publish a result; preserve already-stable prompts/reviews so the
+    /// user can continue after returning to the tab.
+    func cancelInFlightWork() {
+        flowActive = false
+        flowGeneration &+= 1
+        recorder?.cancel()
+        recorder = nil
+        audioLevel = 0
+        noSpeechWarning = false
+
+        switch phase {
+        case .classifying, .prompting:
+            capturedImage = nil
+            phase = .picker
+        case .recording(let scene, let prompt, _),
+             .grading(let scene, let prompt, _):
+            phase = .ready(scene: scene, prompt: prompt)
+        case .picker, .ready, .review, .error:
+            break
+        }
     }
 
     /// Error state → go back to picker. Same shape as restart() — we keep

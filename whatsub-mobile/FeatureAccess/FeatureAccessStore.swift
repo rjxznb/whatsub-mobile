@@ -15,6 +15,10 @@ final class FeatureAccessStore: ObservableObject {
     private let persistence: FeatureAccessPersistence
     private var activeAccount: String?
     private var accountGeneration: UInt64 = 0
+    /// Orders entitlement refreshes within one account activation. Account
+    /// generation rejects cross-account responses; this revision also rejects
+    /// an older same-account request that happens to finish last.
+    private var refreshRevision: UInt64 = 0
     /// True only after this account was checked by the server during the
     /// current in-memory activation. A disk cache may label an entry, but a
     /// stale cached `consumed` value must not itself open a paywall when the
@@ -44,12 +48,14 @@ final class FeatureAccessStore: ObservableObject {
     }
 
     /// Cache-first, then server refresh. Late responses are discarded if the
-    /// signed-in account changed while the request was in flight.
+    /// account changed or a newer refresh started while this one was in flight.
     func refresh(token: String, email: String, localPro: Bool) async {
         let context = activate(email: email)
+        refreshRevision &+= 1
+        let revision = refreshRevision
         do {
             let response = try await api.featureEntitlements(token: token)
-            guard isCurrent(context) else { return }
+            guard isCurrent(context), refreshRevision == revision else { return }
             var features = response.features
             for pending in persistence.pendingConsumes(email: email) {
                 features[pending] = .consumed
@@ -63,7 +69,7 @@ final class FeatureAccessStore: ObservableObject {
             entitlementUnavailable = false
             persistSnapshotBestEffort(email: email)
         } catch {
-            guard isCurrent(context) else { return }
+            guard isCurrent(context), refreshRevision == revision else { return }
             snapshotIsFresh = false
             entitlementUnavailable = snapshot == nil
         }
@@ -184,6 +190,7 @@ final class FeatureAccessStore: ObservableObject {
     func resetMemory() {
         activeAccount = nil
         accountGeneration &+= 1
+        refreshRevision &+= 1
         snapshot = nil
         snapshotIsFresh = false
         entitlementUnavailable = true

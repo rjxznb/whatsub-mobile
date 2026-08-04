@@ -128,6 +128,13 @@ final class QuickChatViewModel: ObservableObject {
         Speaker.stop()
     }
 
+    /// Called synchronously from the destructive confirmation action before
+    /// its asynchronous persistence/dismiss task is scheduled. This closes
+    /// the actor scheduling window in which a late reply could still publish.
+    func prepareToEndSession() {
+        cancelSession()
+    }
+
     /// Mark a phrase as correctly used (manual override "我说对了").
     /// Spec §6.4: takes the same code path as a correct verdict.
     func manuallyConfirm(_ phraseNormalized: String) {

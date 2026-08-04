@@ -242,6 +242,7 @@ struct QuickChatView: View {
                 Button("结束", role: .destructive) {
                     vadCoordinator.cancel()
                     Speaker.stop()
+                    vm.prepareToEndSession()
                     Task {
                         await vm.endSession()
                         Speaker.releaseSession()

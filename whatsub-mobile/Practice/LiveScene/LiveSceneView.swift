@@ -105,14 +105,11 @@ struct LiveSceneView: View {
         .onChange(of: phaseKey(vm.phase)) { _ in
             hintLevel = .none
         }
-        // Don't tear down on .onDisappear — tab switches fire it too, and
-        // we want the prompt + captured image to persist when the user
-        // comes back to this tab. The recorder cleans up its own audio
-        // session on each endRecording() call, so a tab switch mid-prompt
-        // leaks nothing. (If the user is HOLDING the orb during a tab
-        // switch — rare — the recorder's 30s hardCap or the next press's
-        // teardown cleans up; not worth special-casing.)
-        //
+        // Stable prompt/review state survives a tab switch, but active work
+        // must be invalidated so a late LLM result cannot publish or consume.
+        .onChange(of: appState.selectedTab) { selectedTab in
+            if selectedTab != 2 { vm.cancelInFlightWork() }
+        }
         // **Pre-warm the AVAudioSession on view appear** — every prior
         // orb attempt (#7-#9) showed the UIControl/UIView gesture
         // getting killed within ~50-150ms of recorder.start(), which
