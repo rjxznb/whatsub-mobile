@@ -46,7 +46,13 @@ struct LiveSceneView: View {
     /// .onChange below) — past hints shouldn't leak across exercises.
     @State private var hintLevel: HintLevel = .none
 
-    init(viewModel: LiveSceneViewModel = LiveSceneViewModel()) {
+    @MainActor
+    init() {
+        _vm = StateObject(wrappedValue: LiveSceneViewModel())
+    }
+
+    @MainActor
+    init(viewModel: LiveSceneViewModel) {
         _vm = StateObject(wrappedValue: viewModel)
     }
 
