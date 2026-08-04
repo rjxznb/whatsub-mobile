@@ -87,4 +87,33 @@ final class LiveSceneTrialLifecycleTests: XCTestCase {
         XCTAssertEqual(callbackCount, 0)
         XCTAssertEqual(viewModel.phase, .picker)
     }
+
+    func testLeavingCameraTabIgnoresLateGrade() async {
+        actor GradeGate {
+            var continuation: CheckedContinuation<String, Never>?
+            func wait() async -> String { await withCheckedContinuation { continuation = $0 } }
+            func isWaiting() -> Bool { continuation != nil }
+            func finish() {
+                continuation?.resume(returning: "{\"score\":4,\"feedback\":\"late\",\"vocabHits\":[]}")
+                continuation = nil
+            }
+        }
+        let gate = GradeGate()
+        var callbackCount = 0
+        let viewModel = LiveSceneViewModel(
+            grader: LiveSceneGrader { _ in await gate.wait() },
+            onSuccessfulGrade: { callbackCount += 1; return true }
+        )
+        let task = Task {
+            await viewModel.runGrader(scene: scene, prompt: prompt, transcript: "A street")
+        }
+        while !(await gate.isWaiting()) { await Task.yield() }
+
+        viewModel.cancelInFlightWork()
+        await gate.finish()
+        await task.value
+
+        XCTAssertEqual(callbackCount, 0)
+        if case .review = viewModel.phase { XCTFail("late grade must not be published") }
+    }
 }

@@ -104,6 +104,34 @@ private actor DeferredFeatureAccessAPI: FeatureAccessAPI {
     }
 }
 
+private actor ReorderedFeatureAccessAPI: FeatureAccessAPI {
+    private var continuations: [String: CheckedContinuation<FeatureEntitlementsResponse, Error>] = [:]
+
+    func featureEntitlements(token: String) async throws -> FeatureEntitlementsResponse {
+        try await withCheckedThrowingContinuation { continuation in
+            continuations[token] = continuation
+        }
+    }
+
+    func startFeature(_ feature: FeatureKey, token: String) async throws -> FeatureStartResponse {
+        .init(featureKey: feature, access: .trial, state: .inProgress)
+    }
+
+    func consumeFeature(_ feature: FeatureKey, token: String) async throws {}
+
+    func sendFeatureEvent(
+        _ event: FeatureFunnelEvent,
+        feature: FeatureKey,
+        token: String
+    ) async throws {}
+
+    func hasRequest(token: String) -> Bool { continuations[token] != nil }
+
+    func finish(token: String, response: FeatureEntitlementsResponse) {
+        continuations.removeValue(forKey: token)?.resume(returning: response)
+    }
+}
+
 @MainActor
 final class FeatureAccessStoreTests: XCTestCase {
     private func tempURL() -> URL {
@@ -408,5 +436,34 @@ final class FeatureAccessStoreTests: XCTestCase {
 
         XCTAssertTrue(persistence.pendingConsumes(email: "alice@x.com").isEmpty)
         XCTAssertEqual(persistence.pendingConsumes(email: "bob@x.com"), Set([.photoAI]))
+    }
+
+    func testOlderRefreshCannotOverwriteNewerResponseForSameAccount() async {
+        let api = ReorderedFeatureAccessAPI()
+        let store = FeatureAccessStore(api: api, persistence: .init(fileURL: tempURL()))
+
+        let older = Task {
+            await store.refresh(token: "older", email: "same@x.com", localPro: false)
+        }
+        while !(await api.hasRequest(token: "older")) { await Task.yield() }
+
+        let newer = Task {
+            await store.refresh(token: "newer", email: "same@x.com", localPro: false)
+        }
+        while !(await api.hasRequest(token: "newer")) { await Task.yield() }
+
+        await api.finish(token: "newer", response: .init(
+            isPro: false,
+            features: allStates(.available)
+        ))
+        await newer.value
+        await api.finish(token: "older", response: .init(
+            isPro: true,
+            features: allStates(.consumed)
+        ))
+        await older.value
+
+        XCTAssertEqual(store.snapshot?.isPro, false)
+        XCTAssertEqual(store.presentation(for: .quickChat, localPro: false), .freeTrial)
     }
 }
