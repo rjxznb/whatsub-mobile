@@ -234,7 +234,7 @@ git commit -m "feat: centralize iOS AI feature access"
 - Create: `whatsub-mobileTests/FeatureSessionGateTests.swift`
 
 **Interfaces:**
-- `QuickChatView` receives `featureGrant: FeatureAccessGrant` and `onFirstValidReply: (FeatureAccessGrant) -> Void`.
+- `QuickChatView` receives `featureGrant: FeatureAccessGrant` and `onFirstValidReply: (FeatureAccessGrant) -> Bool`; false prevents publication when the durable marker cannot be written or the account changed.
 - `QuickChatViewModel` receives `onFirstValidAssistantReply: () -> Void` and calls it once per VM lifetime before typewriter display of the first non-empty sanitized assistant reply.
 - Corpus holds the quick-chat grant only for the presented full-screen session and clears it on dismiss.
 - Roleplay starts access before scenario work, passes a `videoRoleplay` grant into the session, clears it on session dismiss, and rechecks before a second session.

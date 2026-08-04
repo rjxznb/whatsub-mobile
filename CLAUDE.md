@@ -265,10 +265,13 @@ bypasses feature access.
 per-account snapshot from `Documents/feature_access.json`, merges server Pro with
 `StoreManager.hasLocalSub`, calls `/api/license/features/*`, and persists only
 entitlement states plus pending consumes. Grants are in-memory and scoped to one
-feature flow; prompts, replies, transcripts, images, and API keys are never
-written by this layer. A free first start always requires a successful server
-call. Cached/locally verified Pro remains usable offline; known consumed free
-state opens the subscription sheet without another start request.
+feature plus the normalized account email; a response or callback from a prior
+login is discarded. Prompts, replies, transcripts, images, and API keys are
+never written by this layer. A free first start always requires a successful
+server call. Cached/locally verified Pro remains usable offline. A consumed
+state only short-circuits to the subscription sheet when it was server-verified
+during the current account activation or has a durable local pending-consume
+marker; stale disk cache plus network failure shows retry rather than a paywall.
 
 The successful-result boundaries are intentionally inside the relevant view
 models and run before the visible result is published:
@@ -280,11 +283,14 @@ models and run before the visible result is published:
 - Photo AI: non-empty translation or phrase analysis immediately before
   `analysis`/`.reviewing`; camera/gallery and on-device OCR remain free.
 
-At those boundaries `recordSuccessfulResult` synchronously writes a pending
-consume marker and locally marks the feature consumed before scheduling the
+At those boundaries `recordSuccessfulResult` synchronously and atomically writes
+a pending consume marker and locally marks the feature consumed before scheduling the
 idempotent network request. Login, foreground, entitlement refresh, and purchase
 refresh retry pending consumes. Failed, timed-out, malformed, empty, or canceled
-flows stay `in_progress`. The current open session retains its grant after
+flows stay `in_progress`. If the marker cannot be written, the result fails
+closed and is not displayed. View-model generation checks also discard AI/OCR
+responses arriving after dismiss, restart, logout, or an account switch. The
+current open session retains its grant after
 consumption; starting another session/photo requires a fresh check.
 
 `FeatureTrialBadge` renders only `免费体验 1 次` for available and
@@ -293,7 +299,11 @@ Only exact `feature_subscription_required` opens the feature paywall and emits
 `paywall_shown`; network uncertainty shows retry copy. A StoreKit success uses
 local Pro immediately, refreshes `/me` + feature entitlements, retries pending
 consumes, and emits `purchase_success` only for the feature that opened that
-paywall. Prices remain StoreKit-derived. Release backend schema/API first, then
+paywall. Immediate local Pro is account-scoped by comparing the transaction's
+`appAccountToken`; another whatSub account cannot borrow a device entitlement.
+Feature purchase origin survives StoreKit `.pending`, and a backend JWS
+registration failure raises a global explicit alert instead of silently asking
+the user to buy again. Prices remain StoreKit-derived. Release backend schema/API first, then
 the iOS binary; never ship the gate before the backend is live.
 
 ## Companion docs
