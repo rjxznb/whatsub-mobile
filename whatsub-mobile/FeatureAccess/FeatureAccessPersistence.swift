@@ -33,12 +33,13 @@ final class FeatureAccessPersistence {
         file.accounts[Self.accountKey(email)]?.snapshot
     }
 
-    func store(snapshot: FeatureAccessSnapshot, for email: String) {
-        let key = Self.accountKey(email)
-        var account = file.accounts[key] ?? FeatureAccessAccountFile()
-        account.snapshot = snapshot
-        file.accounts[key] = account
-        save()
+    func store(snapshot: FeatureAccessSnapshot, for email: String) throws {
+        try update { next in
+            let key = Self.accountKey(email)
+            var account = next.accounts[key] ?? FeatureAccessAccountFile()
+            account.snapshot = snapshot
+            next.accounts[key] = account
+        }
     }
 
     func pendingConsumes(email: String) -> Set<FeatureKey> {
@@ -47,29 +48,54 @@ final class FeatureAccessPersistence {
 
     /// Synchronous + atomic on purpose: the crash-retry marker must be on
     /// disk before a valuable AI result is allowed to become visible.
-    func addPendingConsume(_ feature: FeatureKey, email: String) {
-        let key = Self.accountKey(email)
-        var account = file.accounts[key] ?? FeatureAccessAccountFile()
-        account.pendingConsumes.insert(feature)
-        file.accounts[key] = account
-        save()
+    func addPendingConsume(_ feature: FeatureKey, email: String) throws {
+        try update { next in
+            let key = Self.accountKey(email)
+            var account = next.accounts[key] ?? FeatureAccessAccountFile()
+            account.pendingConsumes.insert(feature)
+            next.accounts[key] = account
+        }
     }
 
-    func removePendingConsume(_ feature: FeatureKey, email: String) {
-        let key = Self.accountKey(email)
-        guard var account = file.accounts[key] else { return }
-        account.pendingConsumes.remove(feature)
-        file.accounts[key] = account
-        save()
+    func removePendingConsume(_ feature: FeatureKey, email: String) throws {
+        guard file.accounts[Self.accountKey(email)] != nil else { return }
+        try update { next in
+            let key = Self.accountKey(email)
+            guard var account = next.accounts[key] else { return }
+            account.pendingConsumes.remove(feature)
+            next.accounts[key] = account
+        }
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(file) else { return }
-        try? FileManager.default.createDirectory(
+    func removeAccount(email: String) throws {
+        guard file.accounts[Self.accountKey(email)] != nil else { return }
+        do {
+            try update { next in
+                next.accounts.removeValue(forKey: Self.accountKey(email))
+            }
+        } catch {
+            // Account deletion is a privacy boundary. If rewriting the
+            // account map fails, discard the whole cache instead of retaining
+            // the deleted account's trial markers. Other accounts simply
+            // rehydrate their small snapshots from the server.
+            try FileManager.default.removeItem(at: fileURL)
+            file = FeatureAccessFile()
+        }
+    }
+
+    /// Write a copy first and only publish it to memory after the atomic disk
+    /// write succeeds. This prevents an I/O failure from looking durable for
+    /// the rest of the process while being absent after a relaunch.
+    private func update(_ mutate: (inout FeatureAccessFile) -> Void) throws {
+        var next = file
+        mutate(&next)
+        let data = try JSONEncoder().encode(next)
+        try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try? data.write(to: fileURL, options: .atomic)
+        try data.write(to: fileURL, options: .atomic)
+        file = next
     }
 
     private static func load(_ url: URL) -> FeatureAccessFile {

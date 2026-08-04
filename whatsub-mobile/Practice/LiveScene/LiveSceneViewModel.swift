@@ -59,14 +59,16 @@ final class LiveSceneViewModel: ObservableObject {
 
     private let promptClient: LiveScenePromptClient
     private let grader: LiveSceneGrader
-    private var onSuccessfulGrade: () -> Void
+    private var onSuccessfulGrade: () -> Bool
     private var reportedSuccessfulGrade = false
+    private var flowGeneration: UInt64 = 0
+    private var flowActive = true
     private var recorder: VoiceActivityRecorder?
 
     init(
         promptClient: LiveScenePromptClient = .live(),
         grader: LiveSceneGrader = .live(),
-        onSuccessfulGrade: @escaping () -> Void = {}
+        onSuccessfulGrade: @escaping () -> Bool = { true }
     ) {
         self.promptClient = promptClient
         self.grader = grader
@@ -76,7 +78,7 @@ final class LiveSceneViewModel: ObservableObject {
     /// The SwiftUI host installs a grant-scoped callback immediately before
     /// processing the image. Keeping the success boundary in this VM ensures
     /// the durable consume marker is written before `.review` is published.
-    func setOnSuccessfulGrade(_ handler: @escaping () -> Void) {
+    func setOnSuccessfulGrade(_ handler: @escaping () -> Bool) {
         onSuccessfulGrade = handler
     }
 
@@ -84,9 +86,13 @@ final class LiveSceneViewModel: ObservableObject {
 
     /// Picker delivered an image. Run Vision → LLM prompt-derivation.
     func didPickImage(_ image: UIImage) async {
+        flowActive = true
+        flowGeneration &+= 1
+        let generation = flowGeneration
         capturedImage = image          // keep for thumbnail render
         phase = .classifying
         let classifyResult = await SceneClassifier.classify(image)
+        guard isCurrent(generation) else { return }
         switch classifyResult {
         case .failure(let f):
             phase = .error(f)
@@ -94,6 +100,7 @@ final class LiveSceneViewModel: ObservableObject {
         case .success(let scene):
             phase = .prompting
             let promptResult = await promptClient.derive(scene: scene)
+            guard isCurrent(generation) else { return }
             switch promptResult {
             case .failure(let f):
                 phase = .error(f)
@@ -175,14 +182,19 @@ final class LiveSceneViewModel: ObservableObject {
     /// Internal for lifecycle tests; callers outside the VM still reach this
     /// through the recording state machine.
     func runGrader(scene: SceneContext, prompt: SpeakingPrompt, transcript: String) async {
+        let generation = flowGeneration
         let result = await grader.grade(prompt: prompt, userTranscript: transcript)
+        guard isCurrent(generation) else { return }
         switch result {
         case .failure(let f):
             phase = .error(f)
         case .success(let grade):
             if !reportedSuccessfulGrade {
+                guard onSuccessfulGrade() else {
+                    phase = .error(.message("暂时无法保存免费体验状态。请释放一些设备存储空间后重试。"))
+                    return
+                }
                 reportedSuccessfulGrade = true
-                onSuccessfulGrade()
             }
             phase = .review(scene: scene, prompt: prompt, transcript: transcript, grade: grade)
         }
@@ -192,6 +204,8 @@ final class LiveSceneViewModel: ObservableObject {
     /// the user can pick a new photo (or the same one with a fresh Vision
     /// pass — Vision results are cheap so we don't cache).
     func restart() {
+        flowActive = false
+        flowGeneration &+= 1
         recorder?.cancel()
         recorder = nil
         audioLevel = 0
@@ -209,8 +223,14 @@ final class LiveSceneViewModel: ObservableObject {
     /// Sheet is being torn down — make sure the recorder isn't left
     /// holding the audio session open.
     func tearDown() {
+        flowActive = false
+        flowGeneration &+= 1
         recorder?.cancel()
         recorder = nil
         capturedImage = nil
+    }
+
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        flowActive && flowGeneration == generation && !Task.isCancelled
     }
 }

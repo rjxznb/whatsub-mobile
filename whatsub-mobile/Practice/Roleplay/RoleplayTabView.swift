@@ -99,16 +99,8 @@ struct RoleplayTabView: View {
             isPresented: $showSubscribe,
             onDismiss: { featurePaywallOrigin = nil }
         ) {
-            SubscribeSheet(onPurchased: {
-                let origin = featurePaywallOrigin
+            SubscribeSheet(featureOrigin: featurePaywallOrigin, onPurchased: {
                 Task {
-                    if let origin, let session = appState.session {
-                        featureAccess.sendEvent(
-                            .purchaseSuccess,
-                            feature: origin,
-                            token: session.sessionToken
-                        )
-                    }
                     await appState.refreshMe()
                     if let session = appState.session {
                         await featureAccess.refresh(
@@ -244,8 +236,8 @@ struct RoleplayTabView: View {
     }
 
     private func obtainGrantIfNeeded() async -> Bool {
-        if sessionGrant?.matches(.videoRoleplay) == true { return true }
         guard let session = appState.session else { return false }
+        if sessionGrant?.matches(.videoRoleplay, email: session.email) == true { return true }
         do {
             sessionGrant = try await featureAccess.start(
                 feature: .videoRoleplay,
@@ -271,9 +263,10 @@ struct RoleplayTabView: View {
         return false
     }
 
-    private func recordRoleplaySuccess(_ grant: FeatureAccessGrant) {
-        guard grant.matches(.videoRoleplay), let session = appState.session else { return }
-        featureAccess.recordSuccessfulResult(
+    private func recordRoleplaySuccess(_ grant: FeatureAccessGrant) -> Bool {
+        guard let session = appState.session,
+              grant.matches(.videoRoleplay, email: session.email) else { return false }
+        return featureAccess.recordSuccessfulResult(
             feature: .videoRoleplay,
             grant: grant,
             token: session.sessionToken,

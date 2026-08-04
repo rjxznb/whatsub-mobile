@@ -62,6 +62,48 @@ private actor FeatureAccessAPISpy: FeatureAccessAPI {
     func consumeCallCount() -> Int { consumeCalls.count }
 }
 
+private actor DeferredFeatureAccessAPI: FeatureAccessAPI {
+    private var aliceContinuation: CheckedContinuation<FeatureEntitlementsResponse, Error>?
+
+    func featureEntitlements(token: String) async throws -> FeatureEntitlementsResponse {
+        if token == "alice-token" {
+            return try await withCheckedThrowingContinuation { continuation in
+                aliceContinuation = continuation
+            }
+        }
+        return .init(
+            isPro: false,
+            features: Dictionary(
+                uniqueKeysWithValues: FeatureKey.allCases.map { ($0, .available) }
+            )
+        )
+    }
+
+    func startFeature(_ feature: FeatureKey, token: String) async throws -> FeatureStartResponse {
+        .init(featureKey: feature, access: .trial, state: .inProgress)
+    }
+
+    func consumeFeature(_ feature: FeatureKey, token: String) async throws {}
+
+    func sendFeatureEvent(
+        _ event: FeatureFunnelEvent,
+        feature: FeatureKey,
+        token: String
+    ) async throws {}
+
+    func hasSuspendedAliceRequest() -> Bool { aliceContinuation != nil }
+
+    func finishAliceRequest() {
+        aliceContinuation?.resume(returning: .init(
+            isPro: true,
+            features: Dictionary(
+                uniqueKeysWithValues: FeatureKey.allCases.map { ($0, .consumed) }
+            )
+        ))
+        aliceContinuation = nil
+    }
+}
+
 @MainActor
 final class FeatureAccessStoreTests: XCTestCase {
     private func tempURL() -> URL {
@@ -123,14 +165,14 @@ final class FeatureAccessStoreTests: XCTestCase {
             email: "pro@x.com",
             localPro: true
         )
-        XCTAssertEqual(grant, .init(feature: .quickChat, access: .pro))
+        XCTAssertEqual(grant, .init(feature: .quickChat, access: .pro, email: "pro@x.com"))
         let startCount = await api.startCallCount()
         XCTAssertEqual(startCount, 0)
     }
 
     func testCachedServerProCanStartOffline() async throws {
         let persistence = FeatureAccessPersistence(fileURL: tempURL())
-        persistence.store(
+        try persistence.store(
             snapshot: .init(isPro: true, features: allStates(.available), updatedAt: 1),
             for: "cached@x.com"
         )
@@ -162,7 +204,7 @@ final class FeatureAccessStoreTests: XCTestCase {
             email: "free@x.com",
             localPro: false
         )
-        XCTAssertEqual(grant, .init(feature: .liveScene, access: .trial))
+        XCTAssertEqual(grant, .init(feature: .liveScene, access: .trial, email: "free@x.com"))
         XCTAssertEqual(store.presentation(for: .liveScene, localPro: false), .continueTrial)
         let startCount = await api.startCallCount()
         XCTAssertEqual(startCount, 1)
@@ -208,6 +250,47 @@ final class FeatureAccessStoreTests: XCTestCase {
         XCTAssertEqual(startCount, 0)
     }
 
+    func testStaleCachedConsumedStateMustRevalidateBeforeOpeningPaywall() async {
+        let persistence = FeatureAccessPersistence(fileURL: tempURL())
+        try! persistence.store(
+            snapshot: .init(isPro: false, features: allStates(.consumed), updatedAt: 1),
+            for: "free@x.com"
+        )
+        let api = FeatureAccessAPISpy(entitlements: .networkFailure, start: .networkFailure)
+        let store = FeatureAccessStore(api: api, persistence: persistence)
+        await store.refresh(token: "session", email: "free@x.com", localPro: false)
+
+        do {
+            _ = try await store.start(
+                feature: .photoAI,
+                token: "session",
+                email: "free@x.com",
+                localPro: false
+            )
+            XCTFail("expected temporarilyUnavailable")
+        } catch {
+            XCTAssertEqual(error as? FeatureAccessError, .temporarilyUnavailable)
+        }
+        XCTAssertEqual(await api.startCallCount(), 1)
+    }
+
+    func testLateEntitlementResponseCannotOverwriteAnotherAccount() async {
+        let api = DeferredFeatureAccessAPI()
+        let store = FeatureAccessStore(api: api, persistence: .init(fileURL: tempURL()))
+        let aliceTask = Task {
+            await store.refresh(token: "alice-token", email: "alice@x.com", localPro: false)
+            await store.retryPendingConsumes(token: "alice-token", email: "alice@x.com")
+        }
+        while !(await api.hasSuspendedAliceRequest()) { await Task.yield() }
+
+        await store.refresh(token: "bob-token", email: "bob@x.com", localPro: false)
+        await api.finishAliceRequest()
+        await aliceTask.value
+
+        XCTAssertEqual(store.snapshot?.isPro, false)
+        XCTAssertEqual(store.snapshot?.features[.quickChat], .available)
+    }
+
     func testNetworkFailureBecomesRetryStateNotPaywall() async {
         let api = FeatureAccessAPISpy(start: .networkFailure)
         let store = FeatureAccessStore(api: api, persistence: .init(fileURL: tempURL()))
@@ -247,12 +330,12 @@ final class FeatureAccessStoreTests: XCTestCase {
             localPro: false
         )
 
-        store.recordSuccessfulResult(
+        XCTAssertTrue(store.recordSuccessfulResult(
             feature: .quickChat,
             grant: grant,
             token: "session",
             email: "free@x.com"
-        )
+        ))
 
         XCTAssertEqual(persistence.pendingConsumes(email: "free@x.com"), Set([.quickChat]))
         XCTAssertEqual(
@@ -262,9 +345,9 @@ final class FeatureAccessStoreTests: XCTestCase {
         XCTAssertEqual(store.presentation(for: .quickChat, localPro: false), .subscriptionRequired)
     }
 
-    func testRetryPendingConsumeRemovesMarkerAfterSuccess() async {
+    func testRetryPendingConsumeRemovesMarkerAfterSuccess() async throws {
         let persistence = FeatureAccessPersistence(fileURL: tempURL())
-        persistence.addPendingConsume(.photoAI, email: "free@x.com")
+        try persistence.addPendingConsume(.photoAI, email: "free@x.com")
         let api = FeatureAccessAPISpy(consume: .success)
         let store = FeatureAccessStore(api: api, persistence: persistence)
 
@@ -277,14 +360,52 @@ final class FeatureAccessStoreTests: XCTestCase {
 
     func testPersistenceIsolatesAccounts() {
         let persistence = FeatureAccessPersistence(fileURL: tempURL())
-        persistence.store(
+        try! persistence.store(
             snapshot: .init(isPro: false, features: [.quickChat: .consumed], updatedAt: 1),
             for: "alice@x.com"
         )
-        persistence.addPendingConsume(.quickChat, email: "alice@x.com")
+        try! persistence.addPendingConsume(.quickChat, email: "alice@x.com")
 
         XCTAssertNil(persistence.snapshot(for: "mallory@x.com"))
         XCTAssertTrue(persistence.pendingConsumes(email: "mallory@x.com").isEmpty)
         XCTAssertEqual(persistence.snapshot(for: "ALICE@x.com")?.features[.quickChat], .consumed)
+    }
+
+    func testPersistenceFailurePreventsTrialResultPublication() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("feature_access_directory_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let persistence = FeatureAccessPersistence(fileURL: directoryURL)
+        let api = FeatureAccessAPISpy(start: .response(.init(
+            featureKey: .quickChat,
+            access: .trial,
+            state: .inProgress
+        )))
+        let store = FeatureAccessStore(api: api, persistence: persistence)
+        let grant = try await store.start(
+            feature: .quickChat,
+            token: "session",
+            email: "free@x.com",
+            localPro: false
+        )
+
+        XCTAssertFalse(store.recordSuccessfulResult(
+            feature: .quickChat,
+            grant: grant,
+            token: "session",
+            email: "free@x.com"
+        ))
+        XCTAssertTrue(persistence.pendingConsumes(email: "free@x.com").isEmpty)
+    }
+
+    func testAccountDeletionRemovesOnlyThatAccountsDurableState() throws {
+        let persistence = FeatureAccessPersistence(fileURL: tempURL())
+        try persistence.addPendingConsume(.quickChat, email: "alice@x.com")
+        try persistence.addPendingConsume(.photoAI, email: "bob@x.com")
+
+        try persistence.removeAccount(email: "alice@x.com")
+
+        XCTAssertTrue(persistence.pendingConsumes(email: "alice@x.com").isEmpty)
+        XCTAssertEqual(persistence.pendingConsumes(email: "bob@x.com"), Set([.photoAI]))
     }
 }

@@ -64,9 +64,8 @@ struct PhotoReviewView: View {
                     isPresented: $showSubscribe,
                     onDismiss: { featurePaywallOrigin = nil }
                 ) {
-                    SubscribeSheet(onPurchased: {
-                        let origin = featurePaywallOrigin
-                        Task { await handlePurchaseSuccess(origin: origin) }
+                    SubscribeSheet(featureOrigin: featurePaywallOrigin, onPurchased: {
+                        Task { await handlePurchaseSuccess() }
                     })
                     .environmentObject(store)
                 }
@@ -83,6 +82,7 @@ struct PhotoReviewView: View {
                     Text(accessMessage ?? "")
                 }
         }
+        .onDisappear { vm.cancelFlow() }
     }
 
     // MARK: - phase-driven content
@@ -391,7 +391,7 @@ struct PhotoReviewView: View {
         guard let session = appState.session else { return }
         do {
             let grant: FeatureAccessGrant
-            if let current = photoGrant, current.matches(.photoAI) {
+            if let current = photoGrant, current.matches(.photoAI, email: session.email) {
                 grant = current
             } else {
                 grant = try await featureAccess.start(
@@ -406,8 +406,10 @@ struct PhotoReviewView: View {
             let accessStore = featureAccess
             let state = appState
             vm.setOnSuccessfulAnalysis { [weak accessStore, weak state] in
-                guard let session = state?.session else { return }
-                accessStore?.recordSuccessfulResult(
+                guard let session = state?.session,
+                      grant.matches(.photoAI, email: session.email),
+                      let accessStore else { return false }
+                return accessStore.recordSuccessfulResult(
                     feature: .photoAI,
                     grant: grant,
                     token: session.sessionToken,
@@ -433,14 +435,7 @@ struct PhotoReviewView: View {
         }
     }
 
-    private func handlePurchaseSuccess(origin: FeatureKey?) async {
-        if let origin, let session = appState.session {
-            featureAccess.sendEvent(
-                .purchaseSuccess,
-                feature: origin,
-                token: session.sessionToken
-            )
-        }
+    private func handlePurchaseSuccess() async {
         await appState.refreshMe()
         if let session = appState.session {
             await featureAccess.refresh(

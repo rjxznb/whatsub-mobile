@@ -20,6 +20,15 @@ import StoreKit
 struct SubscriptionOptionsView: View {
     @EnvironmentObject var store: StoreManager
     var onPurchased: (() -> Void)?
+    var featureOrigin: FeatureKey?
+
+    init(
+        featureOrigin: FeatureKey? = nil,
+        onPurchased: (() -> Void)? = nil
+    ) {
+        self.featureOrigin = featureOrigin
+        self.onPurchased = onPurchased
+    }
 
     private let privacyURL = URL(string: "https://whatsub.eversay.cc/privacy")!
     /// Apple's standard EULA. Switching to the standard EULA (vs. our own) gives
@@ -86,7 +95,11 @@ struct SubscriptionOptionsView: View {
     /// scanning the screen sees what they're buying without parsing the price tag.
     private func planButton(_ product: Product, title: String, length: String) -> some View {
         Button {
-            Task { if await store.purchaseSubscription(product) { onPurchased?() } }
+            Task {
+                if await store.purchaseSubscription(product, featureOrigin: featureOrigin) {
+                    onPurchased?()
+                }
+            }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {

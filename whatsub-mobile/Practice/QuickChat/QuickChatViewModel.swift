@@ -59,7 +59,7 @@ final class QuickChatViewModel: ObservableObject {
     let progressStore: ProductionProgressStore
     private let driver: EngineDriver
     private let now: () -> Double                  // injectable clock
-    private let onFirstValidAssistantReply: () -> Void
+    private let onFirstValidAssistantReply: () -> Bool
     /// Per-session turn cap. nil = unlimited (only end on explicit close or
     /// LLM error). Set in init. Spec §9 #4 default = 5.
     let maxTurns: Int?
@@ -82,6 +82,8 @@ final class QuickChatViewModel: ObservableObject {
     @Published private(set) var turnIndex: Int = 0
     private var written = false                     // ensure single end-of-session write
     private var reportedFirstValidAssistantReply = false
+    private var sessionGeneration: UInt64 = 0
+    private var sessionActive = true
     /// How many times VAD timed out with no speech. After 2, end the session.
     private(set) var noSpeechRounds: Int = 0
 
@@ -89,7 +91,7 @@ final class QuickChatViewModel: ObservableObject {
          suggestedTag: String?,
          progressStore: ProductionProgressStore,
          engineDriver: EngineDriver,
-         onFirstValidAssistantReply: @escaping () -> Void = {},
+         onFirstValidAssistantReply: @escaping () -> Bool = { true },
          maxTurns: Int? = 5,
          now: @escaping () -> Double = { Date().timeIntervalSince1970 }) {
         self.phrases = phrases
@@ -118,6 +120,12 @@ final class QuickChatViewModel: ObservableObject {
     /// User actively ends the session (close button, summary "完成").
     func endSession() async {
         await persistAndFinish()
+    }
+
+    func cancelSession() {
+        sessionActive = false
+        sessionGeneration &+= 1
+        Speaker.stop()
     }
 
     /// Mark a phrase as correctly used (manual override "我说对了").
@@ -174,6 +182,8 @@ final class QuickChatViewModel: ObservableObject {
     // ---- internal ----
 
     private func runOneTurn(userInput: String) async {
+        guard sessionActive else { return }
+        let generation = sessionGeneration
         let isOpening = userInput.isEmpty
         phase = .thinking
 
@@ -189,9 +199,11 @@ final class QuickChatViewModel: ObservableObject {
         do {
             result = try await driver.runTurn(userInput)
         } catch {
+            guard isCurrent(generation) else { return }
             phase = .error((error as? LocalizedError)?.errorDescription ?? "对话失败：\(error.localizedDescription)")
             return
         }
+        guard isCurrent(generation) else { return }
 
         // Apply verdict immediately if the LLM included one — affects
         // session checklist + completedPhrases set.
@@ -207,14 +219,18 @@ final class QuickChatViewModel: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !sanitizedDialog.isEmpty {
             if !reportedFirstValidAssistantReply {
+                guard onFirstValidAssistantReply() else {
+                    phase = .error("暂时无法保存免费体验状态。请释放一些设备存储空间后重试。")
+                    return
+                }
                 reportedFirstValidAssistantReply = true
-                onFirstValidAssistantReply()
             }
             if phase == .thinking { phase = .speaking }
             var displayed = ""
             var sentenceChunker = SentenceChunker()
             var idx = dialog.startIndex
             while idx < dialog.endIndex {
+                guard isCurrent(generation) else { return }
                 let next = dialog.index(idx, offsetBy: 3, limitedBy: dialog.endIndex) ?? dialog.endIndex
                 let small = String(dialog[idx..<next])
                 displayed += small
@@ -229,6 +245,7 @@ final class QuickChatViewModel: ObservableObject {
                 idx = next
                 try? await Task.sleep(nanoseconds: 20_000_000)
             }
+            guard isCurrent(generation) else { return }
             // Flush any trailing partial sentence.
             for sentence in sentenceChunker.flush() {
                 let clean = AssistantTextSanitizer.sanitize(sentence)
@@ -304,6 +321,8 @@ final class QuickChatViewModel: ObservableObject {
     /// End-of-session: write to ProductionProgressStore once, transition to done.
     private func persistAndFinish() async {
         guard !written else { return }
+        sessionActive = false
+        sessionGeneration &+= 1
         written = true
         let nowSec = now()
         for p in phrases {
@@ -317,5 +336,9 @@ final class QuickChatViewModel: ObservableObject {
         }
         Speaker.stop()
         phase = .done
+    }
+
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        sessionActive && sessionGeneration == generation && !Task.isCancelled
     }
 }

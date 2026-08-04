@@ -137,9 +137,8 @@ struct LiveSceneView: View {
             isPresented: $showSubscribe,
             onDismiss: { featurePaywallOrigin = nil }
         ) {
-            SubscribeSheet(onPurchased: {
-                let origin = featurePaywallOrigin
-                Task { await handlePurchaseSuccess(origin: origin) }
+            SubscribeSheet(featureOrigin: featurePaywallOrigin, onPurchased: {
+                Task { await handlePurchaseSuccess() }
             })
             .environmentObject(store)
         }
@@ -711,7 +710,7 @@ struct LiveSceneView: View {
         guard let image = pendingSceneImage, let session = appState.session else { return }
         do {
             let grant: FeatureAccessGrant
-            if let current = sceneGrant, current.matches(.liveScene) {
+            if let current = sceneGrant, current.matches(.liveScene, email: session.email) {
                 grant = current
             } else {
                 grant = try await featureAccess.start(
@@ -726,8 +725,10 @@ struct LiveSceneView: View {
             let accessStore = featureAccess
             let state = appState
             vm.setOnSuccessfulGrade { [weak accessStore, weak state] in
-                guard let session = state?.session else { return }
-                accessStore?.recordSuccessfulResult(
+                guard let session = state?.session,
+                      grant.matches(.liveScene, email: session.email),
+                      let accessStore else { return false }
+                return accessStore.recordSuccessfulResult(
                     feature: .liveScene,
                     grant: grant,
                     token: session.sessionToken,
@@ -759,14 +760,7 @@ struct LiveSceneView: View {
         vm.restart()
     }
 
-    private func handlePurchaseSuccess(origin: FeatureKey?) async {
-        if let origin, let session = appState.session {
-            featureAccess.sendEvent(
-                .purchaseSuccess,
-                feature: origin,
-                token: session.sessionToken
-            )
-        }
+    private func handlePurchaseSuccess() async {
         await appState.refreshMe()
         if let session = appState.session {
             await featureAccess.refresh(

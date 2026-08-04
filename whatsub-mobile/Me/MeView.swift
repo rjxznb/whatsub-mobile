@@ -6,6 +6,7 @@ struct MeView: View {
     @State private var quota: LibraryQuota?
     @State private var corpusQ: CorpusQuota?
     @EnvironmentObject var store: StoreManager
+    @EnvironmentObject var featureAccess: FeatureAccessStore
     @State private var showManageSubscriptions = false
     @State private var showLogoutConfirm = false
     @State private var showDeleteAccountConfirm = false
@@ -369,12 +370,23 @@ struct MeView: View {
     /// {ok:true,demo:true} without touching the DB — Apple's reviewer flow
     /// looks identical from the iOS side.
     private func performDeleteAccount() async {
-        guard let token = appState.session?.sessionToken else { return }
+        guard let session = appState.session else { return }
         deletingAccount = true
         deleteAccountError = nil
         do {
-            try await WhatsubAPI.shared.deleteAccount(token: token)
+            try await WhatsubAPI.shared.deleteAccount(token: session.sessionToken)
             // Local cleanup mirrors what backend already did server-side.
+            do {
+                try featureAccess.removeAccount(email: session.email)
+            } catch {
+                // The server deletion is already authoritative. Surface the
+                // local cleanup failure through the persistent StoreKit error
+                // channel, then log out; a future online refresh still replaces
+                // any stale snapshot for a re-created account.
+                store.lastError = "账号已删除，但本机体验缓存清理失败。请释放存储空间后重新打开 App。"
+                featureAccess.resetMemory()
+            }
+            store.removeAccountState(email: session.email)
             appState.logout()
         } catch let e as APIError {
             deleteAccountError = e.chinese

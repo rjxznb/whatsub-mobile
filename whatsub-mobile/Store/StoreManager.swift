@@ -29,8 +29,24 @@ final class StoreManager: ObservableObject {
     /// 2026-06-11 (Guideline 2.1(b) follow-up).
     static let whatsubIAPNamespace = UUID(uuidString: "8A1D4B3F-2E6C-4A9B-B7E5-9D3F8C1E2A6B")!
 
+    static func appAccountToken(for email: String) -> UUID? {
+        let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return nil }
+        return UUID.v5(name: normalized, namespace: whatsubIAPNamespace)
+    }
+
+    /// A device-level StoreKit entitlement is an immediate Pro signal only
+    /// for the whatSub account encoded in its appAccountToken. Transactions
+    /// predating appAccountToken remain server-authoritative via /me; trusting
+    /// an unowned local transaction would temporarily unlock another account.
+    static func ownsLocalSubscription(appAccountTokens: [UUID?], email: String) -> Bool {
+        guard let expected = appAccountToken(for: email) else { return false }
+        return appAccountTokens.contains { $0 == expected }
+    }
+
     @Published var purchaseInProgress = false
     @Published var lastError: String?
+    @Published var purchaseRegistrationError: String?
     @Published var subMonth: Product?
     @Published var subYear: Product?
     /// Offline-capable: StoreKit shows a current (non-expired) subscription on this device.
@@ -38,8 +54,31 @@ final class StoreManager: ObservableObject {
 
     /// Set by the app: given a verified JWS, report it to the backend + refresh entitlements.
     var reportVerifiedJWS: ((String) async -> Void)?
+    var reportFeaturePurchase: ((FeatureKey, String) async -> Bool)?
 
     private var updatesTask: Task<Void, Never>?
+    private var activeAccountKey: String?
+    private static let pendingOriginsDefaultsKey = "store.pendingFeaturePurchaseOrigins.v1"
+
+    /// Clears a prior account's immediate local entitlement before any
+    /// asynchronous StoreKit refresh starts for the newly signed-in account.
+    func activateAccount(email: String?) {
+        let key = email?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard activeAccountKey != key else { return }
+        activeAccountKey = key
+        hasLocalSub = false
+    }
+
+    func removeAccountState(email: String) {
+        clearPendingOrigin(email: email)
+        let key = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if activeAccountKey == key {
+            activeAccountKey = nil
+            hasLocalSub = false
+        }
+    }
 
     /// Load products + start the transaction-updates listener + RE-REPORT
     /// any existing iOS entitlements to the backend. Idempotent.
@@ -78,8 +117,10 @@ final class StoreManager: ObservableObject {
     func reportCurrentEntitlements() async {
         guard let report = reportVerifiedJWS else { return }
         for await result in Transaction.currentEntitlements {
-            if case .verified = result {
+            if case .verified(let transaction) = result,
+               isOwnedByCurrentAccount(transaction) {
                 await report(result.jwsRepresentation)
+                await reportPendingOriginIfOwned(transaction: transaction)
             }
         }
     }
@@ -100,9 +141,14 @@ final class StoreManager: ObservableObject {
     }
 
     /// Buy a subscription (month or year). Verify → report JWS → refresh entitlements.
-    func purchaseSubscription(_ product: Product) async -> Bool { await purchase(product) }
+    func purchaseSubscription(
+        _ product: Product,
+        featureOrigin: FeatureKey? = nil
+    ) async -> Bool {
+        await purchase(product, featureOrigin: featureOrigin)
+    }
 
-    private func purchase(_ product: Product?) async -> Bool {
+    private func purchase(_ product: Product?, featureOrigin: FeatureKey?) async -> Bool {
         guard let product else {
             lastError = "商品未就绪，请稍后重试"
             return false
@@ -123,24 +169,31 @@ final class StoreManager: ObservableObject {
             // happen but UI doesn't enforce), fall back to a random UUID:
             // Apple still accepts the purchase, just no reverse-resolution.
             let email = KeychainStore.load()?.email ?? ""
-            let appAccountUUID: UUID = email.isEmpty
-                ? UUID()
-                : UUID.v5(name: email.trimmingCharacters(in: .whitespaces).lowercased(),
-                          namespace: Self.whatsubIAPNamespace)
+            let appAccountUUID = Self.appAccountToken(for: email) ?? UUID()
+            if let featureOrigin {
+                rememberPendingOrigin(featureOrigin, email: email)
+            }
 
             let result = try await product.purchase(options: [.appAccountToken(appAccountUUID)])
             switch result {
             case .success(let verification):
-                return await process(verification)
+                let accepted = await process(verification)
+                if !accepted, featureOrigin != nil { clearPendingOrigin(email: email) }
+                return accepted
             case .userCancelled:
+                if featureOrigin != nil { clearPendingOrigin(email: email) }
                 return false
             case .pending:
                 lastError = "购买待确认"
                 return false
             @unknown default:
+                if featureOrigin != nil { clearPendingOrigin(email: email) }
                 return false
             }
         } catch {
+            if featureOrigin != nil {
+                clearPendingOrigin(email: KeychainStore.load()?.email ?? "")
+            }
             lastError = "购买失败：\(error.localizedDescription)"
             return false
         }
@@ -158,7 +211,8 @@ final class StoreManager: ObservableObject {
         }
         if let report = reportVerifiedJWS {
             for await result in Transaction.currentEntitlements {
-                if case .verified = result {
+                if case .verified(let transaction) = result,
+                   isOwnedByCurrentAccount(transaction) {
                     let jws = result.jwsRepresentation
                     Task { await report(jws) }
                 }
@@ -173,6 +227,11 @@ final class StoreManager: ObservableObject {
     private func process(_ result: VerificationResult<Transaction>) async -> Bool {
         switch result {
         case .verified(let transaction):
+            guard isOwnedByCurrentAccount(transaction) else {
+                await transaction.finish()
+                await refreshLocalEntitlements()
+                return false
+            }
             // 2026-06-11 — reportVerifiedJWS now fires-and-forgets in a
             // detached Task so the UI doesn't hang while the backend
             // /verify roundtrip (potentially 3 retries × backoff = ~5 s)
@@ -187,6 +246,7 @@ final class StoreManager: ObservableObject {
             }
             await transaction.finish()
             await refreshLocalEntitlements()
+            await reportPendingOriginIfOwned(transaction: transaction)
             return true
         case .unverified:
             lastError = "交易校验未通过"
@@ -195,12 +255,64 @@ final class StoreManager: ObservableObject {
     }
 
     private func refreshLocalEntitlements() async {
-        var sub = false
+        let email = KeychainStore.load()?.email ?? ""
+        let accountKey = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var accountTokens: [UUID?] = []
         for await result in Transaction.currentEntitlements {
             if case .verified(let t) = result {
-                if t.productID == Self.subMonthID || t.productID == Self.subYearID { sub = true }
+                if t.productID == Self.subMonthID || t.productID == Self.subYearID {
+                    accountTokens.append(t.appAccountToken)
+                }
             }
         }
-        hasLocalSub = sub
+        guard activeAccountKey == accountKey,
+              (KeychainStore.load()?.email ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() == accountKey else { return }
+        hasLocalSub = Self.ownsLocalSubscription(
+            appAccountTokens: accountTokens,
+            email: email
+        )
+    }
+
+    private func rememberPendingOrigin(_ feature: FeatureKey, email: String) {
+        let key = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return }
+        var values = UserDefaults.standard.dictionary(
+            forKey: Self.pendingOriginsDefaultsKey
+        ) as? [String: String] ?? [:]
+        values[key] = feature.rawValue
+        UserDefaults.standard.set(values, forKey: Self.pendingOriginsDefaultsKey)
+    }
+
+    private func clearPendingOrigin(email: String) {
+        let key = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var values = UserDefaults.standard.dictionary(
+            forKey: Self.pendingOriginsDefaultsKey
+        ) as? [String: String] ?? [:]
+        values.removeValue(forKey: key)
+        UserDefaults.standard.set(values, forKey: Self.pendingOriginsDefaultsKey)
+    }
+
+    private func reportPendingOriginIfOwned(transaction: Transaction) async {
+        let email = KeychainStore.load()?.email ?? ""
+        let key = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty,
+              transaction.appAccountToken == Self.appAccountToken(for: email),
+              let reportFeaturePurchase else { return }
+        let values = UserDefaults.standard.dictionary(
+            forKey: Self.pendingOriginsDefaultsKey
+        ) as? [String: String] ?? [:]
+        guard let raw = values[key], let feature = FeatureKey(rawValue: raw) else { return }
+        if await reportFeaturePurchase(feature, email) {
+            clearPendingOrigin(email: email)
+        }
+    }
+
+    private func isOwnedByCurrentAccount(_ transaction: Transaction) -> Bool {
+        let email = KeychainStore.load()?.email ?? ""
+        let key = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty, activeAccountKey == key else { return false }
+        return transaction.appAccountToken == Self.appAccountToken(for: email)
     }
 }

@@ -15,7 +15,7 @@ import SwiftUI
 struct RoleplaySessionView: View {
     let scenario: RoleplayScenario
     let featureGrant: FeatureAccessGrant
-    let onFirstValidReply: (FeatureAccessGrant) -> Void
+    let onFirstValidReply: (FeatureAccessGrant) -> Bool
 
     /// 8 turns gives the scene more room than QuickChat's 5 (a roleplay
     /// session needs setup → conflict → resolution; phrase-drill just

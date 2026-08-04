@@ -21,9 +21,20 @@ enum FeatureAccessKind: String, Codable, Equatable {
 struct FeatureAccessGrant: Equatable {
     let feature: FeatureKey
     let access: FeatureAccessKind
+    let accountKey: String
 
-    func matches(_ expectedFeature: FeatureKey) -> Bool {
-        feature == expectedFeature
+    init(feature: FeatureKey, access: FeatureAccessKind, email: String) {
+        self.feature = feature
+        self.access = access
+        self.accountKey = Self.normalize(email)
+    }
+
+    func matches(_ expectedFeature: FeatureKey, email: String) -> Bool {
+        feature == expectedFeature && accountKey == Self.normalize(email)
+    }
+
+    private static func normalize(_ email: String) -> String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 

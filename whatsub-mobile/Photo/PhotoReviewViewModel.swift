@@ -48,12 +48,14 @@ final class PhotoReviewViewModel: ObservableObject {
     private(set) var localPhotoId: String = UUID().uuidString
 
     private let analyzer: PhotoAnalyzer
-    private var onSuccessfulAnalysis: () -> Void
+    private var onSuccessfulAnalysis: () -> Bool
     private var reportedSuccessfulAnalysis = false
+    private var flowGeneration: UInt64 = 0
+    private var flowActive = true
 
     init(
         analyzer: PhotoAnalyzer = .live(),
-        onSuccessfulAnalysis: @escaping () -> Void = {}
+        onSuccessfulAnalysis: @escaping () -> Bool = { true }
     ) {
         self.analyzer = analyzer
         self.onSuccessfulAnalysis = onSuccessfulAnalysis
@@ -61,14 +63,22 @@ final class PhotoReviewViewModel: ObservableObject {
 
     /// Installed by the view after it obtains a flow-scoped access grant.
     /// The callback runs before `analysis`/`.reviewing` become observable.
-    func setOnSuccessfulAnalysis(_ handler: @escaping () -> Void) {
+    func setOnSuccessfulAnalysis(_ handler: @escaping () -> Bool) {
         onSuccessfulAnalysis = handler
+    }
+
+    func cancelFlow() {
+        flowActive = false
+        flowGeneration &+= 1
     }
 
     // MARK: - lifecycle
 
     /// Called when the camera / gallery picker hands us an image.
     func setImage(_ img: UIImage) async {
+        flowActive = true
+        flowGeneration &+= 1
+        let generation = flowGeneration
         image = img
         // Reset downstream state for the new capture.
         ocrText = ""
@@ -79,9 +89,11 @@ final class PhotoReviewViewModel: ObservableObject {
         phase = .ocring
         do {
             let result = try await PhotoOCR.recognize(img)
+            guard isCurrent(generation) else { return }
             ocrText = result.fullText
             phase = .ocred
         } catch {
+            guard isCurrent(generation) else { return }
             phase = .error(.message("识别照片里的文字时出了点状况，换一张试试。（\(error.localizedDescription)）"))
         }
     }
@@ -97,8 +109,10 @@ final class PhotoReviewViewModel: ObservableObject {
             phase = .error(.message("没读到英文文字呢——先拍一张含英文的清楚照片吧。"))
             return
         }
+        let generation = flowGeneration
         phase = .analyzing
         let result = await analyzer.analyze(ocrText: ocrText)
+        guard isCurrent(generation) else { return }
         switch result {
         case .success(let r):
             let hasDisplayableContent = !r.translation
@@ -109,8 +123,11 @@ final class PhotoReviewViewModel: ObservableObject {
                 return
             }
             if !reportedSuccessfulAnalysis {
+                guard onSuccessfulAnalysis() else {
+                    phase = .error(.message("暂时无法保存免费体验状态。请释放一些设备存储空间后重试。"))
+                    return
+                }
                 reportedSuccessfulAnalysis = true
-                onSuccessfulAnalysis()
             }
             analysis = r
             // Pre-select nothing — user explicitly opts in.
@@ -189,5 +206,9 @@ final class PhotoReviewViewModel: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let snippet = firstLine.prefix(30)
         return snippet.isEmpty ? "照片识别" : String(snippet)
+    }
+
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        flowActive && flowGeneration == generation && !Task.isCancelled
     }
 }

@@ -102,9 +102,11 @@ struct ContentView: View {
         .task(id: appState.isAuthenticated) {
             guard appState.isAuthenticated else {
                 gateReady = false
+                store.activateAccount(email: nil)
                 featureAccess.resetMemory()
                 return
             }
+            store.activateAccount(email: appState.session?.email)
             // 2026-06-11 — was `try? await ...` which silently swallowed every
             // backend /verify failure. Apple's reviewer purchased successfully
             // via StoreKit but the call to /api/license/iap/verify failed
@@ -126,6 +128,9 @@ struct ContentView: View {
                         try await WhatsubAPI.shared.verifyPurchase(
                             token: token, signedTransactionInfo: jws,
                         )
+                        await MainActor.run {
+                            store.purchaseRegistrationError = nil
+                        }
                         lastErr = nil
                         break
                     } catch {
@@ -138,10 +143,23 @@ struct ContentView: View {
                             ?? err.localizedDescription
                         store.lastError =
                             "购买已扣款,但向服务器登记会员状态失败,请稍后到「我的」下拉刷新,或联系客服。(\(msg))"
+                        store.purchaseRegistrationError = store.lastError
                     }
                 }
                 await appState.refreshMe()
                 await refreshFeatureAccess()
+            }
+            store.reportFeaturePurchase = { feature, email in
+                guard let session = appState.session,
+                      session.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        == email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                else { return false }
+                featureAccess.sendEvent(
+                    .purchaseSuccess,
+                    feature: feature,
+                    token: session.sessionToken
+                )
+                return true
             }
             store.start()
             // Enter UI right away. The detached Task refreshes /me in the
@@ -200,6 +218,17 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showVPNOnboarding) {
             VPNRuleHelpSheet()
+        }
+        .alert(
+            "会员状态同步失败",
+            isPresented: Binding(
+                get: { store.purchaseRegistrationError != nil },
+                set: { if !$0 { store.purchaseRegistrationError = nil } }
+            )
+        ) {
+            Button("知道了", role: .cancel) { store.purchaseRegistrationError = nil }
+        } message: {
+            Text(store.purchaseRegistrationError ?? "")
         }
     }
 

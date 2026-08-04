@@ -4,6 +4,7 @@ import SwiftUI
 /// 「订阅」entry button (less aggressive than inline price buttons); tapping it
 /// opens the payment card here.
 struct SubscribeSheet: View {
+    var featureOrigin: FeatureKey? = nil
     var onPurchased: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -23,7 +24,10 @@ struct SubscribeSheet: View {
                         Text("• 1000 条个人语料和公共语料库")
                     }
                     .font(.subheadline).foregroundStyle(.whatsubInkMuted)
-                    SubscriptionOptionsView(onPurchased: { onPurchased(); dismiss() })
+                    SubscriptionOptionsView(
+                        featureOrigin: featureOrigin,
+                        onPurchased: { onPurchased(); dismiss() }
+                    )
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)

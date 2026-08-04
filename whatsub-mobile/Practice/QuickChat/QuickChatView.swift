@@ -63,7 +63,7 @@ struct QuickChatView: View {
 
     init(phrases: [SessionPhrase], suggestedTag: String?,
          featureGrant: FeatureAccessGrant,
-         onFirstValidReply: @escaping (FeatureAccessGrant) -> Void,
+         onFirstValidReply: @escaping (FeatureAccessGrant) -> Bool,
          maxTurns: Int? = 5,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
          settings: LlmSettings = LlmSettingsStore.load()) {
@@ -97,7 +97,7 @@ struct QuickChatView: View {
          vocabPhrases: [SessionPhrase],
          systemPrompt: String,
          featureGrant: FeatureAccessGrant,
-         onFirstValidReply: @escaping (FeatureAccessGrant) -> Void,
+         onFirstValidReply: @escaping (FeatureAccessGrant) -> Bool,
          maxTurns: Int? = 8,
          progressStore: ProductionProgressStore = ProductionProgressStore(),
          settings: LlmSettings = LlmSettingsStore.load()) {
@@ -204,6 +204,7 @@ struct QuickChatView: View {
                     Button("关闭") {
                         // If conversation hasn't started yet, dismiss immediately.
                         if vm.turns.isEmpty {
+                            vm.cancelSession()
                             vadCoordinator.cancel()
                             Speaker.releaseSession()
                             dismiss()
@@ -295,7 +296,10 @@ struct QuickChatView: View {
                 vadCoordinator.cancel()
             }
         }
-        .onDisappear { vadCoordinator.cancel() }
+        .onDisappear {
+            vm.cancelSession()
+            vadCoordinator.cancel()
+        }
     }
 
     // ---- tap-to-toggle orchestration (was push-to-talk; switched

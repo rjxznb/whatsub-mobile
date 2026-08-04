@@ -34,6 +34,7 @@ final class LiveSceneTrialLifecycleTests: XCTestCase {
             onSuccessfulGrade: {
                 callbackCount += 1
                 if case .review = viewModel.phase { wasReviewAtCallback = true }
+                return true
             }
         )
 
@@ -49,12 +50,41 @@ final class LiveSceneTrialLifecycleTests: XCTestCase {
         var callbackCount = 0
         let viewModel = LiveSceneViewModel(
             grader: LiveSceneGrader { _ in "{}" },
-            onSuccessfulGrade: { callbackCount += 1 }
+            onSuccessfulGrade: { callbackCount += 1; return true }
         )
 
         await viewModel.runGrader(scene: scene, prompt: prompt, transcript: "I see a street.")
 
         XCTAssertEqual(callbackCount, 0)
         if case .error = viewModel.phase {} else { XCTFail("empty grade should fail") }
+    }
+
+    func testRestartedFlowIgnoresLateGrade() async {
+        actor GradeGate {
+            var continuation: CheckedContinuation<String, Never>?
+            func wait() async -> String { await withCheckedContinuation { continuation = $0 } }
+            func isWaiting() -> Bool { continuation != nil }
+            func finish() {
+                continuation?.resume(returning: "{\"score\":4,\"feedback\":\"late\",\"vocabHits\":[]}")
+                continuation = nil
+            }
+        }
+        let gate = GradeGate()
+        var callbackCount = 0
+        let viewModel = LiveSceneViewModel(
+            grader: LiveSceneGrader { _ in await gate.wait() },
+            onSuccessfulGrade: { callbackCount += 1; return true }
+        )
+        let task = Task {
+            await viewModel.runGrader(scene: scene, prompt: prompt, transcript: "A street")
+        }
+        while !(await gate.isWaiting()) { await Task.yield() }
+
+        viewModel.restart()
+        await gate.finish()
+        await task.value
+
+        XCTAssertEqual(callbackCount, 0)
+        XCTAssertEqual(viewModel.phase, .picker)
     }
 }

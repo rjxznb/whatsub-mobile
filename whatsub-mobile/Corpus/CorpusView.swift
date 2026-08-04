@@ -117,16 +117,8 @@ struct CorpusView: View {
                 isPresented: $showSubscribe,
                 onDismiss: { featurePaywallOrigin = nil }
             ) {
-                SubscribeSheet(onPurchased: {
-                    let origin = featurePaywallOrigin
+                SubscribeSheet(featureOrigin: featurePaywallOrigin, onPurchased: {
                     Task {
-                        if let origin, let session = appState.session {
-                            featureAccess.sendEvent(
-                                .purchaseSuccess,
-                                feature: origin,
-                                token: session.sessionToken
-                            )
-                        }
                         await appState.refreshMe()
                         if let session = appState.session {
                             await featureAccess.refresh(
@@ -379,9 +371,10 @@ struct CorpusView: View {
         }
     }
 
-    private func recordQuickChatSuccess(_ grant: FeatureAccessGrant) {
-        guard grant.matches(.quickChat), let session = appState.session else { return }
-        featureAccess.recordSuccessfulResult(
+    private func recordQuickChatSuccess(_ grant: FeatureAccessGrant) -> Bool {
+        guard let session = appState.session,
+              grant.matches(.quickChat, email: session.email) else { return false }
+        return featureAccess.recordSuccessfulResult(
             feature: .quickChat,
             grant: grant,
             token: session.sessionToken,
