@@ -252,6 +252,50 @@ Legacy desktop pollers default to `import` and therefore cannot claim a
 replacement job. Do not deploy the iOS UI before a compatible desktop release is
 available.
 
+## Pro AI feature trials (2026-08-03)
+
+The ongoing Pro feature gates are `quick_chat`, `video_roleplay`, `live_scene`,
+and `photo_ai`. Each free account receives one complete trial of every feature;
+the server is authoritative and missing rows mean `available`, so existing free
+accounts receive all four without a backfill. These gates are separate from the
+managed-LLM token quota: BYOK changes the transport/provider only and never
+bypasses feature access.
+
+`FeatureAccessStore` is the single client authority. It loads a cache-first
+per-account snapshot from `Documents/feature_access.json`, merges server Pro with
+`StoreManager.hasLocalSub`, calls `/api/license/features/*`, and persists only
+entitlement states plus pending consumes. Grants are in-memory and scoped to one
+feature flow; prompts, replies, transcripts, images, and API keys are never
+written by this layer. A free first start always requires a successful server
+call. Cached/locally verified Pro remains usable offline; known consumed free
+state opens the subscription sheet without another start request.
+
+The successful-result boundaries are intentionally inside the relevant view
+models and run before the visible result is published:
+
+- Quick Chat: first non-empty sanitized assistant reply.
+- Video roleplay: first non-empty in-role reply; generating scene cards alone
+  does not consume.
+- Live Scene: valid grade immediately before `.review`.
+- Photo AI: non-empty translation or phrase analysis immediately before
+  `analysis`/`.reviewing`; camera/gallery and on-device OCR remain free.
+
+At those boundaries `recordSuccessfulResult` synchronously writes a pending
+consume marker and locally marks the feature consumed before scheduling the
+idempotent network request. Login, foreground, entitlement refresh, and purchase
+refresh retry pending consumes. Failed, timed-out, malformed, empty, or canceled
+flows stay `in_progress`. The current open session retains its grant after
+consumption; starting another session/photo requires a fresh check.
+
+`FeatureTrialBadge` renders only `免费体验 1 次` for available and
+`继续免费体验` for in-progress; Pro, consumed, and unknown states show no badge.
+Only exact `feature_subscription_required` opens the feature paywall and emits
+`paywall_shown`; network uncertainty shows retry copy. A StoreKit success uses
+local Pro immediately, refreshes `/me` + feature entitlements, retries pending
+consumes, and emits `purchase_success` only for the feature that opened that
+paywall. Prices remain StoreKit-derived. Release backend schema/API first, then
+the iOS binary; never ship the gate before the backend is live.
+
 ## Companion docs
 
 - `docs/superpowers/specs/` — v1 design + Innertube caption + Live Activity specs
