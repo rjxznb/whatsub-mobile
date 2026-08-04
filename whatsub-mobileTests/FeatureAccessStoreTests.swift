@@ -271,7 +271,8 @@ final class FeatureAccessStoreTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? FeatureAccessError, .temporarilyUnavailable)
         }
-        XCTAssertEqual(await api.startCallCount(), 1)
+        let startCount = await api.startCallCount()
+        XCTAssertEqual(startCount, 1)
     }
 
     func testLateEntitlementResponseCannotOverwriteAnotherAccount() async {
