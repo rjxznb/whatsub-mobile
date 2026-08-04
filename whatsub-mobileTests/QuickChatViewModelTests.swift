@@ -150,10 +150,10 @@ final class QuickChatViewModelTests: XCTestCase {
         let replyTask = Task { await viewModel.start() }
         while !(await gate.isWaiting()) { await Task.yield() }
 
-        viewModel.prepareToEndSession()
+        viewModel.endSession()
+        XCTAssertEqual(viewModel.phase, .done)
         await gate.finish()
         await replyTask.value
-        await viewModel.endSession()
 
         XCTAssertEqual(callbackCount, 0)
         XCTAssertTrue(viewModel.turns.first?.assistantText.isEmpty ?? true)

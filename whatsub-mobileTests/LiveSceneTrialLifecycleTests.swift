@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import UIKit
 @testable import whatsub_mobile
 
 @MainActor
@@ -88,10 +90,17 @@ final class LiveSceneTrialLifecycleTests: XCTestCase {
         XCTAssertEqual(viewModel.phase, .picker)
     }
 
-    func testLeavingCameraTabIgnoresLateGrade() async {
+    func testLeavingCameraTabIgnoresLateGradeAndReturningCanGradeAgain() async {
         actor GradeGate {
             var continuation: CheckedContinuation<String, Never>?
-            func wait() async -> String { await withCheckedContinuation { continuation = $0 } }
+            var callCount = 0
+            func next() async -> String {
+                callCount += 1
+                if callCount == 1 {
+                    return await withCheckedContinuation { continuation = $0 }
+                }
+                return "{\"score\":5,\"feedback\":\"fresh\",\"vocabHits\":[]}"
+            }
             func isWaiting() -> Bool { continuation != nil }
             func finish() {
                 continuation?.resume(returning: "{\"score\":4,\"feedback\":\"late\",\"vocabHits\":[]}")
@@ -101,19 +110,47 @@ final class LiveSceneTrialLifecycleTests: XCTestCase {
         let gate = GradeGate()
         var callbackCount = 0
         let viewModel = LiveSceneViewModel(
-            grader: LiveSceneGrader { _ in await gate.wait() },
+            grader: LiveSceneGrader { _ in await gate.next() },
             onSuccessfulGrade: { callbackCount += 1; return true }
         )
+        let appState = AppState()
+        appState.selectedTab = 2
+        let host = UIHostingController(rootView:
+            LiveSceneView(viewModel: viewModel)
+                .environmentObject(StoreManager())
+                .environmentObject(appState)
+                .environmentObject(FeatureAccessStore())
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.loadViewIfNeeded()
+        await Task.yield()
+
         let task = Task {
             await viewModel.runGrader(scene: scene, prompt: prompt, transcript: "A street")
         }
         while !(await gate.isWaiting()) { await Task.yield() }
 
-        viewModel.cancelInFlightWork()
+        appState.selectedTab = 1
+        for _ in 0..<100 {
+            if case .ready = viewModel.phase { break }
+            await Task.yield()
+        }
+        if case .ready = viewModel.phase {} else { XCTFail("tab exit should restore ready phase") }
         await gate.finish()
         await task.value
 
         XCTAssertEqual(callbackCount, 0)
         if case .review = viewModel.phase { XCTFail("late grade must not be published") }
+
+        appState.selectedTab = 2
+        await Task.yield()
+        XCTAssertTrue(viewModel.beginReadyAttempt())
+        await viewModel.runGrader(scene: scene, prompt: prompt, transcript: "A fresh street")
+
+        XCTAssertEqual(callbackCount, 1)
+        if case .review = viewModel.phase {} else { XCTFail("new grade should publish after return") }
     }
 }
