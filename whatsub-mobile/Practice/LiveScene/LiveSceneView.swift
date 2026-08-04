@@ -18,7 +18,7 @@ import AVFoundation
 ///
 /// 2026-06-05.
 struct LiveSceneView: View {
-    @StateObject private var vm = LiveSceneViewModel()
+    @StateObject private var vm: LiveSceneViewModel
     @EnvironmentObject private var store: StoreManager
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var featureAccess: FeatureAccessStore
@@ -45,6 +45,10 @@ struct LiveSceneView: View {
     /// and try fresh. Reset to .none whenever a new prompt loads (see
     /// .onChange below) — past hints shouldn't leak across exercises.
     @State private var hintLevel: HintLevel = .none
+
+    init(viewModel: LiveSceneViewModel = LiveSceneViewModel()) {
+        _vm = StateObject(wrappedValue: viewModel)
+    }
 
     /// Single sharp impact on each orb tap. Same `UIImpactFeedbackGenerator`
     /// pattern QuickChat uses. Bumped intensity 0.85 → 1.0 to match

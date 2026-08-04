@@ -118,21 +118,14 @@ final class QuickChatViewModel: ObservableObject {
     }
 
     /// User actively ends the session (close button, summary "完成").
-    func endSession() async {
-        await persistAndFinish()
+    func endSession() {
+        persistAndFinish()
     }
 
     func cancelSession() {
         sessionActive = false
         sessionGeneration &+= 1
         Speaker.stop()
-    }
-
-    /// Called synchronously from the destructive confirmation action before
-    /// its asynchronous persistence/dismiss task is scheduled. This closes
-    /// the actor scheduling window in which a late reply could still publish.
-    func prepareToEndSession() {
-        cancelSession()
     }
 
     /// Mark a phrase as correctly used (manual override "我说对了").
@@ -163,7 +156,7 @@ final class QuickChatViewModel: ObservableObject {
     func handleNoSpeechTimeout() async {
         noSpeechRounds += 1
         if noSpeechRounds >= 2 {
-            await endSession()
+            endSession()
         }
     }
 
@@ -302,7 +295,7 @@ final class QuickChatViewModel: ObservableObject {
         // Hard cap on user turns. The opening turn (0) doesn't count toward the user budget.
         // nil maxTurns = unlimited (only end on explicit user close).
         if !isOpening, let cap = maxTurns, turnIndex - 1 >= cap {
-            await persistAndFinish()
+            persistAndFinish()
         } else {
             phase = .idle
         }
@@ -326,7 +319,7 @@ final class QuickChatViewModel: ObservableObject {
     }
 
     /// End-of-session: write to ProductionProgressStore once, transition to done.
-    private func persistAndFinish() async {
+    private func persistAndFinish() {
         guard !written else { return }
         sessionActive = false
         sessionGeneration &+= 1

@@ -115,11 +115,7 @@ final class LiveSceneViewModel: ObservableObject {
     /// returns immediately; we drive UI via `phase` + `audioLevel`.
     func startRecording() {
         guard case let .ready(scene, prompt) = phase else { return }
-        // A tab switch cancels in-flight work but intentionally preserves a
-        // stable prompt. Starting another recording reactivates that prompt
-        // under a fresh generation so its grader can publish safely.
-        flowActive = true
-        flowGeneration &+= 1
+        guard beginReadyAttempt() else { return }
         // Fresh attempt — clear the "刚才没听清" banner if it's up.
         noSpeechWarning = false
         let rec = VoiceActivityRecorder()
@@ -187,7 +183,9 @@ final class LiveSceneViewModel: ObservableObject {
     /// Internal for lifecycle tests; callers outside the VM still reach this
     /// through the recording state machine.
     func runGrader(scene: SceneContext, prompt: SpeakingPrompt, transcript: String) async {
+        guard flowActive else { return }
         let generation = flowGeneration
+        phase = .grading(scene: scene, prompt: prompt, transcript: transcript)
         let result = await grader.grade(prompt: prompt, userTranscript: transcript)
         guard isCurrent(generation) else { return }
         switch result {
@@ -240,6 +238,17 @@ final class LiveSceneViewModel: ObservableObject {
         case .picker, .ready, .review, .error:
             break
         }
+    }
+
+    /// Reactivates a stable prompt for the next recording attempt after a tab
+    /// switch. Kept separate from audio setup so lifecycle tests can verify
+    /// the state transition without depending on microphone hardware.
+    @discardableResult
+    func beginReadyAttempt() -> Bool {
+        guard case .ready = phase else { return false }
+        flowActive = true
+        flowGeneration &+= 1
+        return true
     }
 
     /// Error state → go back to picker. Same shape as restart() — we keep

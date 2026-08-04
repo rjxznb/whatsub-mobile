@@ -242,12 +242,9 @@ struct QuickChatView: View {
                 Button("结束", role: .destructive) {
                     vadCoordinator.cancel()
                     Speaker.stop()
-                    vm.prepareToEndSession()
-                    Task {
-                        await vm.endSession()
-                        Speaker.releaseSession()
-                        dismiss()
-                    }
+                    vm.endSession()
+                    Speaker.releaseSession()
+                    dismiss()
                 }
             } message: {
                 Text("已经用对的短语会保存到掌握度记录。")
