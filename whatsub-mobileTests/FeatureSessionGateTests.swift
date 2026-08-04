@@ -1,6 +1,7 @@
 import XCTest
 @testable import whatsub_mobile
 
+@MainActor
 final class FeatureSessionGateTests: XCTestCase {
     func testGrantCannotBeReusedAcrossConversationFeatures() {
         let quickChat = FeatureAccessGrant(feature: .quickChat, access: .trial, email: "a@x.com")
