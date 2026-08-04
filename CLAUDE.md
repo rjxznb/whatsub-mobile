@@ -266,9 +266,11 @@ per-account snapshot from `Documents/feature_access.json`, merges server Pro wit
 `StoreManager.hasLocalSub`, calls `/api/license/features/*`, and persists only
 entitlement states plus pending consumes. Grants are in-memory and scoped to one
 feature plus the normalized account email; a response or callback from a prior
-login is discarded. Prompts, replies, transcripts, images, and API keys are
-never written by this layer. A free first start always requires a successful
-server call. Cached/locally verified Pro remains usable offline. A consumed
+login is discarded, and same-account entitlement refreshes are latest-wins so
+an older response cannot restore stale Pro/trial state. Prompts, replies,
+transcripts, images, and API keys are never written by this layer. A free first
+start always requires a successful server call. Cached/locally verified Pro
+remains usable offline. A consumed
 state only short-circuits to the subscription sheet when it was server-verified
 during the current account activation or has a durable local pending-consume
 marker; stale disk cache plus network failure shows retry rather than a paywall.
@@ -289,9 +291,12 @@ idempotent network request. Login, foreground, entitlement refresh, and purchase
 refresh retry pending consumes. Failed, timed-out, malformed, empty, or canceled
 flows stay `in_progress`. If the marker cannot be written, the result fails
 closed and is not displayed. View-model generation checks also discard AI/OCR
-responses arriving after dismiss, restart, logout, or an account switch. The
-current open session retains its grant after
-consumption; starting another session/photo requires a fresh check.
+responses arriving after dismiss, restart, logout, or an account switch. Live
+Scene observes the real Camera Tab selection, cancels in-flight work on exit,
+and preserves a stable prompt for a fresh generation on return. Quick Chat and
+roleplay end synchronously before dismissal, leaving no task-scheduling window
+for a late reply. The current open session retains its grant after consumption;
+starting another session/photo requires a fresh check.
 
 `FeatureTrialBadge` renders only `免费体验 1 次` for available and
 `继续免费体验` for in-progress; Pro, consumed, and unknown states show no badge.
