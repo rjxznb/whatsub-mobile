@@ -16,6 +16,7 @@ struct ImportView: View {
     @State private var diagnosticsLog: [String] = []
     @State private var showVPNHelp = false
     @State private var showLLMSettings = false
+    @State private var showAnalysisDiagnostics = false
 
     private let initialURL: String?
 
@@ -103,6 +104,11 @@ struct ImportView: View {
         }
         .sheet(isPresented: $showLLMSettings, onDismiss: continueWithBYOKIfConfigured) {
             NavigationStack { LlmSettingsView() }
+        }
+        .sheet(isPresented: $showAnalysisDiagnostics) {
+            if let report = vm.diagnosticReport {
+                AnalysisDiagnosticSheet(report: report)
+            }
         }
     }
 
@@ -445,6 +451,15 @@ struct ImportView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
                 .textSelection(.enabled)
+            if vm.diagnosticReport != nil {
+                Button {
+                    showAnalysisDiagnostics = true
+                } label: {
+                    Label(AnalysisDiagnosticSheet.copyButtonTitle, systemImage: "doc.text.magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .tint(.whatsubAccent)
+            }
             // Smart retry: if rawCues is in memory (extraction succeeded,
             // AI stage failed) — retry the AI step directly with the same
             // cues. Otherwise reset to idle so URL input shows.
