@@ -6,6 +6,17 @@ iOS consumer client for [whatSub](https://whatsub.eversay.cc). Read public/priva
 
 SwiftUI native, iOS 16+. Project file generated from `project.yml` by [XcodeGen](https://github.com/yonaskolb/XcodeGen) — DO NOT edit `.xcodeproj` directly; it's git-ignored.
 
+## Background AI analysis (staged rollout)
+
+The import flow now has two deliberately different execution modes:
+
+- **whatSub managed AI** submits a durable backend job. The user may switch apps or terminate whatSub while analysis continues. Free accounts may analyze videos up to 20 minutes and share the existing 200K lifetime trial-token budget; Pro uses the existing 5M monthly budget and has no product-level duration cap in this analysis path.
+- **BYOK** continues to call the user's configured provider directly from iOS. Video length is not capped by whatSub, but iOS only starts requests while the app is in the foreground. Completed 50-cue batches are checkpointed in protected Application Support storage, so returning to the app resumes from the next unfinished batch instead of restarting the whole video.
+
+Managed jobs appear under `我的 -> 导入队列 -> 手机后台解析`, including exact batch progress, cancellation, quota-paused retry, failures, and completion. Live Activity updates use the combined desktop/mobile queue aggregate; a completed notification can deep-link directly to the new Library entry.
+
+Backend capacity is bounded independently of HTTP traffic: workers default to disabled for deployment, then roll out from one worker to two; defaults reserve at most two background LLM connections within four global LLM connections, allow at most three unfinished jobs per account, and cap the global unfinished queue at 100. See the implementation plan and design under `docs/superpowers/` before changing these limits or enabling workers in production.
+
 ## Local dev (on Apple Silicon Mac with Xcode)
 
 ```bash
