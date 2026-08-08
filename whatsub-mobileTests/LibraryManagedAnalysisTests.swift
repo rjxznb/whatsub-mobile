@@ -5,22 +5,30 @@ final class LibraryManagedAnalysisTests: XCTestCase {
     private actor API: LibraryDesktopReplacementAPI, ManagedAnalysisClientProtocol {
         private var detailQueue: [LibraryEntryDetail]
         private var resultQueue: [ManagedAnalysisResultsPage]
+        private var detailCallCount = 0
+        private let failingDetailCalls: Set<Int>
         private(set) var requestedCursors: [Int] = []
         var listedJobs: [ManagedAnalysisJob]
 
         init(
             details: [LibraryEntryDetail],
             jobs: [ManagedAnalysisJob],
-            results: [ManagedAnalysisResultsPage]
+            results: [ManagedAnalysisResultsPage],
+            failingDetailCalls: Set<Int> = []
         ) {
             detailQueue = details
             listedJobs = jobs
             resultQueue = results
+            self.failingDetailCalls = failingDetailCalls
         }
 
         func cursors() -> [Int] { requestedCursors }
 
         func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
+            detailCallCount += 1
+            if failingDetailCalls.contains(detailCallCount) {
+                throw ManagedAnalysisClientError.network("temporary")
+            }
             guard !detailQueue.isEmpty else { throw ManagedAnalysisClientError.notFound }
             if detailQueue.count == 1 { return detailQueue[0] }
             return detailQueue.removeFirst()
@@ -131,7 +139,8 @@ final class LibraryManagedAnalysisTests: XCTestCase {
 
         XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["第一句", ""])
         XCTAssertEqual(viewModel.managedProgress?.completedCues, 1)
-        XCTAssertEqual(await api.cursors(), [-1])
+        let cursors = await api.cursors()
+        XCTAssertEqual(cursors, [-1])
     }
 
     @MainActor
@@ -164,6 +173,42 @@ final class LibraryManagedAnalysisTests: XCTestCase {
 
         XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["最终第一句", "最终第二句"])
         XCTAssertEqual(viewModel.managedProgress?.status, .completed)
-        XCTAssertEqual(await api.cursors(), [-1, 0])
+        let cursors = await api.cursors()
+        XCTAssertEqual(cursors, [-1, 0])
+    }
+
+    @MainActor
+    func testCompletionKeepsEditingLockedUntilFinalDetailRetrySucceeds() async throws {
+        let final = entry(translations: ["最终第一句", "最终第二句"])
+        let completedPage = ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .completed,
+            completedCues: 2, totalCues: 2, nextBatchCursor: 1,
+            batches: [ManagedAnalysisCompletedBatch(
+                batchIndex: 1,
+                subtitles: [cue(0, translation: "临时第一句"), cue(1, translation: "临时第二句")]
+            )],
+            errorCode: nil
+        )
+        let api = API(
+            details: [entry(translations: ["", ""]), final],
+            jobs: [job()],
+            results: [completedPage, ManagedAnalysisResultsPage(
+                jobId: "job-1", entryId: "entry-1", status: .completed,
+                completedCues: 2, totalCues: 2, nextBatchCursor: 1,
+                batches: [], errorCode: nil
+            )],
+            failingDetailCalls: [2]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        XCTAssertTrue(viewModel.managedFinalSyncPending)
+        XCTAssertTrue(viewModel.managedEditingBlocked)
+
+        try await viewModel.pollManagedAnalysisOnce(token: "token")
+        XCTAssertFalse(viewModel.managedFinalSyncPending)
+        XCTAssertFalse(viewModel.managedEditingBlocked)
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["最终第一句", "最终第二句"])
     }
 }

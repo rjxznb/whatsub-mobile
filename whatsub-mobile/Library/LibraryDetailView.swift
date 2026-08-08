@@ -404,7 +404,7 @@ struct LibraryDetailView: View {
 
     @ViewBuilder
     private var managedAnalysisBanner: some View {
-        if let progress = vm.managedProgress, let label = progress.label {
+        if let progress = vm.managedProgress, let label = vm.managedBannerLabel {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: progress.isPolling ? "sparkles" : "exclamationmark.circle")
@@ -431,7 +431,7 @@ struct LibraryDetailView: View {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.whatsubInkMuted)
-                } else if progress.blocksEditing {
+                } else if vm.managedEditingBlocked {
                     Text("英文字幕已可播放；翻译和重点会分批自动出现。")
                         .font(.caption)
                         .foregroundStyle(.whatsubInkMuted)
@@ -620,7 +620,7 @@ struct LibraryDetailView: View {
                     // "编辑字幕" entry point — kept above the list (vs. in the
                     // nav toolbar) so it's discoverable on first scroll. Only
                     // visible on the 字幕 tab; vanishes on 收藏 / 角色扮演.
-                    if vm.managedProgress?.blocksEditing != true {
+                    if !vm.managedEditingBlocked {
                         Button {
                             vm.startEditing()
                         } label: {

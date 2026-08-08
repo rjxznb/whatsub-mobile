@@ -44,6 +44,7 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published private(set) var managedProgress: ManagedAnalysisProgressState?
     @Published var managedProgressError: String?
     @Published var managedResuming = false
+    @Published private(set) var managedFinalSyncPending = false
 
     // Popup for a tapped highlight.
     @Published var popupWord: String?
@@ -99,6 +100,15 @@ final class LibraryDetailViewModel: ObservableObject {
             && progressiveOverlay?.resolvedIndexes.contains(cue.index) != true
     }
 
+    var managedEditingBlocked: Bool {
+        managedFinalSyncPending || managedProgress?.blocksEditing == true
+    }
+
+    var managedBannerLabel: String? {
+        if managedFinalSyncPending { return "AI 解析完成 · 正在同步最终结果" }
+        return managedProgress?.label
+    }
+
     func load(id: String, token: String) async {
         loadRevision += 1
         let revision = loadRevision
@@ -115,6 +125,7 @@ final class LibraryDetailViewModel: ObservableObject {
             progressiveOverlay = ProgressiveAnalysisOverlay(baseline: displayedCues)
             managedBatchCursor = -1
             managedProgress = nil
+            managedFinalSyncPending = false
             managedProgressError = nil
             loading = false
             replacementStatusTask = Task { [weak self] in
@@ -168,7 +179,7 @@ final class LibraryDetailViewModel: ObservableObject {
             managedBatchCursor = -1
             managedPollFailures = 0
             if job.status == .completed {
-                await reloadFinalEntry(id: entry.id, token: token)
+                managedFinalSyncPending = !(await reloadFinalEntry(id: entry.id, token: token))
             } else {
                 do {
                     try await pollManagedAnalysisOnce(token: token)
@@ -210,7 +221,7 @@ final class LibraryDetailViewModel: ObservableObject {
         managedPollFailures = 0
         managedProgressError = nil
         if page.status == .completed {
-            await reloadFinalEntry(id: entry.id, token: token)
+            managedFinalSyncPending = !(await reloadFinalEntry(id: entry.id, token: token))
         }
     }
 
@@ -222,6 +233,7 @@ final class LibraryDetailViewModel: ObservableObject {
         do {
             let job = try await managedAPI.resume(id: jobID, token: token)
             managedProgress = ManagedAnalysisProgressState(job: job)
+            managedFinalSyncPending = false
             managedPollFailures = 0
             startManagedProgress(token: token)
         } catch {
@@ -231,11 +243,12 @@ final class LibraryDetailViewModel: ObservableObject {
 
     private func runManagedProgress(token: String) async {
         await discoverManagedAnalysis(token: token)
-        while !Task.isCancelled, let progress = managedProgress, progress.isPolling {
-            let delay = ManagedAnalysisPollPolicy.delay(
+        while !Task.isCancelled, let progress = managedProgress,
+              progress.isPolling || managedFinalSyncPending {
+            let delay = managedFinalSyncPending ? 4 : (ManagedAnalysisPollPolicy.delay(
                 status: progress.status,
                 failureCount: managedPollFailures
-            ) ?? 5
+            ) ?? 5)
             let jitter = Double.random(in: 0...0.35)
             do {
                 try await Task.sleep(nanoseconds: UInt64((delay + jitter) * 1_000_000_000))
@@ -250,17 +263,20 @@ final class LibraryDetailViewModel: ObservableObject {
         }
     }
 
-    private func reloadFinalEntry(id: String, token: String) async {
+    private func reloadFinalEntry(id: String, token: String) async -> Bool {
         do {
             let finalEntry = try await replacementAPI.libraryEntry(id: id, token: token)
-            guard !Task.isCancelled, entry?.id == id else { return }
+            guard !Task.isCancelled, entry?.id == id else { return false }
             entry = finalEntry
             displayedCues = finalEntry.analysisJson.subtitles
             progressiveOverlay = nil
+            managedFinalSyncPending = false
             managedProgressError = nil
+            return true
         } catch {
             // Keep the fully merged durable batches visible until a later reload.
             managedProgressError = "解析已完成，最终结果稍后自动同步"
+            return false
         }
     }
 
@@ -377,7 +393,7 @@ final class LibraryDetailViewModel: ObservableObject {
 
     func startEditing() {
         guard let e = entry else { return }
-        guard managedProgress?.blocksEditing != true else { return }
+        guard !managedEditingBlocked else { return }
         draftCues = displayedCues.isEmpty ? e.analysisJson.subtitles : displayedCues
         dirty = false
         saveError = nil

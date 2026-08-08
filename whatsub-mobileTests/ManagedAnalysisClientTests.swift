@@ -109,7 +109,8 @@ final class ManagedAnalysisClientTests: XCTestCase {
 
         XCTAssertEqual(page.nextBatchCursor, 0)
         XCTAssertEqual(page.batches.first?.subtitles.first?.translation, "你好")
-        let sent = try XCTUnwrap(await recorder.last())
+        let lastRequest = await recorder.last()
+        let sent = try XCTUnwrap(lastRequest)
         let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(sent.url), resolvingAgainstBaseURL: false))
         XCTAssertEqual(components.percentEncodedPath, "/api/jobs/job%20%2F%20one/results")
         XCTAssertEqual(components.queryItems, [URLQueryItem(name: "afterBatch", value: "-1")])
