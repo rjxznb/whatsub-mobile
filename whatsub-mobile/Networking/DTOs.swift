@@ -61,6 +61,8 @@ struct RateLimitErrorBody: Decodable {
 struct ManagedAnalysisErrorBody: Decodable {
     let error: String?
     let retryable: Bool?
+    let diagnosticCode: String?
+    let diagnosticId: String?
 }
 
 struct ManagedAnalysisJobsResponse: Decodable {

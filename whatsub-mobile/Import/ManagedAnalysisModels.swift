@@ -126,7 +126,12 @@ enum ManagedAnalysisClientError: Error, Equatable {
     case queueLimit
     case serverBusy(retryable: Bool)
     case invalidResponse(String)
-    case server(status: Int, code: String?)
+    case server(
+        status: Int,
+        code: String?,
+        diagnosticCode: String?,
+        diagnosticId: String?
+    )
 }
 
 enum ManagedEntitlementState: Equatable {

@@ -41,6 +41,7 @@ final class ImportViewModel: ObservableObject {
     }
 
     @Published var state: State = .idle
+    @Published private(set) var diagnosticReport: AnalysisDiagnosticReport?
 
     /// The in-flight extract→analyse→sync run. Owned here (not created ad-hoc
     /// by the View) so dismissing the import sheet can actually CANCEL it.
@@ -232,6 +233,7 @@ final class ImportViewModel: ObservableObject {
         // so an early failure can never leak an old duration/result into the
         // next managed-analysis request.
         result = nil
+        diagnosticReport = nil
         rawCues = []
         videoDurationSec = nil
         videoId = ""
@@ -397,6 +399,7 @@ final class ImportViewModel: ObservableObject {
             transcriptSrt: buildSRT(from: rawCues),
             thumbData: await thumbnailFetcher(videoId)
         )
+        let encodedRequestBytes = (try? JSONEncoder().encode(request).count) ?? 0
         guard isCurrent(generation), !Task.isCancelled else { return }
         do {
             let job = try await managedClient.createJob(request, token: token)
@@ -424,7 +427,19 @@ final class ImportViewModel: ObservableObject {
         } catch is CancellationError {
             if isCurrent(generation) { state = .idle }
         } catch let error as ManagedAnalysisClientError {
-            if isCurrent(generation) { state = managedState(for: error, duration: duration) }
+            if isCurrent(generation) {
+                if case let .server(status, code, diagnosticCode, diagnosticId) = error {
+                    diagnosticReport = .managed(
+                        request: request,
+                        encodedBytes: encodedRequestBytes,
+                        status: status,
+                        code: code,
+                        diagnosticCode: diagnosticCode,
+                        diagnosticId: diagnosticId
+                    )
+                }
+                state = managedState(for: error, duration: duration)
+            }
         } catch {
             if isCurrent(generation) { state = .error(error.localizedDescription) }
         }

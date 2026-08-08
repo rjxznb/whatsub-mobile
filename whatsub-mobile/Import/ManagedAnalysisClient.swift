@@ -142,7 +142,13 @@ struct ManagedAnalysisClient: ManagedAnalysisClientProtocol {
         case (_, "upstream_unavailable"): return .upstreamUnavailable
         case (_, "queue_limit"): return .queueLimit
         case (503, "server_busy"): return .serverBusy(retryable: body?.retryable ?? false)
-        default: return .server(status: status, code: body?.error)
+        default:
+            return .server(
+                status: status,
+                code: body?.error,
+                diagnosticCode: body?.diagnosticCode,
+                diagnosticId: body?.diagnosticId
+            )
         }
     }
 }
