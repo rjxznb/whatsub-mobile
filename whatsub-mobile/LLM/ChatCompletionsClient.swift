@@ -220,6 +220,13 @@ struct ChatCompletionsClient {
     /// timeout is bumped (300s here vs `chat()`'s 120s) because the
     /// import flow is willing to wait for a full transcript to land.
     func streamChat(_ messages: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
+        streamChat(messages, onLifecycle: { _ in })
+    }
+
+    func streamChat(
+        _ messages: [ChatMessage],
+        onLifecycle: @escaping (AnalysisStreamStage) -> Void
+    ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -249,6 +256,7 @@ struct ChatCompletionsClient {
                     }
                     req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+                    onLifecycle(.connecting)
                     let (asyncBytes, resp) = try await session.bytes(for: req)
                     guard let http = resp as? HTTPURLResponse else {
                         throw LlmError.network("no http response · url=\(url.absoluteString)")
@@ -269,6 +277,7 @@ struct ChatCompletionsClient {
                         }
                         throw LlmError.api(http.statusCode, head)
                     }
+                    onLifecycle(.responseOpen)
 
                     // Walk SSE line-by-line. For each `data:` JSON frame,
                     // yield delta.content (preferred) or delta.reasoning_content
@@ -292,9 +301,11 @@ struct ChatCompletionsClient {
                         // that look like JSON; "thinking" prose between
                         // them is silently dropped.
                         if let c = delta["content"] as? String, !c.isEmpty {
+                            if !emitted { onLifecycle(.firstContent) }
                             emitted = true
                             continuation.yield(c)
                         } else if let r = delta["reasoning_content"] as? String, !r.isEmpty {
+                            if !emitted { onLifecycle(.firstContent) }
                             emitted = true
                             continuation.yield(r)
                         }

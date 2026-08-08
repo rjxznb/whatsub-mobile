@@ -62,7 +62,8 @@ final class ImportViewModel: ObservableObject {
         _ cues: [Cue],
         _ settings: LlmSettings,
         _ resume: AnalysisResumeContext,
-        _ onProgress: @escaping (Int, Int) -> Void
+        _ onProgress: @escaping (Int, Int) -> Void,
+        _ onDiagnostic: @escaping (AnalysisStreamEvent) -> Void
     ) async throws -> AnalysisJson
 
     private let managedClient: ManagedAnalysisClientProtocol
@@ -74,6 +75,7 @@ final class ImportViewModel: ObservableObject {
     private let durationRefresher: (String) async throws -> Int?
     private let localAnalyzer: LocalAnalyzer
     private let checkpointStore: AnalysisCheckpointStore
+    private let noProgressWait: () async throws -> Void
     private let byokRequestGate = BYOKRequestGate()
     private var byokCheckpointLease: BYOKCheckpointLease?
     private var byokPaused = false
@@ -106,7 +108,10 @@ final class ImportViewModel: ObservableObject {
             try await YouTubeCaptionExtractor.refreshDuration(videoId: videoId)
         },
         checkpointStore: AnalysisCheckpointStore = AnalysisCheckpointStore(),
-        localAnalyzer: @escaping LocalAnalyzer = { cues, settings, resume, onProgress in
+        noProgressWait: @escaping () async throws -> Void = {
+            try await Task.sleep(nanoseconds: 90_000_000_000)
+        },
+        localAnalyzer: @escaping LocalAnalyzer = { cues, settings, resume, onProgress, onDiagnostic in
             let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
             return try await engine.analyze(
                 cues,
@@ -115,7 +120,8 @@ final class ImportViewModel: ObservableObject {
                 onBatchCompleted: resume.onBatchCompleted,
                 onSummaryCompleted: resume.onSummaryCompleted,
                 shouldBeginRequest: resume.shouldBeginRequest,
-                onProgress: onProgress
+                onProgress: onProgress,
+                onDiagnostic: onDiagnostic
             )
         }
     ) {
@@ -127,6 +133,7 @@ final class ImportViewModel: ObservableObject {
         self.thumbnailFetcher = thumbnailFetcher
         self.durationRefresher = durationRefresher
         self.checkpointStore = checkpointStore
+        self.noProgressWait = noProgressWait
         self.localAnalyzer = localAnalyzer
         try? checkpointStore.prune()
     }
@@ -526,6 +533,7 @@ final class ImportViewModel: ObservableObject {
         let cueCount = cues.count
         state = .analyzing(done: 0, total: 1, cueCount: cueCount)
         let progressSnapshot = AnalysisProgressSnapshot()
+        let diagnosticTracker = AnalysisStreamDiagnosticTracker()
         progressSnapshot.update(done: 0, total: cues.count + 1)
         do {
             byokCheckpointLease?.invalidate {}
@@ -552,14 +560,47 @@ final class ImportViewModel: ObservableObject {
                     byokRequestGate.canBeginRequest()
                 }
             )
-            let analysis = try await localAnalyzer(cues, settings, resume) { [weak self] done, total in
-                progressSnapshot.update(done: done, total: total)
-                Task { @MainActor [weak self] in
-                    guard let self,
-                          self.isCurrent(generation),
-                          !self.byokPaused else { return }
-                    self.state = .analyzing(done: done, total: total, cueCount: cueCount)
+            enum RaceResult {
+                case analysis(AnalysisJson)
+                case timeout
+            }
+            let analysis = try await withThrowingTaskGroup(of: RaceResult.self) { group in
+                group.addTask { [localAnalyzer] in
+                    let value = try await localAnalyzer(
+                        cues,
+                        settings,
+                        resume,
+                        { [weak self] done, total in
+                            progressSnapshot.update(done: done, total: total)
+                            Task { @MainActor [weak self] in
+                                guard let self,
+                                      self.isCurrent(generation),
+                                      !self.byokPaused else { return }
+                                self.state = .analyzing(done: done, total: total, cueCount: cueCount)
+                            }
+                        },
+                        { event in diagnosticTracker.record(event) }
+                    )
+                    return .analysis(value)
                 }
+                group.addTask { [noProgressWait] in
+                    try await noProgressWait()
+                    return .timeout
+                }
+                while let result = try await group.next() {
+                    switch result {
+                    case .analysis(let value):
+                        group.cancelAll()
+                        return value
+                    case .timeout:
+                        let latest = diagnosticTracker.snapshot()
+                        if latest.parsedCues == 0 {
+                            group.cancelAll()
+                            throw BYOKNoProgressTimeoutError(event: latest)
+                        }
+                    }
+                }
+                throw CancellationError()
             }
             guard isCurrent(generation) else { return }
             result = analysis
@@ -570,6 +611,18 @@ final class ImportViewModel: ObservableObject {
             // Auto-sync immediately on analysis success — user requested
             // removal of the preview/sync confirmation step.
             await sync(token: token, generation: generation)
+        } catch let timeout as BYOKNoProgressTimeoutError {
+            guard isCurrent(generation) else { return }
+            let host = URL(string: settings.baseUrl)?.host ?? "unknown"
+            diagnosticReport = .byok(
+                stage: timeout.event.stage,
+                elapsedSeconds: 90,
+                providerHost: host,
+                model: settings.model,
+                batch: timeout.event.batch,
+                parsedCues: timeout.event.parsedCues
+            )
+            state = .error("AI 解析 90 秒仍未收到可解析字幕，已停止等待。请复制诊断信息发给客服。")
         } catch is AnalysisPausedError {
             guard isCurrent(generation) else { return }
             // Foreground may have won the race after the engine observed the

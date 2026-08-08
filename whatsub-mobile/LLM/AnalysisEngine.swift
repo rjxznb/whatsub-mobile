@@ -15,15 +15,23 @@ struct AnalysisResumeContext {
 /// allowing BYOK work to resume without paying for successful requests twice.
 struct AnalysisEngine {
     typealias StreamProvider = ([ChatMessage]) -> AsyncThrowingStream<String, Error>
+    typealias DiagnosticStreamProvider = (
+        [ChatMessage],
+        @escaping (AnalysisStreamStage) -> Void
+    ) -> AsyncThrowingStream<String, Error>
 
-    private let streamProvider: StreamProvider
+    private let streamProvider: DiagnosticStreamProvider
 
     init(client: ChatCompletionsClient) {
-        streamProvider = client.streamChat
+        streamProvider = client.streamChat(_:onLifecycle:)
     }
 
     init(streamProvider: @escaping StreamProvider) {
-        self.streamProvider = streamProvider
+        self.streamProvider = { messages, _ in streamProvider(messages) }
+    }
+
+    init(diagnosticStreamProvider: @escaping DiagnosticStreamProvider) {
+        self.streamProvider = diagnosticStreamProvider
     }
 
     static func batches(_ cues: [Cue], size: Int = 50) -> [[Cue]] {
@@ -51,7 +59,8 @@ struct AnalysisEngine {
 
     func analyze(
         _ cues: [Cue],
-        onProgress: @escaping (Int, Int) -> Void
+        onProgress: @escaping (Int, Int) -> Void,
+        onDiagnostic: @escaping (AnalysisStreamEvent) -> Void = { _ in }
     ) async throws -> AnalysisJson {
         try await analyze(
             cues,
@@ -60,7 +69,8 @@ struct AnalysisEngine {
             onBatchCompleted: { _, _ in },
             onSummaryCompleted: { _ in },
             shouldBeginRequest: { true },
-            onProgress: onProgress
+            onProgress: onProgress,
+            onDiagnostic: onDiagnostic
         )
     }
 
@@ -74,7 +84,8 @@ struct AnalysisEngine {
         onBatchCompleted: @escaping (Int, [Cue]) throws -> Void,
         onSummaryCompleted: @escaping ([KeyPhrase]) throws -> Void,
         shouldBeginRequest: @escaping () -> Bool,
-        onProgress: @escaping (Int, Int) -> Void
+        onProgress: @escaping (Int, Int) -> Void,
+        onDiagnostic: @escaping (AnalysisStreamEvent) -> Void = { _ in }
     ) async throws -> AnalysisJson {
         try Task.checkCancellation()
         let batched = Self.batches(cues)
@@ -95,14 +106,26 @@ struct AnalysisEngine {
             let completedBefore = resultsByBatch.values.reduce(0) { $0 + $1.count }
             var batchResult: [Cue] = []
             let parser = JsonLineParser()
+            onDiagnostic(AnalysisStreamEvent(
+                stage: .preparingRequest, batch: batchIndex, parsedCues: completedBefore
+            ))
             let stream = streamProvider([
                 ChatMessage(role: "system", content: AnalysisPrompts.system),
                 ChatMessage(role: "user", content: AnalysisPrompts.userPrompt(batch)),
-            ])
+            ]) { stage in
+                onDiagnostic(AnalysisStreamEvent(
+                    stage: stage, batch: batchIndex, parsedCues: completedBefore + batchResult.count
+                ))
+            }
             for try await chunk in stream {
                 parser.feed(chunk) { object in
                     if let cue = Self.parseCue(object) {
                         batchResult.append(cue)
+                        onDiagnostic(AnalysisStreamEvent(
+                            stage: .parsing,
+                            batch: batchIndex,
+                            parsedCues: completedBefore + batchResult.count
+                        ))
                         onProgress(completedBefore + batchResult.count, totalCues + 1)
                     }
                 }
@@ -110,6 +133,11 @@ struct AnalysisEngine {
             parser.flush { object in
                 if let cue = Self.parseCue(object) {
                     batchResult.append(cue)
+                    onDiagnostic(AnalysisStreamEvent(
+                        stage: .parsing,
+                        batch: batchIndex,
+                        parsedCues: completedBefore + batchResult.count
+                    ))
                     onProgress(completedBefore + batchResult.count, totalCues + 1)
                 }
             }
@@ -117,6 +145,11 @@ struct AnalysisEngine {
             try Self.validateBatch(index: batchIndex, result: batchResult, sourceCues: cues)
             try onBatchCompleted(batchIndex, batchResult)
             resultsByBatch[batchIndex] = batchResult
+            onDiagnostic(AnalysisStreamEvent(
+                stage: .batchComplete,
+                batch: batchIndex,
+                parsedCues: completedBefore + batchResult.count
+            ))
         }
 
         var subtitles = batched.indices.flatMap { resultsByBatch[$0] ?? [] }
@@ -128,10 +161,18 @@ struct AnalysisEngine {
             guard shouldBeginRequest() else { throw AnalysisPausedError() }
             do {
                 let parser = JsonLineParser()
+                let summaryBatch = batched.count
+                onDiagnostic(AnalysisStreamEvent(
+                    stage: .preparingRequest, batch: summaryBatch, parsedCues: totalCues
+                ))
                 let stream = streamProvider([
                     ChatMessage(role: "system", content: AnalysisPrompts.system),
                     ChatMessage(role: "user", content: AnalysisPrompts.summaryPrompt(subtitles)),
-                ])
+                ]) { stage in
+                    onDiagnostic(AnalysisStreamEvent(
+                        stage: stage, batch: summaryBatch, parsedCues: totalCues
+                    ))
+                }
                 for try await chunk in stream {
                     parser.feed(chunk) { object in
                         if let summary = Self.parseSummary(object) { keyPhrases = summary }

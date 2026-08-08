@@ -37,7 +37,7 @@ final class ImportBYOKResumeTests: XCTestCase {
             titleFetcher: { _ in "Title" },
             thumbnailFetcher: { _ in nil },
             checkpointStore: store,
-            localAnalyzer: { _, _, resume, _ in
+            localAnalyzer: { _, _, resume, _, _ in
                 callCount += 1
                 if callCount == 1 {
                     try resume.onBatchCompleted(0, [analyzed])
@@ -76,7 +76,7 @@ final class ImportBYOKResumeTests: XCTestCase {
             titleFetcher: { _ in "Title" },
             thumbnailFetcher: { _ in nil },
             checkpointStore: store,
-            localAnalyzer: { _, _, resume, _ in
+            localAnalyzer: { _, _, resume, _, _ in
                 try resume.onBatchCompleted(0, [analyzed])
                 throw StubError.stop
             }
