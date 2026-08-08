@@ -79,7 +79,9 @@ final class ManagedAnalysisClientTests: XCTestCase {
 
         let requests = await recorder.requests
         XCTAssertEqual(requests.map(\.httpMethod), ["GET", "GET", "POST", "POST"])
-        XCTAssertEqual(requests.map { $0.url?.percentEncodedPath }, [
+        XCTAssertEqual(requests.map {
+            $0.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.percentEncodedPath
+        }, [
             "/api/jobs",
             "/api/jobs/job%20%2F%20one",
             "/api/jobs/job%20%2F%20one/cancel",
