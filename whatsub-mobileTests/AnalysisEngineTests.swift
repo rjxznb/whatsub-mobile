@@ -255,4 +255,45 @@ final class AnalysisEngineTests: XCTestCase {
             XCTFail("unexpected error: \(error)")
         }
     }
+
+    func testAnalysisEmitsTransportParsingAndBatchLifecycle() async throws {
+        let source = [cueFixture(index: 0)]
+        let cueJSON = """
+        {"index":0,"time":0,"endTime":1.5,"text":"word 0","translation":"译",\
+        "isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}
+        """
+        let summaryJSON = #"{"type":"summary","keyPhrases":[]}"#
+        var requestIndex = 0
+        let engine = AnalysisEngine(diagnosticStreamProvider: { _, lifecycle in
+            lifecycle(.connecting)
+            lifecycle(.responseOpen)
+            lifecycle(.firstContent)
+            let response = requestIndex == 0 ? cueJSON : summaryJSON
+            requestIndex += 1
+            return AsyncThrowingStream { continuation in
+                continuation.yield(response)
+                continuation.finish()
+            }
+        })
+        var events: [AnalysisStreamEvent] = []
+
+        _ = try await engine.analyze(
+            source,
+            completedBatches: [:],
+            completedSummary: nil,
+            onBatchCompleted: { _, _ in },
+            onSummaryCompleted: { _ in },
+            shouldBeginRequest: { true },
+            onProgress: { _, _ in },
+            onDiagnostic: { events.append($0) }
+        )
+
+        XCTAssertEqual(events.map(\.stage), [
+            .preparingRequest, .connecting, .responseOpen, .firstContent,
+            .parsing, .batchComplete,
+            .preparingRequest, .connecting, .responseOpen, .firstContent,
+        ])
+        XCTAssertEqual(events.first(where: { $0.stage == .parsing })?.parsedCues, 1)
+        XCTAssertEqual(events.first(where: { $0.stage == .batchComplete })?.batch, 0)
+    }
 }

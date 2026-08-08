@@ -89,4 +89,60 @@ final class ImportBYOKResumeTests: XCTestCase {
 
         XCTAssertNil(try store.load(sourceID: "abcdefghijk", cues: [cue]))
     }
+
+    func testZeroProgressTimeoutStopsStalledBYOKAndBuildsDiagnostic() async {
+        let cue = Cue(index: 0, time: 0, endTime: 1, text: "SECRET-SUBTITLE")
+        let vm = ImportViewModel(
+            settingsProvider: { self.settings() },
+            captionExtractor: { _, _ in
+                CaptionExtractionResult(cues: [cue], durationSec: 60)
+            },
+            titleFetcher: { _ in "SECRET-TITLE" },
+            thumbnailFetcher: { _ in nil },
+            noProgressWait: { },
+            localAnalyzer: { _, _, _, _, diagnostic in
+                diagnostic(AnalysisStreamEvent(stage: .responseOpen, batch: 0, parsedCues: 0))
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+                throw StubError.stop
+            }
+        )
+
+        await vm.run(urlOrId: "abcdefghijk", token: "SECRET-TOKEN")
+
+        guard case .error(let message) = vm.state else {
+            return XCTFail("stalled analysis must become an error")
+        }
+        XCTAssertTrue(message.contains("90"))
+        let report = vm.diagnosticReport
+        XCTAssertEqual(report?.category, "byok-stream")
+        XCTAssertTrue(report?.copyText.contains("stage=response_open") == true)
+        XCTAssertFalse(report?.copyText.contains("SECRET-SUBTITLE") == true)
+        XCTAssertFalse(report?.copyText.contains("SECRET-TITLE") == true)
+        XCTAssertFalse(report?.copyText.contains("SECRET-TOKEN") == true)
+    }
+
+    func testFirstParsedCueDisarmsZeroProgressTimeout() async {
+        let cue = Cue(index: 0, time: 0, endTime: 1, text: "Hello")
+        let completed = expectation(description: "analysis continued after progress")
+        let vm = ImportViewModel(
+            settingsProvider: { self.settings() },
+            captionExtractor: { _, _ in
+                CaptionExtractionResult(cues: [cue], durationSec: 60)
+            },
+            titleFetcher: { _ in "Title" },
+            thumbnailFetcher: { _ in nil },
+            noProgressWait: { await Task.yield() },
+            localAnalyzer: { _, _, _, progress, diagnostic in
+                diagnostic(AnalysisStreamEvent(stage: .parsing, batch: 0, parsedCues: 1))
+                progress(1, 2)
+                completed.fulfill()
+                throw StubError.stop
+            }
+        )
+
+        await vm.run(urlOrId: "abcdefghijk", token: "token")
+
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertNil(vm.diagnosticReport)
+    }
 }
