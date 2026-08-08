@@ -262,7 +262,7 @@ struct Cue: Codable, Identifiable {
     }
 }
 
-struct KeyPhrase: Decodable {
+struct KeyPhrase: Codable {
     let expression: String
     let meaningZh: String
     let usage: String

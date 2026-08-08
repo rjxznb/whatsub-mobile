@@ -10,6 +10,8 @@ final class ImportViewModel: ObservableObject {
         /// Streaming AI analysis. `cueCount` lets the UI render a time
         /// estimate ("约 1 分钟") in addition to the live done/total bar.
         case analyzing(done: Int, total: Int, cueCount: Int)
+        /// BYOK paused safely between requests because the app is backgrounded.
+        case byokPaused(done: Int, total: Int, cueCount: Int)
         case submittingManaged
         /// Durable server-side analysis. Closing the sheet does not cancel it.
         case managedJob(ManagedAnalysisJob)
@@ -58,6 +60,7 @@ final class ImportViewModel: ObservableObject {
     typealias LocalAnalyzer = (
         _ cues: [Cue],
         _ settings: LlmSettings,
+        _ resume: AnalysisResumeContext,
         _ onProgress: @escaping (Int, Int) -> Void
     ) async throws -> AnalysisJson
 
@@ -69,6 +72,10 @@ final class ImportViewModel: ObservableObject {
     private let thumbnailFetcher: (String) async -> String?
     private let durationRefresher: (String) async throws -> Int?
     private let localAnalyzer: LocalAnalyzer
+    private let checkpointStore: AnalysisCheckpointStore
+    private let byokRequestGate = BYOKRequestGate()
+    private var byokCheckpointLease: BYOKCheckpointLease?
+    private var byokPaused = false
 
     init(
         managedClient: ManagedAnalysisClientProtocol = WhatsubAPI.shared,
@@ -97,9 +104,18 @@ final class ImportViewModel: ObservableObject {
         durationRefresher: @escaping (String) async throws -> Int? = { videoId in
             try await YouTubeCaptionExtractor.refreshDuration(videoId: videoId)
         },
-        localAnalyzer: @escaping LocalAnalyzer = { cues, settings, onProgress in
+        checkpointStore: AnalysisCheckpointStore = AnalysisCheckpointStore(),
+        localAnalyzer: @escaping LocalAnalyzer = { cues, settings, resume, onProgress in
             let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
-            return try await engine.analyze(cues, onProgress: onProgress)
+            return try await engine.analyze(
+                cues,
+                completedBatches: resume.completedBatches,
+                completedSummary: resume.completedSummary,
+                onBatchCompleted: resume.onBatchCompleted,
+                onSummaryCompleted: resume.onSummaryCompleted,
+                shouldBeginRequest: resume.shouldBeginRequest,
+                onProgress: onProgress
+            )
         }
     ) {
         self.managedClient = managedClient
@@ -109,11 +125,14 @@ final class ImportViewModel: ObservableObject {
         self.titleFetcher = titleFetcher
         self.thumbnailFetcher = thumbnailFetcher
         self.durationRefresher = durationRefresher
+        self.checkpointStore = checkpointStore
         self.localAnalyzer = localAnalyzer
+        try? checkpointStore.prune()
     }
 
     /// Start the full import run, replacing any previous one.
     func start(urlOrId: String, token: String, email: String? = nil) {
+        deleteCurrentCheckpoint()
         workTask?.cancel()
         let generation = beginGeneration(newAttempt: true)
         workTask = Task { [weak self] in
@@ -149,6 +168,22 @@ final class ImportViewModel: ObservableObject {
         runGeneration += 1
         workTask?.cancel()
         workTask = nil
+        byokPaused = false
+        deleteCurrentCheckpoint()
+    }
+
+    /// Backgrounding does not cancel an in-flight BYOK request. The engine
+    /// persists that batch, then observes this gate before opening the next
+    /// request. Foregrounding resumes through the same serialized entry point.
+    func setSceneActive(_ active: Bool, token: String?) {
+        byokRequestGate.setActive(active)
+        guard active, byokPaused, let token, !rawCues.isEmpty else { return }
+        byokPaused = false
+        workTask?.cancel()
+        let generation = beginGeneration(newAttempt: false)
+        workTask = Task { [weak self] in
+            await self?.retryAnalysisOnly(token: token, generation: generation)
+        }
     }
 
     /// Extracted + analysed result, set once analysis completes.
@@ -457,10 +492,39 @@ final class ImportViewModel: ObservableObject {
         }
         let cueCount = cues.count
         state = .analyzing(done: 0, total: 1, cueCount: cueCount)
+        let progressSnapshot = AnalysisProgressSnapshot()
+        progressSnapshot.update(done: 0, total: cues.count + 1)
         do {
-            let analysis = try await localAnalyzer(cues, settings) { [weak self] done, total in
+            byokCheckpointLease?.invalidate {}
+            let checkpointLease = BYOKCheckpointLease()
+            byokCheckpointLease = checkpointLease
+            var checkpoint = try checkpointStore.load(sourceID: videoId, cues: cues)
+                ?? checkpointStore.makeCheckpoint(sourceID: videoId, cues: cues)
+            let resume = AnalysisResumeContext(
+                completedBatches: checkpoint.completedBatches,
+                completedSummary: checkpoint.completedSummary,
+                onBatchCompleted: { [checkpointStore] index, result in
+                    try checkpointLease.withValid {
+                        try checkpoint.recordBatch(index: index, result: result, sourceCues: cues)
+                        try checkpointStore.save(checkpoint)
+                    }
+                },
+                onSummaryCompleted: { [checkpointStore] summary in
+                    try checkpointLease.withValid {
+                        checkpoint.recordSummary(summary)
+                        try checkpointStore.save(checkpoint)
+                    }
+                },
+                shouldBeginRequest: { [byokRequestGate] in
+                    byokRequestGate.canBeginRequest()
+                }
+            )
+            let analysis = try await localAnalyzer(cues, settings, resume) { [weak self] done, total in
+                progressSnapshot.update(done: done, total: total)
                 Task { @MainActor [weak self] in
-                    guard let self, self.isCurrent(generation) else { return }
+                    guard let self,
+                          self.isCurrent(generation),
+                          !self.byokPaused else { return }
                     self.state = .analyzing(done: done, total: total, cueCount: cueCount)
                 }
             }
@@ -473,6 +537,23 @@ final class ImportViewModel: ObservableObject {
             // Auto-sync immediately on analysis success — user requested
             // removal of the preview/sync confirmation step.
             await sync(token: token, generation: generation)
+        } catch is AnalysisPausedError {
+            guard isCurrent(generation) else { return }
+            // Foreground may have won the race after the engine observed the
+            // closed gate but before this MainActor catch ran. Continue now;
+            // otherwise no later scenePhase edge would exist to wake the job.
+            if byokRequestGate.canBeginRequest() {
+                await performAnalysis(cues, token: token, generation: generation)
+                return
+            }
+            byokPaused = true
+            workTask = nil
+            let progress = progressSnapshot.read()
+            state = .byokPaused(
+                done: progress.done,
+                total: progress.total,
+                cueCount: cueCount
+            )
         } catch is CancellationError {
             // User closed the sheet. No error UI: nothing is on screen, and
             // the next open should start clean rather than land on a stale
@@ -600,6 +681,7 @@ final class ImportViewModel: ObservableObject {
                 token: token
             )
             guard isCurrent(generation) else { return }
+            deleteCurrentCheckpoint()
             state = .done
         } catch {
             if isCurrent(generation) { state = .error(error.localizedDescription) }
@@ -636,5 +718,19 @@ final class ImportViewModel: ObservableObject {
         let m = (total % 3600) / 60
         let s = total % 60
         return String(format: "%02d:%02d:%02d,%03d", h, m, s, ms)
+    }
+
+    private func deleteCurrentCheckpoint() {
+        guard !videoId.isEmpty, !rawCues.isEmpty else { return }
+        let sourceID = videoId
+        let cues = rawCues
+        if let lease = byokCheckpointLease {
+            lease.invalidate { [checkpointStore] in
+                checkpointStore.delete(sourceID: sourceID, cues: cues)
+            }
+            byokCheckpointLease = nil
+        } else {
+            checkpointStore.delete(sourceID: sourceID, cues: cues)
+        }
     }
 }

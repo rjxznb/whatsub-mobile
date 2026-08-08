@@ -5,6 +5,7 @@ struct ImportView: View {
     @EnvironmentObject var store: StoreManager
     @StateObject private var vm = ImportViewModel()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var urlInput = ""
     @State private var didAutoRun = false
@@ -43,6 +44,12 @@ struct ImportView: View {
                     label: "AI 解析中 \(done)/\(total)\n\(Self.eta(forCues: cueCount))",
                     progress: total > 0 ? Double(done) / Double(total) : nil
                 )
+            case .byokPaused(let done, let total, let cueCount):
+                progressBody(
+                    icon: "pause.circle",
+                    label: "已暂停 BYOK 解析 \(done)/\(total)\n回到 whatSub 后会从断点继续\n\(Self.eta(forCues: cueCount))",
+                    progress: total > 0 ? Double(done) / Double(total) : nil
+                )
             case .submittingManaged:
                 progressBody(icon: "icloud.and.arrow.up", label: "正在创建后台解析任务…", progress: nil)
             case .managedJob(let job):
@@ -77,11 +84,23 @@ struct ImportView: View {
             urlInput = url
             // No auto-run: the user chooses 手机解析 vs 推送桌面 on the idle screen.
         }
+        .onAppear {
+            vm.setSceneActive(
+                scenePhase == .active,
+                token: appState.session?.sessionToken
+            )
+        }
         // Closing the sheet must actually cancel the run (2026-07-20).
         // Attached to the ROOT of ImportView: a sheet presented ON TOP of us
         // (diagnostics / VPN help) does NOT fire onDisappear, so those can't
         // kill an in-flight import by accident.
         .onDisappear { vm.cancelWork() }
+        .onChange(of: scenePhase) { phase in
+            vm.setSceneActive(
+                phase == .active,
+                token: appState.session?.sessionToken
+            )
+        }
         .sheet(isPresented: $showLLMSettings, onDismiss: continueWithBYOKIfConfigured) {
             NavigationStack { LlmSettingsView() }
         }

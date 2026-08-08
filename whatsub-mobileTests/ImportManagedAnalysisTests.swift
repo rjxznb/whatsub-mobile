@@ -109,7 +109,7 @@ final class ImportManagedAnalysisTests: XCTestCase {
             titleFetcher: { _ in "Test video" },
             thumbnailFetcher: { _ in nil },
             durationRefresher: { _ in refreshedDuration },
-            localAnalyzer: { cues, _, progress in
+            localAnalyzer: { cues, _, _, progress in
                 try await analyzer.analyze(cues, progress)
             }
         )
@@ -320,7 +320,7 @@ final class ImportManagedAnalysisTests: XCTestCase {
             titleFetcher: { id in id },
             thumbnailFetcher: { _ in nil },
             durationRefresher: { _ in 60 },
-            localAnalyzer: { cues, _, progress in
+            localAnalyzer: { cues, _, _, progress in
                 try await analyzer.analyze(cues, progress)
             }
         )

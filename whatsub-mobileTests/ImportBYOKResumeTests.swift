@@ -1,0 +1,92 @@
+import XCTest
+@testable import whatsub_mobile
+
+@MainActor
+final class ImportBYOKResumeTests: XCTestCase {
+    private enum StubError: Error { case stop }
+
+    private func settings() -> LlmSettings {
+        var value = LlmSettings()
+        value.useManagedRelay = false
+        value.baseUrl = "https://provider.example/v1"
+        value.apiKey = "key"
+        value.model = "model"
+        return value
+    }
+
+    private func makeDirectory() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("ImportBYOKResumeTests-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    func testForegroundResumeReceivesPersistedCompletedBatch() async throws {
+        let directory = makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AnalysisCheckpointStore(directory: directory)
+        let resumed = expectation(description: "resumed from checkpoint")
+        var callCount = 0
+        let cue = Cue(index: 0, time: 0, endTime: 1, text: "Hello")
+        let analyzed = Cue(
+            index: 0, time: 0, endTime: 1, text: "Hello", translation: "你好"
+        )
+        let vm = ImportViewModel(
+            settingsProvider: { self.settings() },
+            captionExtractor: { _, _ in
+                CaptionExtractionResult(cues: [cue], durationSec: 60)
+            },
+            titleFetcher: { _ in "Title" },
+            thumbnailFetcher: { _ in nil },
+            checkpointStore: store,
+            localAnalyzer: { _, _, resume, _ in
+                callCount += 1
+                if callCount == 1 {
+                    try resume.onBatchCompleted(0, [analyzed])
+                    throw AnalysisPausedError()
+                }
+                XCTAssertEqual(resume.completedBatches[0]?.first?.translation, "你好")
+                resumed.fulfill()
+                throw StubError.stop
+            }
+        )
+
+        vm.setSceneActive(false, token: nil)
+        await vm.run(urlOrId: "abcdefghijk", token: "token")
+        guard case .byokPaused = vm.state else {
+            return XCTFail("first run should pause at a safe boundary")
+        }
+
+        vm.setSceneActive(true, token: "token")
+        await fulfillment(of: [resumed], timeout: 1)
+        XCTAssertEqual(callCount, 2)
+    }
+
+    func testExplicitCancelDeletesCheckpointAfterFailedRun() async throws {
+        let directory = makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AnalysisCheckpointStore(directory: directory)
+        let cue = Cue(index: 0, time: 0, endTime: 1, text: "Hello")
+        let analyzed = Cue(
+            index: 0, time: 0, endTime: 1, text: "Hello", translation: "你好"
+        )
+        let vm = ImportViewModel(
+            settingsProvider: { self.settings() },
+            captionExtractor: { _, _ in
+                CaptionExtractionResult(cues: [cue], durationSec: 60)
+            },
+            titleFetcher: { _ in "Title" },
+            thumbnailFetcher: { _ in nil },
+            checkpointStore: store,
+            localAnalyzer: { _, _, resume, _ in
+                try resume.onBatchCompleted(0, [analyzed])
+                throw StubError.stop
+            }
+        )
+
+        await vm.run(urlOrId: "abcdefghijk", token: "token")
+        XCTAssertNotNil(try store.load(sourceID: "abcdefghijk", cues: [cue]))
+
+        vm.cancelWork()
+
+        XCTAssertNil(try store.load(sourceID: "abcdefghijk", cues: [cue]))
+    }
+}

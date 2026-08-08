@@ -3,6 +3,25 @@ import XCTest
 
 final class AnalysisEngineTests: XCTestCase {
 
+    private final class StreamScript: @unchecked Sendable {
+        private let lock = NSLock()
+        private var responses: [String]
+        private(set) var requestCount = 0
+
+        init(_ responses: [String]) { self.responses = responses }
+
+        func stream(_: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
+            lock.lock()
+            requestCount += 1
+            let response = responses.removeFirst()
+            lock.unlock()
+            return AsyncThrowingStream { continuation in
+                continuation.yield(response)
+                continuation.finish()
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     /// Build a minimal Cue via JSON decode (mirrors the lenient Decodable init).
@@ -157,5 +176,83 @@ final class AnalysisEngineTests: XCTestCase {
             return XCTFail("analyze should throw once the task is cancelled")
         }
         XCTAssertTrue(err is CancellationError, "expected CancellationError, got \(err)")
+    }
+
+    func testResumeSkipsCompletedBatchAndReportsNewBatchBeforeSummary() async throws {
+        let source = (0..<60).map { cueFixture(index: $0) }
+        let first = Array(source[0..<50])
+        let secondJSON = source[50..<60].map { cue in
+            "{\"index\":\(cue.index),\"time\":\(cue.time),\"endTime\":\(cue.endTime),\"text\":\"\(cue.text)\",\"translation\":\"译\",\"isKeyPoint\":false,\"highlightWords\":[],\"keyNotes\":{},\"highlightTranslations\":{}}"
+        }.joined(separator: "\n")
+        let summaryJSON = #"{"type":"summary","keyPhrases":[]}"#
+        let script = StreamScript([secondJSON, summaryJSON])
+        let engine = AnalysisEngine(streamProvider: script.stream)
+        var completed: [Int] = []
+
+        let result = try await engine.analyze(
+            source,
+            completedBatches: [0: first],
+            completedSummary: nil,
+            onBatchCompleted: { index, _ in completed.append(index) },
+            onSummaryCompleted: { _ in completed.append(99) },
+            shouldBeginRequest: { true },
+            onProgress: { _, _ in }
+        )
+
+        XCTAssertEqual(script.requestCount, 2)
+        XCTAssertEqual(completed, [1, 99])
+        XCTAssertEqual(result.subtitles.count, 60)
+    }
+
+    func testAnalyzeRejectsPartialBatchBeforeCheckpointCallback() async {
+        let source = (0..<2).map { cueFixture(index: $0) }
+        let partial = "{\"index\":0,\"time\":0,\"endTime\":1.5,\"text\":\"word 0\",\"translation\":\"译\",\"isKeyPoint\":false,\"highlightWords\":[],\"keyNotes\":{},\"highlightTranslations\":{}}"
+        let script = StreamScript([partial])
+        let engine = AnalysisEngine(streamProvider: script.stream)
+        var checkpointed = false
+
+        do {
+            _ = try await engine.analyze(
+                source,
+                completedBatches: [:],
+                completedSummary: nil,
+                onBatchCompleted: { _, _ in checkpointed = true },
+                onSummaryCompleted: { _ in },
+                shouldBeginRequest: { true },
+                onProgress: { _, _ in }
+            )
+            XCTFail("partial batch must fail")
+        } catch is AnalysisCheckpointError {
+            XCTAssertFalse(checkpointed)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testBackgroundGateStopsBeforeOpeningNextBatch() async {
+        let source = (0..<60).map { cueFixture(index: $0) }
+        let firstJSON = source[0..<50].map { cue in
+            "{\"index\":\(cue.index),\"time\":\(cue.time),\"endTime\":\(cue.endTime),\"text\":\"\(cue.text)\",\"translation\":\"译\",\"isKeyPoint\":false,\"highlightWords\":[],\"keyNotes\":{},\"highlightTranslations\":{}}"
+        }.joined(separator: "\n")
+        let script = StreamScript([firstJSON])
+        let engine = AnalysisEngine(streamProvider: script.stream)
+        var allowRequest = true
+
+        do {
+            _ = try await engine.analyze(
+                source,
+                completedBatches: [:],
+                completedSummary: nil,
+                onBatchCompleted: { _, _ in allowRequest = false },
+                onSummaryCompleted: { _ in },
+                shouldBeginRequest: { allowRequest },
+                onProgress: { _, _ in }
+            )
+            XCTFail("analysis should pause between batches")
+        } catch is AnalysisPausedError {
+            XCTAssertEqual(script.requestCount, 1)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
     }
 }
