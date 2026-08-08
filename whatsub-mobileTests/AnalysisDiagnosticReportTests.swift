@@ -2,6 +2,10 @@ import XCTest
 @testable import whatsub_mobile
 
 final class AnalysisDiagnosticReportTests: XCTestCase {
+    func testDiagnosticSheetUsesSupportCopyActionTitle() {
+        XCTAssertEqual(AnalysisDiagnosticSheet.copyButtonTitle, "复制诊断信息")
+    }
+
     func testManagedReportIncludesUsefulMetadataWithoutRequestSecrets() throws {
         let secretCue = "SUBTITLE-SENTINEL"
         let secretTitle = "TITLE-SENTINEL"
