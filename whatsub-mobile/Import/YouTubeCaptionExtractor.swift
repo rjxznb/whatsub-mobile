@@ -1,5 +1,11 @@
 import Foundation
 
+struct CaptionExtractionResult {
+    let cues: [Cue]
+    /// Authoritative YouTube player metadata. Never inferred from cue timing.
+    let durationSec: Int?
+}
+
 /// Pure-Swift YouTube caption extractor. Calls Innertube's `/v1/player`
 /// API claiming to be one of several "non-web" YouTube clients in turn,
 /// parses the returned captionTracks, downloads the timedtext json3
@@ -134,22 +140,42 @@ enum YouTubeCaptionExtractor {
     ///   - fetcher: HTTP function. Defaults to URLSession.shared.
     ///   - onProgress: Receives one debug-log line per extraction step.
     ///     ImportViewModel accumulates these for the `查看诊断` sheet.
-    /// - Returns: `[Cue]` with index, time, endTime, text populated;
-    ///   translation / highlights remain empty until AnalysisEngine runs.
+    /// - Returns: Captions plus authoritative YouTube duration when available.
     /// - Throws: `CaptionError` covering every failure mode.
     static func extract(
         videoId: String,
         cache: CaptionCache = .shared,
         fetcher: @escaping HTTPFetcher = defaultFetcher,
         onProgress: @MainActor @escaping (String) -> Void = { _ in }
-    ) async throws -> [Cue] {
+    ) async throws -> CaptionExtractionResult {
 
         await emit(onProgress, "extract(videoId=\(videoId)) start")
 
         // 1. Cache check.
         if let cached = cache.get(videoId) {
             await emit(onProgress, "cache hit for \(videoId)")
-            return cached
+            guard cached.needsMetadataRefresh else { return cached.result }
+
+            // Version-1 files contain valid cues but predate duration storage.
+            // Refresh only player metadata. A successful response upgrades to
+            // v2 even when duration is absent; a transport/gating failure keeps
+            // v1 refreshable while still allowing BYOK to use its cached cues.
+            await emit(onProgress, "legacy cache: refreshing player metadata")
+            do {
+                let player = try await fetchPlayablePlayer(
+                    videoId: videoId, fetcher: fetcher, onProgress: onProgress
+                )
+                let refreshed = CaptionExtractionResult(
+                    cues: cached.result.cues,
+                    durationSec: player.durationSec
+                )
+                cache.set(videoId, result: refreshed)
+                await emit(onProgress, "legacy cache upgraded")
+                return refreshed
+            } catch {
+                await emit(onProgress, "metadata refresh failed; using legacy cues")
+                return cached.result
+            }
         }
         await emit(onProgress, "cache miss for \(videoId)")
 
@@ -225,13 +251,57 @@ enum YouTubeCaptionExtractor {
             baseUrl: picked.baseUrl, fetcher: fetcher, onProgress: onProgress
         )
 
-        // 6. Cache + return.
-        cache.set(videoId, cues: cues)
+        // 6. Cache + return. Duration comes only from Innertube player
+        // metadata; never infer it from the final subtitle cue.
+        let result = CaptionExtractionResult(cues: cues, durationSec: player.durationSec)
+        cache.set(videoId, result: result)
         await emit(onProgress, "cache write")
-        return cues
+        return result
     }
 
     // MARK: - Private
+
+    /// Player-only fallback used to upgrade legacy cue-only cache entries.
+    /// It intentionally does not inspect caption tracks or fetch timedtext.
+    private static func fetchPlayablePlayer(
+        videoId: String,
+        fetcher: @escaping HTTPFetcher,
+        onProgress: @MainActor @escaping (String) -> Void
+    ) async throws -> PlayerResponse {
+        var workingResponse: PlayerResponse?
+        var lastStatus = "UNKNOWN"
+        var lastError: CaptionError?
+
+        for client in fallbackClients {
+            await emit(onProgress, "POST youtubei/v1/player + \(client.clientName)")
+            do {
+                let response = try await fetchPlayerResponse(
+                    videoId: videoId, client: client, fetcher: fetcher
+                )
+                lastStatus = response.playabilityStatus.status
+                if lastStatus == "OK" {
+                    await emit(onProgress, "playabilityStatus=OK on \(client.clientName)")
+                    workingResponse = response
+                    break
+                }
+                await emit(onProgress, "playabilityStatus=\(lastStatus); try next client")
+            } catch let error as CaptionError {
+                lastError = error
+                await emit(onProgress, "\(client.clientName) metadata request failed; try next client")
+            }
+        }
+
+        guard let player = workingResponse else {
+            if lastStatus == "LOGIN_REQUIRED" || lastStatus == "AGE_VERIFICATION_REQUIRED" {
+                throw CaptionError.requiresLogin
+            }
+            if lastStatus != "UNKNOWN" {
+                throw CaptionError.videoUnavailable
+            }
+            throw lastError ?? CaptionError.videoUnavailable
+        }
+        return player
+    }
 
     private static func fetchPlayerResponse(
         videoId: String,

@@ -47,6 +47,16 @@ final class YouTubeCaptionExtractorTests: XCTestCase {
         return (Data(), resp)
     }
 
+    private func downgradeCacheToLegacy(videoId: String) throws {
+        let path = tempDir.appendingPathComponent("\(videoId).json")
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any]
+        )
+        object["version"] = 1
+        object.removeValue(forKey: "durationSec")
+        try JSONSerialization.data(withJSONObject: object).write(to: path, options: .atomic)
+    }
+
     // MARK: - Happy path
 
     func testExtractHappyPath() async throws {
@@ -91,35 +101,190 @@ final class YouTubeCaptionExtractorTests: XCTestCase {
                 return self.status(500)
             }
         }
-        let cues = try await YouTubeCaptionExtractor.extract(
+        let result = try await YouTubeCaptionExtractor.extract(
             videoId: "abc",
             cache: cache,
             fetcher: fetcher
         )
-        XCTAssertEqual(cues.count, 2)
-        XCTAssertEqual(cues[0].text, "Hello")
-        XCTAssertEqual(cues[1].text, "World")
+        XCTAssertEqual(result.cues.count, 2)
+        XCTAssertEqual(result.cues[0].text, "Hello")
+        XCTAssertEqual(result.cues[1].text, "World")
+        XCTAssertNil(result.durationSec)
+    }
+
+    func testExtractReturnsInnertubeDuration() async throws {
+        let playerJSON = """
+        {"playabilityStatus":{"status":"OK"},
+         "videoDetails":{"lengthSeconds":"1201"},
+         "captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[
+           {"baseUrl":"https://yt.example/timedtext","languageCode":"en"}
+         ]}}}
+        """.data(using: .utf8)!
+        var calls = 0
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { _ in
+            calls += 1
+            return calls == 1 ? self.ok(playerJSON) : self.ok(self.makeTimedtextJson3())
+        }
+
+        let result = try await YouTubeCaptionExtractor.extract(
+            videoId: "duration", cache: cache, fetcher: fetcher
+        )
+
+        XCTAssertEqual(result.durationSec, 1201)
+        XCTAssertEqual(result.cues.count, 2)
+    }
+
+    func testExtractRejectsNonPositiveInnertubeDuration() async throws {
+        let playerJSON = """
+        {"playabilityStatus":{"status":"OK"},
+         "videoDetails":{"lengthSeconds":"0"},
+         "captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[
+           {"baseUrl":"https://yt.example/timedtext","languageCode":"en"}
+         ]}}}
+        """.data(using: .utf8)!
+        var calls = 0
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { _ in
+            calls += 1
+            return calls == 1 ? self.ok(playerJSON) : self.ok(self.makeTimedtextJson3())
+        }
+
+        let result = try await YouTubeCaptionExtractor.extract(
+            videoId: "zero-duration", cache: cache, fetcher: fetcher
+        )
+
+        XCTAssertNil(result.durationSec)
     }
 
     // MARK: - Cache
 
     func testReturnsCachedOnHit() async throws {
-        cache.set("cached_id", cues: [
-            Cue(index: 0, time: 0, endTime: 1, text: "From cache")
-        ])
+        cache.set(
+            "cached_id",
+            result: CaptionExtractionResult(
+                cues: [Cue(index: 0, time: 0, endTime: 1, text: "From cache")],
+                durationSec: 42
+            )
+        )
         var calls = 0
         let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { _ in
             calls += 1
             return self.status(500)
         }
-        let cues = try await YouTubeCaptionExtractor.extract(
+        let result = try await YouTubeCaptionExtractor.extract(
             videoId: "cached_id",
             cache: cache,
             fetcher: fetcher
         )
         XCTAssertEqual(calls, 0, "fetcher must not run when cache hits")
-        XCTAssertEqual(cues.count, 1)
-        XCTAssertEqual(cues[0].text, "From cache")
+        XCTAssertEqual(result.cues.count, 1)
+        XCTAssertEqual(result.cues[0].text, "From cache")
+        XCTAssertEqual(result.durationSec, 42)
+    }
+
+    func testLegacyCacheRefreshesOnlyPlayerMetadataAndUpgradesCache() async throws {
+        cache.set(
+            "legacy_id",
+            result: CaptionExtractionResult(
+                cues: [Cue(index: 0, time: 0, endTime: 1, text: "Legacy cue")],
+                durationSec: nil
+            )
+        )
+        try downgradeCacheToLegacy(videoId: "legacy_id")
+        let playerJSON = """
+        {"playabilityStatus":{"status":"OK"},
+         "videoDetails":{"lengthSeconds":"321"}}
+        """.data(using: .utf8)!
+        var calls = 0
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { request in
+            calls += 1
+            XCTAssertEqual(request.httpMethod, "POST")
+            return self.ok(playerJSON)
+        }
+
+        let result = try await YouTubeCaptionExtractor.extract(
+            videoId: "legacy_id", cache: cache, fetcher: fetcher
+        )
+
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(result.cues.first?.text, "Legacy cue")
+        XCTAssertEqual(result.durationSec, 321)
+        XCTAssertEqual(cache.get("legacy_id")?.needsMetadataRefresh, false)
+    }
+
+    func testLegacyCacheSurvivesMetadataNetworkFailureAndRemainsRefreshable() async throws {
+        cache.set(
+            "legacy_offline",
+            result: CaptionExtractionResult(
+                cues: [Cue(index: 0, time: 0, endTime: 1, text: "Offline cue")],
+                durationSec: nil
+            )
+        )
+        try downgradeCacheToLegacy(videoId: "legacy_offline")
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let result = try await YouTubeCaptionExtractor.extract(
+            videoId: "legacy_offline", cache: cache, fetcher: fetcher
+        )
+
+        XCTAssertEqual(result.cues.first?.text, "Offline cue")
+        XCTAssertNil(result.durationSec)
+        XCTAssertEqual(cache.get("legacy_offline")?.needsMetadataRefresh, true)
+    }
+
+    func testLegacyCacheWithMissingDurationUpgradesOnce() async throws {
+        cache.set(
+            "legacy_no_duration",
+            result: CaptionExtractionResult(
+                cues: [Cue(index: 0, time: 0, endTime: 1, text: "Cached cue")],
+                durationSec: nil
+            )
+        )
+        try downgradeCacheToLegacy(videoId: "legacy_no_duration")
+        let playerJSON = """
+        {"playabilityStatus":{"status":"OK"}}
+        """.data(using: .utf8)!
+        var calls = 0
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { _ in
+            calls += 1
+            return self.ok(playerJSON)
+        }
+
+        let first = try await YouTubeCaptionExtractor.extract(
+            videoId: "legacy_no_duration", cache: cache, fetcher: fetcher
+        )
+        let second = try await YouTubeCaptionExtractor.extract(
+            videoId: "legacy_no_duration", cache: cache, fetcher: fetcher
+        )
+
+        XCTAssertNil(first.durationSec)
+        XCTAssertNil(second.durationSec)
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(cache.get("legacy_no_duration")?.needsMetadataRefresh, false)
+    }
+
+    func testLegacyCacheSurvivesPlaybackFailureAndRemainsRefreshable() async throws {
+        cache.set(
+            "legacy_unplayable",
+            result: CaptionExtractionResult(
+                cues: [Cue(index: 0, time: 0, endTime: 1, text: "Cached cue")],
+                durationSec: nil
+            )
+        )
+        try downgradeCacheToLegacy(videoId: "legacy_unplayable")
+        let playerJSON = """
+        {"playabilityStatus":{"status":"UNPLAYABLE"}}
+        """.data(using: .utf8)!
+        let fetcher: YouTubeCaptionExtractor.HTTPFetcher = { _ in self.ok(playerJSON) }
+
+        let result = try await YouTubeCaptionExtractor.extract(
+            videoId: "legacy_unplayable", cache: cache, fetcher: fetcher
+        )
+
+        XCTAssertEqual(result.cues.first?.text, "Cached cue")
+        XCTAssertNil(result.durationSec)
+        XCTAssertEqual(cache.get("legacy_unplayable")?.needsMetadataRefresh, true)
     }
 
     func testWritesCacheOnSuccess() async throws {
@@ -286,12 +451,12 @@ final class YouTubeCaptionExtractorTests: XCTestCase {
             }
             return self.ok(self.makeTimedtextJson3())
         }
-        let cues = try await YouTubeCaptionExtractor.extract(
+        let result = try await YouTubeCaptionExtractor.extract(
             videoId: "fb", cache: cache, fetcher: fetcher
         )
         XCTAssertEqual(playerCalls, 2,
                        "should advance to second client after UNPLAYABLE")
-        XCTAssertEqual(cues.count, 2)
+        XCTAssertEqual(result.cues.count, 2)
     }
 
     func testFallsBackToNextClientOnHTTPError() async throws {
@@ -313,12 +478,12 @@ final class YouTubeCaptionExtractorTests: XCTestCase {
             }
             return self.ok(self.makeTimedtextJson3())
         }
-        let cues = try await YouTubeCaptionExtractor.extract(
+        let result = try await YouTubeCaptionExtractor.extract(
             videoId: "fb-http", cache: cache, fetcher: fetcher
         )
         XCTAssertEqual(playerCalls, 2,
                        "should advance to next client after HTTP 400")
-        XCTAssertEqual(cues.count, 2)
+        XCTAssertEqual(result.cues.count, 2)
     }
 
     func testExhaustsAllClientsThenThrows() async {

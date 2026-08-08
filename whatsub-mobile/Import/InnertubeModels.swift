@@ -7,6 +7,17 @@ import Foundation
 struct PlayerResponse: Decodable {
     let playabilityStatus: PlayabilityStatus
     let captions: CaptionsContainer?
+    let videoDetails: VideoDetails?
+
+    var durationSec: Int? {
+        guard let raw = videoDetails?.lengthSeconds,
+              let value = Int(raw), value > 0 else { return nil }
+        return value
+    }
+}
+
+struct VideoDetails: Decodable {
+    let lengthSeconds: String?
 }
 
 struct PlayabilityStatus: Decodable {

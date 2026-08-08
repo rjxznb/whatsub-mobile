@@ -71,6 +71,9 @@ final class ImportViewModel: ObservableObject {
     private(set) var result: AnalysisJson?
     /// Raw extracted cues (pre-analysis); kept for SRT generation.
     private(set) var rawCues: [Cue] = []
+    /// Authoritative YouTube player duration. Managed analysis must reject nil
+    /// instead of inferring a policy duration from the final subtitle cue.
+    private(set) var videoDurationSec: Int?
     private(set) var videoId: String = ""
     private(set) var title: String = ""
     /// The full YouTube watch URL entered/resolved by the user, kept so
@@ -80,6 +83,17 @@ final class ImportViewModel: ObservableObject {
     // MARK: - Step 1: Extract + Analyse
 
     func run(urlOrId: String, token: String, email: String? = nil) async {
+        // A sheet can reuse the same VM for another URL. Clear every value
+        // tied to the previous import before any validation or routing branch,
+        // so an early failure can never leak an old duration/result into the
+        // next managed-analysis request.
+        result = nil
+        rawCues = []
+        videoDurationSec = nil
+        videoId = ""
+        title = ""
+        resolvedSourceURL = ""
+
         let trimmed = urlOrId.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Non-YouTube URLs have no phone-side caption path (Bilibili CC is
@@ -109,12 +123,12 @@ final class ImportViewModel: ObservableObject {
 
         // Step 1: Extract captions.
         state = .extracting
-        let cues: [Cue]
+        let extraction: CaptionExtractionResult
         // 2026-06-19: pure-Swift Innertube extractor — see spec
         // docs/superpowers/specs/2026-06-19-ios-innertube-captions-design.md.
         var debugLog: [String] = []
         do {
-            cues = try await YouTubeCaptionExtractor.extract(
+            extraction = try await YouTubeCaptionExtractor.extract(
                 videoId: resolvedId,
                 onProgress: { event in debugLog.append(event) }
             )
@@ -125,7 +139,9 @@ final class ImportViewModel: ObservableObject {
             )
             return
         }
-        rawCues = cues
+        guard !Task.isCancelled else { return }
+        rawCues = extraction.cues
+        videoDurationSec = extraction.durationSec
         // Replace the videoId placeholder title with the real YouTube title
         // (best-effort; VPN is on during import so youtube.com oEmbed is reachable).
         if let real = await Self.fetchYouTubeTitle(videoId: resolvedId), !real.isEmpty {
