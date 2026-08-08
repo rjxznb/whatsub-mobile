@@ -115,6 +115,35 @@ final class ManagedAnalysisClientTests: XCTestCase {
         }
     }
 
+    func testPreservesManagedValidationDiagnosticFields() async {
+        let client = ManagedAnalysisClient(baseURL: URL(string: "https://example.test/api")!) {
+            _ in self.response(
+                400,
+                json: """
+                {"error":"invalid_input","diagnosticCode":"invalid_thumbnail",\
+                "diagnosticId":"abc123def456"}
+                """
+            )
+        }
+
+        do {
+            _ = try await client.createJob(request(), token: "session-secret")
+            XCTFail("expected validation failure")
+        } catch let error as ManagedAnalysisClientError {
+            XCTAssertEqual(
+                error,
+                .server(
+                    status: 400,
+                    code: "invalid_input",
+                    diagnosticCode: "invalid_thumbnail",
+                    diagnosticId: "abc123def456"
+                )
+            )
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     func testDecodesTypedTerminalFailureCodeWithoutFlattening() async throws {
         let failed = """
         {"jobId":"job-1","status":"failed","tier":"pro",
