@@ -3,6 +3,10 @@ import SwiftUI
 struct CueRow: View {
     let cue: Cue
     let isCurrent: Bool
+    /// The English cue is already playable while its server-generated fields
+    /// are still pending. Keep this deliberately quiet: hundreds of row-level
+    /// spinners would be visually noisy and waste rendering work.
+    var isAwaitingAnalysis: Bool = false
     /// Seek to this cue — fired by tapping a NON-highlight word, the Chinese line,
     /// or the row's empty area.
     let onTapCue: () -> Void
@@ -60,10 +64,17 @@ struct CueRow: View {
                         }
                 }
             }
-            Text(cue.translation)
-                .font(.system(size: 16))
-                .foregroundStyle(isCurrent ? .whatsubInkSoft : .whatsubInkMuted)
-                .onTapGesture { onTapCue() }
+            if isAwaitingAnalysis {
+                Text("等待 AI")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.whatsubInkMuted)
+                    .onTapGesture { onTapCue() }
+            } else {
+                Text(cue.translation)
+                    .font(.system(size: 16))
+                    .foregroundStyle(isCurrent ? .whatsubInkSoft : .whatsubInkMuted)
+                    .onTapGesture { onTapCue() }
+            }
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
