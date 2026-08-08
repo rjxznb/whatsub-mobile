@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 @MainActor
 final class ImportViewModel: ObservableObject {
@@ -9,6 +10,10 @@ final class ImportViewModel: ObservableObject {
         /// Streaming AI analysis. `cueCount` lets the UI render a time
         /// estimate ("约 1 分钟") in addition to the live done/total bar.
         case analyzing(done: Int, total: Int, cueCount: Int)
+        case submittingManaged
+        /// Durable server-side analysis. Closing the sheet does not cancel it.
+        case managedJob(ManagedAnalysisJob)
+        case managedPolicy(ManagedAnalysisPolicy)
         case preview
         case syncing
         case done
@@ -42,20 +47,98 @@ final class ImportViewModel: ObservableObject {
     /// cloud entry the user believed they'd cancelled — silently consuming one
     /// of the 3 free video slots.
     private var workTask: Task<Void, Never>?
+    private var runGeneration = 0
+    private var managedAttemptID: String?
+    private var managedAttemptFingerprint: String?
+
+    typealias CaptionExtractor = (
+        _ videoId: String,
+        _ onProgress: @MainActor @escaping (String) -> Void
+    ) async throws -> CaptionExtractionResult
+    typealias LocalAnalyzer = (
+        _ cues: [Cue],
+        _ settings: LlmSettings,
+        _ onProgress: @escaping (Int, Int) -> Void
+    ) async throws -> AnalysisJson
+
+    private let managedClient: ManagedAnalysisClientProtocol
+    private let entitlementRefresher: (String) async -> ManagedEntitlementState
+    private let settingsProvider: () -> LlmSettings
+    private let captionExtractor: CaptionExtractor
+    private let titleFetcher: (String) async -> String?
+    private let thumbnailFetcher: (String) async -> String?
+    private let durationRefresher: (String) async throws -> Int?
+    private let localAnalyzer: LocalAnalyzer
+
+    init(
+        managedClient: ManagedAnalysisClientProtocol = WhatsubAPI.shared,
+        entitlementRefresher: @escaping (String) async -> ManagedEntitlementState = { token in
+            do {
+                let me = try await WhatsubAPI.shared.me(token: token)
+                guard let active = me.hasActiveSubscription else { return .unknown }
+                return active ? .freshPro : .freshFree
+            } catch {
+                return .unknown
+            }
+        },
+        settingsProvider: @escaping () -> LlmSettings = { LlmSettingsStore.load() },
+        captionExtractor: @escaping CaptionExtractor = { videoId, onProgress in
+            try await YouTubeCaptionExtractor.extract(
+                videoId: videoId,
+                onProgress: onProgress
+            )
+        },
+        titleFetcher: @escaping (String) async -> String? = { videoId in
+            await ImportViewModel.fetchYouTubeTitle(videoId: videoId)
+        },
+        thumbnailFetcher: @escaping (String) async -> String? = { videoId in
+            await ImportViewModel.fetchThumbBase64(videoId: videoId)
+        },
+        durationRefresher: @escaping (String) async throws -> Int? = { videoId in
+            try await YouTubeCaptionExtractor.refreshDuration(videoId: videoId)
+        },
+        localAnalyzer: @escaping LocalAnalyzer = { cues, settings, onProgress in
+            let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
+            return try await engine.analyze(cues, onProgress: onProgress)
+        }
+    ) {
+        self.managedClient = managedClient
+        self.entitlementRefresher = entitlementRefresher
+        self.settingsProvider = settingsProvider
+        self.captionExtractor = captionExtractor
+        self.titleFetcher = titleFetcher
+        self.thumbnailFetcher = thumbnailFetcher
+        self.durationRefresher = durationRefresher
+        self.localAnalyzer = localAnalyzer
+    }
 
     /// Start the full import run, replacing any previous one.
     func start(urlOrId: String, token: String, email: String? = nil) {
         workTask?.cancel()
+        let generation = beginGeneration(newAttempt: true)
         workTask = Task { [weak self] in
-            await self?.run(urlOrId: urlOrId, token: token, email: email)
+            await self?.run(urlOrId: urlOrId, token: token, email: email, generation: generation)
         }
     }
 
     /// Start a re-run of JUST the analysis (error-screen retry button).
     func startRetryAnalysis(token: String) {
         workTask?.cancel()
+        let generation = beginGeneration(newAttempt: false)
         workTask = Task { [weak self] in
-            await self?.retryAnalysisOnly(token: token)
+            await self?.retryAnalysisOnly(token: token, generation: generation)
+        }
+    }
+
+    func startRetryManaged(token: String, refreshDuration: Bool = false) {
+        workTask?.cancel()
+        let generation = beginGeneration(newAttempt: false)
+        workTask = Task { [weak self] in
+            await self?.retryManaged(
+                token: token,
+                refreshDuration: refreshDuration,
+                generation: generation
+            )
         }
     }
 
@@ -63,6 +146,7 @@ final class ImportViewModel: ObservableObject {
     /// The extracted captions stay in the on-disk cache — that's harmless and
     /// makes a later re-import instant; only the network work stops.
     func cancelWork() {
+        runGeneration += 1
         workTask?.cancel()
         workTask = nil
     }
@@ -80,9 +164,33 @@ final class ImportViewModel: ObservableObject {
     /// pushToDesktop can enqueue it without requiring UI re-entry.
     private(set) var resolvedSourceURL: String = ""
 
+    private func beginGeneration(newAttempt: Bool) -> Int {
+        runGeneration += 1
+        if newAttempt {
+            managedAttemptID = nil
+            managedAttemptFingerprint = nil
+        }
+        return runGeneration
+    }
+
+    private func isCurrent(_ generation: Int) -> Bool {
+        generation == runGeneration
+    }
+
     // MARK: - Step 1: Extract + Analyse
 
     func run(urlOrId: String, token: String, email: String? = nil) async {
+        let generation = beginGeneration(newAttempt: true)
+        await run(urlOrId: urlOrId, token: token, email: email, generation: generation)
+    }
+
+    private func run(
+        urlOrId: String,
+        token: String,
+        email: String?,
+        generation: Int
+    ) async {
+        guard isCurrent(generation), !Task.isCancelled else { return }
         // A sheet can reuse the same VM for another URL. Clear every value
         // tied to the previous import before any validation or routing branch,
         // so an early failure can never leak an old duration/result into the
@@ -128,28 +236,31 @@ final class ImportViewModel: ObservableObject {
         // docs/superpowers/specs/2026-06-19-ios-innertube-captions-design.md.
         var debugLog: [String] = []
         do {
-            extraction = try await YouTubeCaptionExtractor.extract(
-                videoId: resolvedId,
-                onProgress: { event in debugLog.append(event) }
+            extraction = try await captionExtractor(
+                resolvedId,
+                { event in debugLog.append(event) }
             )
         } catch {
+            guard isCurrent(generation) else { return }
             state = .extractFailed(
                 message: error.localizedDescription,
                 debug: debugLog
             )
             return
         }
-        guard !Task.isCancelled else { return }
+        guard isCurrent(generation), !Task.isCancelled else { return }
         rawCues = extraction.cues
         videoDurationSec = extraction.durationSec
         // Replace the videoId placeholder title with the real YouTube title
         // (best-effort; VPN is on during import so youtube.com oEmbed is reachable).
-        if let real = await Self.fetchYouTubeTitle(videoId: resolvedId), !real.isEmpty {
+        let fetchedTitle = await titleFetcher(resolvedId)
+        guard isCurrent(generation), !Task.isCancelled else { return }
+        if let real = fetchedTitle, !real.isEmpty {
             title = real
         }
 
         // Step 2: Guard LLM configured.
-        let settings = LlmSettingsStore.load()
+        let settings = settingsProvider()
         guard settings.isConfigured else {
             state = .error("请先配置 LLM（我的 → LLM 设置）")
             return
@@ -160,7 +271,11 @@ final class ImportViewModel: ObservableObject {
         // confirmation steps — once captions are extracted the user's
         // intent is obviously to land the entry in the cloud library.
         // Two manual taps were friction without value.
-        await performAnalysis(rawCues, token: token)
+        if settings.useManagedRelay {
+            await submitManagedAnalysis(token: token, generation: generation)
+        } else {
+            await performAnalysis(rawCues, token: token, generation: generation)
+        }
     }
 
     /// Re-run JUST the LLM analysis on the in-memory `rawCues`. Used by
@@ -170,28 +285,186 @@ final class ImportViewModel: ObservableObject {
     /// after a process restart), falls back to .idle so the URL screen
     /// shows up.
     func retryAnalysisOnly(token: String) async {
+        let generation = beginGeneration(newAttempt: false)
+        await retryAnalysisOnly(token: token, generation: generation)
+    }
+
+    private func retryAnalysisOnly(token: String, generation: Int) async {
+        guard isCurrent(generation), !Task.isCancelled else { return }
         guard !rawCues.isEmpty else {
             state = .idle
             return
         }
-        await performAnalysis(rawCues, token: token)
+        let settings = settingsProvider()
+        if settings.useManagedRelay {
+            await submitManagedAnalysis(token: token, generation: generation)
+        } else {
+            await performAnalysis(rawCues, token: token, generation: generation)
+        }
     }
 
-    private func performAnalysis(_ cues: [Cue], token: String) async {
-        let settings = LlmSettingsStore.load()
+    func retryManagedSubmission(token: String, refreshDuration: Bool = false) async {
+        let generation = beginGeneration(newAttempt: false)
+        await retryManaged(
+            token: token,
+            refreshDuration: refreshDuration,
+            generation: generation
+        )
+    }
+
+    private func retryManaged(
+        token: String,
+        refreshDuration: Bool,
+        generation: Int
+    ) async {
+        guard isCurrent(generation), !Task.isCancelled else { return }
+        guard !rawCues.isEmpty else { state = .idle; return }
+        if refreshDuration {
+            state = .submittingManaged
+            do {
+                let refreshedDuration = try await durationRefresher(videoId)
+                guard isCurrent(generation), !Task.isCancelled else { return }
+                videoDurationSec = refreshedDuration
+            } catch {
+                guard isCurrent(generation) else { return }
+                state = .managedPolicy(.durationUnknown)
+                return
+            }
+        }
+        guard isCurrent(generation) else { return }
+        await submitManagedAnalysis(token: token, generation: generation)
+    }
+
+    private func submitManagedAnalysis(token: String, generation: Int) async {
+        guard isCurrent(generation), !Task.isCancelled else { return }
+        guard let duration = videoDurationSec, duration > 0 else {
+            state = .managedPolicy(.durationUnknown)
+            return
+        }
+        let entitlement = await entitlementRefresher(token)
+        guard isCurrent(generation), !Task.isCancelled else { return }
+        if entitlement == .freshFree, duration > 1_200 {
+            state = .managedPolicy(.videoTooLong(duration: duration, limit: 1_200))
+            return
+        }
+
+        let cues = rawCues.map(ManagedAnalysisCue.init(cue:))
+        state = .submittingManaged
+        let request = ManagedAnalysisCreateRequest(
+            idempotencyKey: managedIdempotencyKey(duration: duration, cues: cues),
+            youtubeId: videoId,
+            sourceUrl: resolvedSourceURL,
+            title: title,
+            durationSec: duration,
+            cues: cues,
+            transcriptSrt: buildSRT(from: rawCues),
+            thumbData: await thumbnailFetcher(videoId)
+        )
+        guard isCurrent(generation), !Task.isCancelled else { return }
+        do {
+            let job = try await managedClient.createJob(request, token: token)
+            guard isCurrent(generation) else { return }
+            if job.status == .failed || job.status == .cancelled {
+                rotateManagedAttempt()
+            }
+            state = .managedJob(job)
+        } catch is CancellationError {
+            if isCurrent(generation) { state = .idle }
+        } catch let error as ManagedAnalysisClientError {
+            if isCurrent(generation) { state = managedState(for: error, duration: duration) }
+        } catch {
+            if isCurrent(generation) { state = .error(error.localizedDescription) }
+        }
+    }
+
+    private func managedState(
+        for error: ManagedAnalysisClientError,
+        duration: Int
+    ) -> State {
+        switch error {
+        case .durationUnknown: return .managedPolicy(.durationUnknown)
+        case .videoTooLong: return .managedPolicy(.videoTooLong(duration: duration, limit: 1_200))
+        case .freeUsedUp: return .managedPolicy(.freeUsedUp)
+        case .quotaExceeded: return .managedPolicy(.quotaExceeded)
+        case .upstreamUnavailable: return .managedPolicy(.upstreamUnavailable)
+        case .serverBusy: return .managedPolicy(.serverBusy)
+        case .queueLimit: return .managedPolicy(.queueLimit)
+        case .unauthorized: return .error("登录信息已过期，请重新登录。")
+        case .network(let detail): return .error("网络连接失败：\(detail)")
+        case .notFound, .invalidState, .invalidResponse, .server:
+            return .error("后台解析任务提交失败，请稍后重试。")
+        }
+    }
+
+    private func managedIdempotencyKey(
+        duration: Int,
+        cues: [ManagedAnalysisCue]
+    ) -> String {
+        var input = Data("\(videoId)\u{0}\(duration)\u{0}".utf8)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let encoded = try? encoder.encode(cues) { input.append(encoded) }
+        let digest = SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
+        return "ios-\(attemptID(for: digest))-\(digest)"
+    }
+
+    private func attemptID(for fingerprint: String) -> String {
+        if managedAttemptFingerprint == fingerprint, let managedAttemptID {
+            return managedAttemptID
+        }
+        let key = "managed-analysis-attempt.\(fingerprint)"
+        let stored = UserDefaults.standard.string(forKey: key)
+        let attempt = stored ?? UUID().uuidString.lowercased()
+        if stored == nil { UserDefaults.standard.set(attempt, forKey: key) }
+        managedAttemptFingerprint = fingerprint
+        managedAttemptID = attempt
+        return attempt
+    }
+
+    private func rotateManagedAttempt() {
+        let attempt = UUID().uuidString.lowercased()
+        managedAttemptID = attempt
+        if let fingerprint = managedAttemptFingerprint {
+            UserDefaults.standard.set(
+                attempt,
+                forKey: "managed-analysis-attempt.\(fingerprint)"
+            )
+        }
+    }
+
+    func cancelManagedJob(token: String) async {
+        guard case .managedJob(let current) = state,
+              current.status != .completed,
+              current.status != .failed,
+              current.status != .cancelled else { return }
+        do {
+            let cancelled = try await managedClient.cancel(id: current.jobId, token: token)
+            rotateManagedAttempt()
+            state = .managedJob(cancelled)
+        } catch is CancellationError {
+            // The user left while the explicit cancellation request was in flight.
+        } catch {
+            state = .error("取消后台解析失败，请稍后再试。")
+        }
+    }
+
+    private func performAnalysis(_ cues: [Cue], token: String, generation: Int) async {
+        guard isCurrent(generation), !Task.isCancelled else { return }
+        let settings = settingsProvider()
         guard settings.isConfigured else {
             state = .error("请先配置 LLM（我的 → LLM 设置）")
             return
         }
         let cueCount = cues.count
         state = .analyzing(done: 0, total: 1, cueCount: cueCount)
-        let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
         do {
-            let analysis = try await engine.analyze(cues) { [weak self] done, total in
+            let analysis = try await localAnalyzer(cues, settings) { [weak self] done, total in
                 Task { @MainActor [weak self] in
-                    self?.state = .analyzing(done: done, total: total, cueCount: cueCount)
+                    guard let self, self.isCurrent(generation) else { return }
+                    self.state = .analyzing(done: done, total: total, cueCount: cueCount)
                 }
             }
+            guard isCurrent(generation) else { return }
             result = analysis
             // Cancelled while the last chunk was in flight? Then the sheet is
             // already gone — do NOT upload. This is the check that keeps a
@@ -199,12 +472,12 @@ final class ImportViewModel: ObservableObject {
             try Task.checkCancellation()
             // Auto-sync immediately on analysis success — user requested
             // removal of the preview/sync confirmation step.
-            await sync(token: token)
+            await sync(token: token, generation: generation)
         } catch is CancellationError {
             // User closed the sheet. No error UI: nothing is on screen, and
             // the next open should start clean rather than land on a stale
             // failure page.
-            state = .idle
+            if isCurrent(generation) { state = .idle }
         } catch {
             // Captions stay in memory (rawCues) so the error-screen retry
             // skips straight back to performAnalysis. The hint differs by
@@ -218,7 +491,7 @@ final class ImportViewModel: ObservableObject {
             } else {
                 hint = "\n\n字幕仍在内存里，点「重试 AI 解析」可以重试。报「200」通常是 baseUrl 或 model 名不对——检查「我的 → LLM 设置」里 baseUrl 是否带 `/v1` 后缀（DeepSeek 是 `https://api.deepseek.com/v1`）、model 是 `deepseek-chat` 之类厂商支持的型号。"
             }
-            state = .error(base + hint)
+            if isCurrent(generation) { state = .error(base + hint) }
         }
     }
 
@@ -296,6 +569,11 @@ final class ImportViewModel: ObservableObject {
     // MARK: - Step 2: Sync to cloud
 
     func sync(token: String) async {
+        await sync(token: token, generation: runGeneration)
+    }
+
+    private func sync(token: String, generation: Int) async {
+        guard isCurrent(generation), !Task.isCancelled else { return }
         guard let analysis = result else {
             state = .error("没有分析结果，请重新导入")
             return
@@ -307,28 +585,30 @@ final class ImportViewModel: ObservableObject {
         // Fetch the YouTube cover now (VPN is on for the import) + ship it as
         // thumbData so the backend serves a China-reachable thumbnail — the
         // imported video then shows a cover in the Library list WITHOUT VPN.
-        let thumbData = await fetchThumbBase64(videoId: videoId)
+        let thumbData = await thumbnailFetcher(videoId)
+        guard isCurrent(generation), !Task.isCancelled else { return }
 
         do {
             try await WhatsubAPI.shared.syncLibraryEntry(
                 youtubeId: videoId,
                 sourceUrl: sourceUrl,
                 title: title,
-                durationSec: nil,
+                durationSec: videoDurationSec,
                 transcriptSrt: srt,
                 analysis: analysis,
                 thumbData: thumbData,
                 token: token
             )
+            guard isCurrent(generation) else { return }
             state = .done
         } catch {
-            state = .error(error.localizedDescription)
+            if isCurrent(generation) { state = .error(error.localizedDescription) }
         }
     }
 
     /// Best-effort: fetch the YouTube cover (mqdefault.jpg) + base64. Returns nil
     /// on any failure (entry falls back to the i.ytimg URL, VPN-only).
-    private func fetchThumbBase64(videoId: String) async -> String? {
+    private static func fetchThumbBase64(videoId: String) async -> String? {
         guard let url = URL(string: "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg") else { return nil }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)

@@ -87,6 +87,22 @@ enum ManagedAnalysisClientError: Error, Equatable {
     case server(status: Int, code: String?)
 }
 
+enum ManagedEntitlementState: Equatable {
+    case freshFree
+    case freshPro
+    case unknown
+}
+
+enum ManagedAnalysisPolicy: Equatable {
+    case durationUnknown
+    case videoTooLong(duration: Int, limit: Int)
+    case freeUsedUp
+    case quotaExceeded
+    case upstreamUnavailable
+    case serverBusy
+    case queueLimit
+}
+
 protocol ManagedAnalysisClientProtocol {
     func createJob(
         _ request: ManagedAnalysisCreateRequest,

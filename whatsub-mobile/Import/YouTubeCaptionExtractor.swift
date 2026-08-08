@@ -259,6 +259,21 @@ enum YouTubeCaptionExtractor {
         return result
     }
 
+    /// Refresh only authoritative player duration. Used by managed-policy UI
+    /// when an otherwise valid v2 caption cache recorded missing metadata.
+    /// Never downloads timedtext and never infers from cue end times.
+    static func refreshDuration(
+        videoId: String,
+        fetcher: @escaping HTTPFetcher = defaultFetcher,
+        onProgress: @MainActor @escaping (String) -> Void = { _ in }
+    ) async throws -> Int? {
+        (try await fetchPlayablePlayer(
+            videoId: videoId,
+            fetcher: fetcher,
+            onProgress: onProgress
+        )).durationSec
+    }
+
     // MARK: - Private
 
     /// Player-only fallback used to upgrade legacy cue-only cache entries.

@@ -14,6 +14,7 @@ struct ImportView: View {
     @State private var showDiagnostics = false
     @State private var diagnosticsLog: [String] = []
     @State private var showVPNHelp = false
+    @State private var showLLMSettings = false
 
     private let initialURL: String?
 
@@ -42,6 +43,12 @@ struct ImportView: View {
                     label: "AI 解析中 \(done)/\(total)\n\(Self.eta(forCues: cueCount))",
                     progress: total > 0 ? Double(done) / Double(total) : nil
                 )
+            case .submittingManaged:
+                progressBody(icon: "icloud.and.arrow.up", label: "正在创建后台解析任务…", progress: nil)
+            case .managedJob(let job):
+                managedJobBody(job)
+            case .managedPolicy(let policy):
+                managedPolicyBody(policy)
             case .preview:
                 previewBody
             case .syncing:
@@ -75,6 +82,9 @@ struct ImportView: View {
         // (diagnostics / VPN help) does NOT fire onDisappear, so those can't
         // kill an in-flight import by accident.
         .onDisappear { vm.cancelWork() }
+        .sheet(isPresented: $showLLMSettings, onDismiss: continueWithBYOKIfConfigured) {
+            NavigationStack { LlmSettingsView() }
+        }
     }
 
     // MARK: - Idle
@@ -251,6 +261,132 @@ struct ImportView: View {
     }
 
     // MARK: - Done
+
+    private func managedJobBody(_ job: ManagedAnalysisJob) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: job.status == .completed ? "checkmark.icloud.fill" : "icloud.fill")
+                .font(.system(size: 56))
+                .foregroundStyle(job.status == .failed ? .red : Color.whatsubAccent)
+            Text(job.status == .completed ? "后台解析已完成" : "已交给服务器后台解析")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.whatsubInk)
+            Text(managedJobMessage(job))
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkMuted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            if job.totalCues > 0 && job.status != .completed {
+                ProgressView(value: job.progress)
+                    .tint(.whatsubAccent)
+                    .padding(.horizontal, 44)
+            }
+            Button("关闭 whatSub，继续使用其他 App") { dismiss() }
+                .buttonStyle(.borderedProminent)
+                .tint(.whatsubAccent)
+            if job.status == .queued || job.status == .running || job.status == .pausedQuota {
+                Button("取消后台解析", role: .destructive) {
+                    guard let token = appState.session?.sessionToken else { return }
+                    Task { await vm.cancelManagedJob(token: token) }
+                }
+                .buttonStyle(.borderless)
+            }
+            Spacer()
+        }
+        .padding()
+    }
+
+    private func managedJobMessage(_ job: ManagedAnalysisJob) -> String {
+        switch job.status {
+        case .queued:
+            return "任务已排队。现在可以切换 App 或锁屏，服务器会继续解析。"
+        case .running:
+            return "服务器正在解析（\(job.completedCues)/\(job.totalCues) 条字幕）。你可以安全离开此页面。"
+        case .pausedQuota:
+            return "本月额度已用完，任务已暂停；额度恢复后可继续。"
+        case .completed:
+            return "结果已同步到 Library。"
+        case .failed:
+            return "后台解析失败，可稍后从“我的 → 导入队列”查看并重试。"
+        case .cancelled:
+            return "后台解析已取消。"
+        }
+    }
+
+    private func managedPolicyBody(_ policy: ManagedAnalysisPolicy) -> some View {
+        let copy = managedPolicyCopy(policy)
+        return VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: copy.icon)
+                .font(.system(size: 48))
+                .foregroundStyle(.whatsubHighlight)
+            Text(copy.title)
+                .font(.headline)
+                .foregroundStyle(.whatsubInk)
+            Text(copy.message)
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkMuted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            if copy.showsSubscription {
+                SubscriptionOptionsView(onPurchased: {
+                    retryManagedSubmission(refreshDuration: false)
+                })
+                    .padding(.horizontal)
+            }
+            Button("使用自己的 API Key（视频不限时长）") {
+                showLLMSettings = true
+            }
+            .buttonStyle(.bordered)
+            .tint(.whatsubAccent)
+
+            if copy.canRetry {
+                Button(policy == .durationUnknown ? "重新获取视频时长" : "重试提交") {
+                    retryManagedSubmission(refreshDuration: policy == .durationUnknown)
+                }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.whatsubAccent)
+            }
+            Button("关闭") { dismiss() }
+                .buttonStyle(.borderless)
+            Spacer()
+        }
+        .padding()
+    }
+
+    private func managedPolicyCopy(
+        _ policy: ManagedAnalysisPolicy
+    ) -> (icon: String, title: String, message: String, showsSubscription: Bool, canRetry: Bool) {
+        switch policy {
+        case .durationUnknown:
+            return ("clock", "无法确认视频时长", "托管解析需要 YouTube 返回准确时长。可以只重试时长查询，或改用自己的 API Key 在手机端解析。", false, true)
+        case .videoTooLong(let duration, let limit):
+            return ("clock.badge.exclamationmark", "免费版最长 20 分钟", "这个视频约 \(duration / 60) 分钟，免费托管上限为 \(limit / 60) 分钟。Pro 托管不限视频时长。", true, false)
+        case .freeUsedUp:
+            return ("sparkles", "免费 AI 体验额度已用完", "订阅 Pro 可获得每月托管额度，或切换到自己的 API Key。", true, false)
+        case .quotaExceeded:
+            return ("gauge", "本月 Pro AI 额度已用完", "下月会自动恢复；现在要继续，可切换到自己的 API Key。", false, false)
+        case .upstreamUnavailable:
+            return ("exclamationmark.icloud", "AI 服务暂时不可用", "字幕仍保留在手机里，稍后重试提交即可。", false, true)
+        case .serverBusy:
+            return ("server.rack", "后台任务较多", "服务器正在保护连接数，请稍后重试。", false, true)
+        case .queueLimit:
+            return ("list.number", "你的后台队列已满", "最多保留 3 个未完成任务。请先等待或取消一个任务。", false, true)
+        }
+    }
+
+    private func retryManagedSubmission(refreshDuration: Bool) {
+        guard let token = appState.session?.sessionToken else { return }
+        vm.startRetryManaged(token: token, refreshDuration: refreshDuration)
+    }
+
+    private func continueWithBYOKIfConfigured() {
+        let settings = LlmSettingsStore.load()
+        guard !settings.useManagedRelay, settings.isConfigured,
+              let token = appState.session?.sessionToken else { return }
+        vm.startRetryAnalysis(token: token)
+    }
 
     private var doneBody: some View {
         VStack(spacing: 20) {
