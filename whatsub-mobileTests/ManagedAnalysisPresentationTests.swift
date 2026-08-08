@@ -31,6 +31,13 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         XCTAssertEqual(job(.completed, entryID: "entry-1").presentation.entryID, "entry-1")
     }
 
+    func testProvisionalEntryCanOpenBeforeAnalysisCompletes() {
+        XCTAssertEqual(job(.queued, entryID: "entry-1").provisionalEntryID, "entry-1")
+        XCTAssertEqual(job(.running, entryID: "entry-1").provisionalEntryID, "entry-1")
+        XCTAssertNil(job(.running).provisionalEntryID)
+        XCTAssertNil(job(.running, entryID: "  ").provisionalEntryID)
+    }
+
     func testOldLiveActivityPayloadDecodesWithoutRecentEntryID() throws {
         let old = Data(#"{"inProgress":0,"completed":1,"failed":0,"recentTitle":"Done"}"#.utf8)
         let state = try JSONDecoder().decode(ImportActivityAttributes.ContentState.self, from: old)

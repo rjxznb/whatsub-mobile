@@ -80,6 +80,17 @@ struct ManagedAnalysisJobPresentation: Equatable {
 }
 
 extension ManagedAnalysisJob {
+    /// New servers create the English-only Library entry atomically with the
+    /// job. Older servers may still return nil, in which case the import view
+    /// simply keeps its existing job-status UI instead of navigating nowhere.
+    var provisionalEntryID: String? {
+        guard let resultEntryId,
+              !resultEntryId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return resultEntryId
+    }
+
     var presentation: ManagedAnalysisJobPresentation {
         switch status {
         case .queued:
