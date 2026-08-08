@@ -12,12 +12,13 @@ struct LibraryView: View {
     /// state when a VPN tunnel is detected (the VPN routed eversay.cc
     /// overseas → our API fails), and tapping a 需VPN badge on a row.
     @State private var showVPNHelp = false
+    @State private var navigationPath: [String] = []
     // Migrate-vocab-before-delete flow removed (build 248+) — the local
     // vocab notebook is retired; corpus phrases that referenced the deleted
     // video keep their data + can fall back to YT embed via source.youtubeId.
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             // Custom "Library" header instead of the system large title.
             // The system navigationTitle proved flaky here: with our global
             // black UINavigationBarAppearance + custom background + the
@@ -59,6 +60,10 @@ struct LibraryView: View {
                 LibraryDetailView(entryId: id)
             }
             .task { if !vm.loadedOnce { await reload() } }
+            .onAppear { openPendingEntryIfNeeded() }
+            .onChange(of: appState.pendingLibraryEntryID) { _ in
+                openPendingEntryIfNeeded()
+            }
             .refreshable { await reload() }
             .sheet(isPresented: $showVPNHelp) {
                 VPNRuleHelpSheet()
@@ -80,6 +85,12 @@ struct LibraryView: View {
                 .interactiveDismissDisabled()
             }
         }
+    }
+
+    private func openPendingEntryIfNeeded() {
+        guard let id = appState.pendingLibraryEntryID, !id.isEmpty else { return }
+        if navigationPath.last != id { navigationPath = [id] }
+        appState.pendingLibraryEntryID = nil
     }
 
     private func reload() async {

@@ -24,6 +24,7 @@ final class AppState: ObservableObject {
     /// re-sets the binding to true (no-op for a destination already on the
     /// stack).
     @Published var meShowImportQueue: Bool = false
+    @Published var pendingLibraryEntryID: String?
 
     var isAuthenticated: Bool { session?.isValid == true }
 
@@ -48,6 +49,8 @@ final class AppState: ObservableObject {
         KeychainStore.clear()
         session = nil
         currentUser = nil
+        pendingLibraryEntryID = nil
+        meShowImportQueue = false
     }
 
     /// Called after login + on app foreground to refresh license status.
@@ -67,5 +70,22 @@ final class AppState: ObservableObject {
         KeychainStore.clear()
         session = nil
         currentUser = nil
+        pendingLibraryEntryID = nil
+        meShowImportQueue = false
+    }
+
+    func routeAppURL(_ url: URL) {
+        switch url.host {
+        case "library":
+            selectedTab = 0
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            pendingLibraryEntryID = components?.queryItems?
+                .first(where: { $0.name == "id" })?.value
+        case "import-queue":
+            selectedTab = 3
+            meShowImportQueue = true
+        default:
+            break
+        }
     }
 }

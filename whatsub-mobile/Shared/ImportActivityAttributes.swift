@@ -17,12 +17,34 @@ struct ImportActivityAttributes: ActivityAttributes {
         public let completed: Int
         public let failed: Int
         public let recentTitle: String?
+        public let recentEntryId: String?
 
-        public init(inProgress: Int, completed: Int, failed: Int, recentTitle: String?) {
+        public init(
+            inProgress: Int,
+            completed: Int,
+            failed: Int,
+            recentTitle: String?,
+            recentEntryId: String? = nil
+        ) {
             self.inProgress = inProgress
             self.completed = completed
             self.failed = failed
             self.recentTitle = recentTitle
+            self.recentEntryId = recentEntryId
+        }
+
+        public var tapURL: URL {
+            if inProgress > 0 || failed > 0 {
+                return URL(string: "whatsub://import-queue")!
+            }
+            guard let recentEntryId, !recentEntryId.isEmpty else {
+                return URL(string: "whatsub://library")!
+            }
+            var components = URLComponents()
+            components.scheme = "whatsub"
+            components.host = "library"
+            components.queryItems = [URLQueryItem(name: "id", value: recentEntryId)]
+            return components.url ?? URL(string: "whatsub://library")!
         }
     }
 

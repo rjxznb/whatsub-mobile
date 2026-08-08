@@ -173,6 +173,9 @@ struct ContentView: View {
                 await refreshFeatureAccess()
             }
         }
+        .onOpenURL { url in
+            handleAppURL(url)
+        }
         .onChange(of: store.hasLocalSub) { _ in
             guard appState.isAuthenticated else { return }
             Task { await refreshFeatureAccess() }
@@ -240,6 +243,17 @@ struct ContentView: View {
         }
     }
 
+    private func handleAppURL(_ url: URL) {
+        if url.host == "import" {
+            if let pending = AppGroup.pendingImportURL() {
+                AppGroup.clearPendingImportURL()
+                pendingImport = IdentifiedImportURL(url: pending)
+            }
+            return
+        }
+        appState.routeAppURL(url)
+    }
+
     private var mainTabs: some View {
         TabView(selection: $appState.selectedTab) {
             LibraryView()
@@ -264,29 +278,6 @@ struct ContentView: View {
             MeView()
                 .tabItem { Label("我的", systemImage: "person.crop.circle") }
                 .tag(3)
-        }
-        .onOpenURL { url in
-            // Share Extension import handoff (whatsub://import?url=…) —
-            // existing path, leave behavior identical.
-            if url.host == "import" {
-                if let pending = AppGroup.pendingImportURL() {
-                    AppGroup.clearPendingImportURL()
-                    pendingImport = IdentifiedImportURL(url: pending)
-                }
-                return
-            }
-            // Live Activity tap destinations (2026-06-18 plan, Phase 5.4).
-            // Both routes are idempotent: if already at the destination,
-            // setting the bindings to the same value is a no-op.
-            switch url.host {
-            case "library":
-                appState.selectedTab = 0
-            case "import-queue":
-                appState.selectedTab = 3
-                appState.meShowImportQueue = true
-            default:
-                break
-            }
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active {

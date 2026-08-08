@@ -8,8 +8,8 @@ import ActivityKit
 ///   • Dynamic Island expanded (long-press / pull-down on iPhone 14 Pro+)
 ///
 /// Tap routing (`widgetURL`): the Activity opens
-///   `whatsub://import-queue` while items are still in flight
-///   `whatsub://library` once everything reached a terminal state
+///   `whatsub://import-queue` while items are in flight or need failure recovery
+///   `whatsub://library?id=...` after a successful managed import
 /// — handled by WhatsubMobileApp's `.onOpenURL` (Phase 5.4).
 struct ImportActivityWidget: Widget {
     var body: some WidgetConfiguration {
@@ -56,7 +56,7 @@ struct ImportActivityWidget: Widget {
                 Image(systemName: "tray.and.arrow.down.fill")
                     .foregroundStyle(.whatsubAccent)
             }
-            .widgetURL(URL(string: tapDestination(context.state)))
+            .widgetURL(context.state.tapURL)
         }
     }
 
@@ -75,7 +75,4 @@ struct ImportActivityWidget: Widget {
         return "点击打开 Library →"
     }
 
-    private func tapDestination(_ s: ImportActivityAttributes.ContentState) -> String {
-        s.inProgress > 0 ? "whatsub://import-queue" : "whatsub://library"
-    }
 }

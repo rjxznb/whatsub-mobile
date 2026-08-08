@@ -195,6 +195,7 @@ final class ImportViewModel: ObservableObject {
     private(set) var videoDurationSec: Int?
     private(set) var videoId: String = ""
     private(set) var title: String = ""
+    private var accountEmail: String?
     /// The full YouTube watch URL entered/resolved by the user, kept so
     /// pushToDesktop can enqueue it without requiring UI re-entry.
     private(set) var resolvedSourceURL: String = ""
@@ -236,6 +237,7 @@ final class ImportViewModel: ObservableObject {
         videoId = ""
         title = ""
         resolvedSourceURL = ""
+        accountEmail = email
 
         let trimmed = urlOrId.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -401,6 +403,22 @@ final class ImportViewModel: ObservableObject {
             guard isCurrent(generation) else { return }
             if job.status == .failed || job.status == .cancelled {
                 rotateManagedAttempt()
+            }
+            if #available(iOS 16.2, *),
+               job.status != .cancelled,
+               let email = accountEmail {
+                let terminal = job.status == .completed || job.status == .failed || job.status == .cancelled
+                let initial = ImportActivityAttributes.ContentState(
+                    inProgress: terminal ? 0 : 1,
+                    completed: job.status == .completed ? 1 : 0,
+                    failed: job.status == .failed ? 1 : 0,
+                    recentTitle: title,
+                    recentEntryId: job.resultEntryId
+                )
+                await LiveActivityCoordinator.shared.ensureActivity(
+                    forUserEmail: email,
+                    initialState: initial
+                )
             }
             state = .managedJob(job)
         } catch is CancellationError {

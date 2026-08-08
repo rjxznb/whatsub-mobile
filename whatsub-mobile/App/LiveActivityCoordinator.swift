@@ -67,6 +67,9 @@ final class LiveActivityCoordinator: ObservableObject {
         initialState: ImportActivityAttributes.ContentState
     ) async {
         if let existing = currentActivity, existing.activityState == .active {
+            // Existing aggregate state is server-authoritative. The create
+            // route publishes before returning; a local relative increment
+            // here could double-count if that APNs update arrived first.
             return
         }
         // OS-level kill switch (user disabled Live Activities for the app

@@ -46,6 +46,7 @@ struct LockScreenCard: View {
     private var titleForState: String {
         if state.inProgress > 0 { return "视频导入处理中" }
         if state.failed > 0 { return "部分导入失败" }
+        if state.recentEntryId != nil { return "解析完成 · 点击开始学习" }
         return "全部完成"
     }
 
