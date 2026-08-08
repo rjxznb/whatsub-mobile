@@ -46,6 +46,20 @@ struct ManagedAnalysisClient: ManagedAnalysisClientProtocol {
         return response.jobs
     }
 
+    func results(
+        id: String,
+        afterBatch: Int,
+        token: String
+    ) async throws -> ManagedAnalysisResultsPage {
+        try await send(
+            method: "GET",
+            path: ["jobs", id, "results"],
+            queryItems: [URLQueryItem(name: "afterBatch", value: String(afterBatch))],
+            token: token,
+            as: ManagedAnalysisResultsPage.self
+        )
+    }
+
     func cancel(id: String, token: String) async throws -> ManagedAnalysisJob {
         try await send(
             method: "POST",
@@ -69,11 +83,12 @@ struct ManagedAnalysisClient: ManagedAnalysisClientProtocol {
     private func send<Response: Decodable>(
         method: String,
         path: [String],
+        queryItems: [URLQueryItem] = [],
         body: Data? = nil,
         token: String,
         as type: Response.Type
     ) async throws -> Response {
-        var request = URLRequest(url: try endpoint(path))
+        var request = URLRequest(url: try endpoint(path, queryItems: queryItems))
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 30
@@ -105,7 +120,7 @@ struct ManagedAnalysisClient: ManagedAnalysisClientProtocol {
         }
     }
 
-    private func endpoint(_ path: [String]) throws -> URL {
+    private func endpoint(_ path: [String], queryItems: [URLQueryItem] = []) throws -> URL {
         guard path.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
             throw ManagedAnalysisClientError.invalidResponse("invalid endpoint")
         }
@@ -115,7 +130,12 @@ struct ManagedAnalysisClient: ManagedAnalysisClientProtocol {
             ? baseURL.absoluteString
             : baseURL.absoluteString + "/"
         guard encoded.allSatisfy({ !$0.isEmpty }),
-              let url = URL(string: root + encoded.joined(separator: "/")) else {
+              let rawURL = URL(string: root + encoded.joined(separator: "/")),
+              var components = URLComponents(url: rawURL, resolvingAgainstBaseURL: false) else {
+            throw ManagedAnalysisClientError.invalidResponse("invalid endpoint")
+        }
+        if !queryItems.isEmpty { components.queryItems = queryItems }
+        guard let url = components.url else {
             throw ManagedAnalysisClientError.invalidResponse("invalid endpoint")
         }
         return url

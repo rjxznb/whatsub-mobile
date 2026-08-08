@@ -134,6 +134,22 @@ enum ManagedAnalysisClientError: Error, Equatable {
     )
 }
 
+struct ManagedAnalysisCompletedBatch: Decodable {
+    let batchIndex: Int
+    let subtitles: [Cue]
+}
+
+struct ManagedAnalysisResultsPage: Decodable {
+    let jobId: String
+    let entryId: String
+    let status: ManagedAnalysisJobStatus
+    let completedCues: Int
+    let totalCues: Int
+    let nextBatchCursor: Int
+    let batches: [ManagedAnalysisCompletedBatch]
+    let errorCode: ManagedAnalysisFailureCode?
+}
+
 enum ManagedEntitlementState: Equatable {
     case freshFree
     case freshPro
@@ -157,6 +173,7 @@ protocol ManagedAnalysisClientProtocol {
     ) async throws -> ManagedAnalysisJob
     func job(id: String, token: String) async throws -> ManagedAnalysisJob
     func jobs(token: String) async throws -> [ManagedAnalysisJob]
+    func results(id: String, afterBatch: Int, token: String) async throws -> ManagedAnalysisResultsPage
     func cancel(id: String, token: String) async throws -> ManagedAnalysisJob
     func resume(id: String, token: String) async throws -> ManagedAnalysisJob
 }

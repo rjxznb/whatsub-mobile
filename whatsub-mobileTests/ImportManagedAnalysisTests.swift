@@ -26,6 +26,13 @@ final class ImportManagedAnalysisTests: XCTestCase {
 
         func job(id: String, token: String) async throws -> ManagedAnalysisJob { Self.job }
         func jobs(token: String) async throws -> [ManagedAnalysisJob] { [Self.job] }
+        func results(
+            id: String,
+            afterBatch: Int,
+            token: String
+        ) async throws -> ManagedAnalysisResultsPage {
+            throw ManagedAnalysisClientError.notFound
+        }
         func cancel(id: String, token: String) async throws -> ManagedAnalysisJob {
             Self.makeJob(status: .cancelled)
         }
