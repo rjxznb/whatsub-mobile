@@ -28,7 +28,16 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         XCTAssertEqual(job(.cancelled).presentation.label, "已取消")
         XCTAssertTrue(job(.queued).presentation.canCancel)
         XCTAssertTrue(job(.pausedQuota).presentation.canResume)
+        XCTAssertTrue(job(.failed).presentation.canResume)
+        XCTAssertTrue(job(.cancelled).presentation.canResume)
         XCTAssertEqual(job(.completed, entryID: "entry-1").presentation.entryID, "entry-1")
+    }
+
+    func testLibraryProgressLabelsStayCompactAndTerminalCompletionDisappears() {
+        XCTAssertEqual(job(.queued).libraryProgressLabel, "等待 AI 解析")
+        XCTAssertEqual(job(.running).libraryProgressLabel, "AI 解析中 · 25/100")
+        XCTAssertEqual(job(.pausedQuota).libraryProgressLabel, "仅英文 · 解析已暂停")
+        XCTAssertNil(job(.completed).libraryProgressLabel)
     }
 
     func testProvisionalEntryCanOpenBeforeAnalysisCompletes() {

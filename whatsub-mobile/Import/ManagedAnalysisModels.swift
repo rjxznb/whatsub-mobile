@@ -94,17 +94,17 @@ extension ManagedAnalysisJob {
     var presentation: ManagedAnalysisJobPresentation {
         switch status {
         case .queued:
-            return .init(label: "排队中", detail: "关闭页面后会继续解析", canCancel: true, canResume: false, entryID: nil)
+            return .init(label: "排队中", detail: "关闭页面后会继续解析", canCancel: true, canResume: false, entryID: provisionalEntryID)
         case .running:
             return .init(
                 label: "解析中 \(completedCues)/\(totalCues)",
-                detail: nil, canCancel: true, canResume: false, entryID: nil
+                detail: nil, canCancel: true, canResume: false, entryID: provisionalEntryID
             )
         case .pausedQuota:
             let detail = errorCode == .freeUsedUp
                 ? "免费体验额度已用完；订阅 Pro 后可继续"
                 : "额度恢复后可继续"
-            return .init(label: "额度不足，已暂停", detail: detail, canCancel: true, canResume: true, entryID: nil)
+            return .init(label: "额度不足，已暂停", detail: detail, canCancel: true, canResume: true, entryID: provisionalEntryID)
         case .completed:
             return .init(label: "已完成", detail: nil, canCancel: false, canResume: false, entryID: resultEntryId)
         case .failed:
@@ -117,9 +117,20 @@ extension ManagedAnalysisJob {
             case .durationUnknown: detail = "无法确认视频时长"
             case nil: detail = "解析任务未完成"
             }
-            return .init(label: "解析失败", detail: detail, canCancel: false, canResume: false, entryID: nil)
+            return .init(label: "解析失败", detail: detail, canCancel: false, canResume: true, entryID: provisionalEntryID)
         case .cancelled:
-            return .init(label: "已取消", detail: nil, canCancel: false, canResume: false, entryID: nil)
+            return .init(label: "已取消", detail: nil, canCancel: false, canResume: true, entryID: provisionalEntryID)
+        }
+    }
+
+    var libraryProgressLabel: String? {
+        switch status {
+        case .queued: return "等待 AI 解析"
+        case .running: return "AI 解析中 · \(completedCues)/\(totalCues)"
+        case .pausedQuota: return "仅英文 · 解析已暂停"
+        case .failed: return "仅英文 · AI 解析失败"
+        case .cancelled: return "仅英文 · 已取消"
+        case .completed: return nil
         }
     }
 }
