@@ -58,6 +58,15 @@ struct RateLimitErrorBody: Decodable {
     let message: String      // server-supplied zh-Hans message
 }
 
+struct ManagedAnalysisErrorBody: Decodable {
+    let error: String?
+    let retryable: Bool?
+}
+
+struct ManagedAnalysisJobsResponse: Decodable {
+    let jobs: [ManagedAnalysisJob]
+}
+
 // ----- Pro AI feature trials -----
 
 struct FeatureEntitlementsResponse: Codable, Equatable {

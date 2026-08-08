@@ -9,6 +9,7 @@ enum Endpoints {
     static let featuresBase = "https://whatsub.eversay.cc/api/license/features"
     static let corpusBase = "https://whatsub.eversay.cc/api/corpus"
     static let libraryBase = "https://whatsub.eversay.cc/api/library"
+    static let mobileAnalysisBase = "https://whatsub.eversay.cc/api/library/mobile-analysis/"
     /// Managed-LLM relay (2026-06-04). `/api/llm/v1/chat/completions`
     /// pretends to be an openai-compatible vendor; `/api/llm/quota`
     /// returns the per-period budget snapshot.

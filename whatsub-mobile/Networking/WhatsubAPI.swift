@@ -17,7 +17,7 @@ protocol LibraryDesktopReplacementAPI {
 
 /// All backend HTTP lives here. An actor so concurrent calls serialize their
 /// access to the (rare) shared state and so the type is Sendable-safe.
-actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI {
+actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysisClientProtocol {
     static let shared = WhatsubAPI()
 
     private let session: URLSession
@@ -108,6 +108,29 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI {
     }
 
     // ----- Library -----
+
+    func createJob(
+        _ request: ManagedAnalysisCreateRequest,
+        token: String
+    ) async throws -> ManagedAnalysisJob {
+        try await ManagedAnalysisClient(session: session).createJob(request, token: token)
+    }
+
+    func job(id: String, token: String) async throws -> ManagedAnalysisJob {
+        try await ManagedAnalysisClient(session: session).job(id: id, token: token)
+    }
+
+    func jobs(token: String) async throws -> [ManagedAnalysisJob] {
+        try await ManagedAnalysisClient(session: session).jobs(token: token)
+    }
+
+    func cancel(id: String, token: String) async throws -> ManagedAnalysisJob {
+        try await ManagedAnalysisClient(session: session).cancel(id: id, token: token)
+    }
+
+    func resume(id: String, token: String) async throws -> ManagedAnalysisJob {
+        try await ManagedAnalysisClient(session: session).resume(id: id, token: token)
+    }
 
     func listLibrary(token: String) async throws -> [LibraryListItem] {
         let data = try await get(Endpoints.library("list"), bearer: token)
