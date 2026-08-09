@@ -84,6 +84,21 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         ))
     }
 
+    func testPollingLifecycleReevaluatesCurrentSceneAndVisibility() {
+        let lifecycle = LibraryDetailPollingLifecycle()
+        lifecycle.appear(sceneIsActive: true)
+        XCTAssertTrue(lifecycle.shouldStart(taskIsCancelled: false))
+
+        lifecycle.sceneChanged(isActive: false)
+        XCTAssertFalse(lifecycle.shouldStart(taskIsCancelled: false))
+
+        lifecycle.sceneChanged(isActive: true)
+        XCTAssertTrue(lifecycle.shouldStart(taskIsCancelled: false))
+
+        lifecycle.disappear()
+        XCTAssertFalse(lifecycle.shouldStart(taskIsCancelled: false))
+    }
+
     func testProvisionalEntryCanOpenBeforeAnalysisCompletes() {
         XCTAssertEqual(job(.queued, entryID: "entry-1").provisionalEntryID, "entry-1")
         XCTAssertEqual(job(.running, entryID: "entry-1").provisionalEntryID, "entry-1")
