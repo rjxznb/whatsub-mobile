@@ -5,6 +5,7 @@ struct LibraryDetailView: View {
     let entryId: String
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryDetailViewModel()
+    @StateObject private var pollingLifecycle = LibraryDetailPollingLifecycle()
     @Environment(\.verticalSizeClass) private var vSize
     @Environment(\.scenePhase) private var scenePhase
     @State private var playerReady = false
@@ -40,7 +41,6 @@ struct LibraryDetailView: View {
     @State private var confirmStopAnalysis: Bool = false
     @State private var confirmDesktopReplacement: Bool = false
     @State private var showDesktopReplacementSheet: Bool = false
-    @State private var isViewVisible: Bool = false
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
     // (showPendingSheet + 「待同步 N 条」 banner removed 2026-06-07.
     // PendingPhraseStore is still used — observed inside
@@ -105,11 +105,7 @@ struct LibraryDetailView: View {
             await vm.load(id: entryId, token: token)
             let taskIsCancelled = Task.isCancelled
             guard !taskIsCancelled else { return }
-            if LibraryDetailPollingStartPolicy.shouldStart(
-                taskIsCancelled: taskIsCancelled,
-                sceneIsActive: scenePhase == .active,
-                viewIsVisible: isViewVisible
-            ) {
+            if pollingLifecycle.shouldStart(taskIsCancelled: taskIsCancelled) {
                 vm.startManagedProgress(token: token)
             }
             // Create the AVPlayer once the OSS videoUrl is known; held in @State
@@ -142,9 +138,10 @@ struct LibraryDetailView: View {
             avPlayer = player
         }
         .onChange(of: scenePhase) { phase in
+            pollingLifecycle.sceneChanged(isActive: phase == .active)
             guard let token = appState.session?.sessionToken else { return }
             if phase == .active {
-                guard isViewVisible else { return }
+                guard pollingLifecycle.shouldStart(taskIsCancelled: false) else { return }
                 vm.startManagedProgress(token: token)
                 // One foreground refresh is enough to discover desktop completion.
                 if vm.entry?.needsDesktopDownload == true {
@@ -233,10 +230,10 @@ struct LibraryDetailView: View {
         // Position stays at the paused timestamp, so resuming the video by
         // tapping play continues from where the user left off.
         .onAppear {
-            isViewVisible = true
+            pollingLifecycle.appear(sceneIsActive: scenePhase == .active)
         }
         .onDisappear {
-            isViewVisible = false
+            pollingLifecycle.disappear()
             avPlayer?.pause()
             vm.stopManagedProgress()
         }
@@ -628,11 +625,7 @@ struct LibraryDetailView: View {
     private func reloadDetail() async {
         guard let token = appState.session?.sessionToken else { return }
         await vm.load(id: entryId, token: token)
-        if LibraryDetailPollingStartPolicy.shouldStart(
-            taskIsCancelled: Task.isCancelled,
-            sceneIsActive: scenePhase == .active,
-            viewIsVisible: isViewVisible
-        ) {
+        if pollingLifecycle.shouldStart(taskIsCancelled: Task.isCancelled) {
             vm.startManagedProgress(token: token)
         }
     }

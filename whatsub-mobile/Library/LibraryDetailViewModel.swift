@@ -42,6 +42,33 @@ enum LibraryDetailPollingStartPolicy {
 }
 
 @MainActor
+final class LibraryDetailPollingLifecycle: ObservableObject {
+    @Published private(set) var viewIsVisible = false
+    @Published private(set) var sceneIsActive = false
+
+    func appear(sceneIsActive: Bool) {
+        viewIsVisible = true
+        self.sceneIsActive = sceneIsActive
+    }
+
+    func sceneChanged(isActive: Bool) {
+        sceneIsActive = isActive
+    }
+
+    func disappear() {
+        viewIsVisible = false
+    }
+
+    func shouldStart(taskIsCancelled: Bool) -> Bool {
+        LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: taskIsCancelled,
+            sceneIsActive: sceneIsActive,
+            viewIsVisible: viewIsVisible
+        )
+    }
+}
+
+@MainActor
 final class LibraryDetailViewModel: ObservableObject {
     @Published var entry: LibraryEntryDetail?
     @Published var loading = true
