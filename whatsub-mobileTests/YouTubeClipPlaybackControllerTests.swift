@@ -93,15 +93,19 @@ final class YouTubeClipPlaybackControllerTests: XCTestCase {
         XCTAssertEqual(delivery.markReady(), [stop])
     }
 
-    func testClipJavaScriptContainsBoundaryAndPauseLogic() {
+    func testClipJavaScriptCarriesNonceThroughBoundaryCompletion() {
         let play = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)
         let script = YouTubeEmbedView.clipJavaScript(for: play) ?? ""
         XCTAssertTrue(script.contains("seekTo(1.0"))
         XCTAssertTrue(script.contains("whatsubClipEnd = 2.0"))
+        XCTAssertTrue(script.contains("whatsubClipNonce = \"\(play.nonce.uuidString)\""))
         XCTAssertTrue(script.contains("getAvailablePlaybackRates"))
         XCTAssertTrue(script.contains("playVideo"))
+        let iframe = YouTubeEmbedView.html(videoId: "dQw4w9WgXcQ", startSeconds: nil)
+        XCTAssertTrue(iframe.contains("nonce: clipNonce"))
         let stop = YouTubeClipPlaybackCommand.stop()
         let stopScript = YouTubeEmbedView.clipJavaScript(for: stop) ?? ""
+        XCTAssertTrue(stopScript.contains("whatsubClipNonce = null"))
         XCTAssertTrue(stopScript.contains("pauseVideo"))
     }
 }

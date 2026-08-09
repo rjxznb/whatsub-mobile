@@ -26,7 +26,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
     /// Optional bounded-playback command shared by cue-driven consumers.
     var clipCommand: YouTubeClipPlaybackCommand? = nil
     /// Called when the IFrame player reaches the active clip boundary.
-    var onClipEnded: () -> Void = {}
+    var onClipEnded: (UUID) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onReady: onReady, onTime: onTime, onClipEnded: onClipEnded)
@@ -63,7 +63,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler {
         let onReady: () -> Void
         let onTime: (Double) -> Void
-        let onClipEnded: () -> Void
+        let onClipEnded: (UUID) -> Void
         weak var webView: WKWebView?
         var lastSeek: SeekRequest?
         var lastClipCommand: YouTubeClipPlaybackCommand?
@@ -72,7 +72,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
         init(
             onReady: @escaping () -> Void,
             onTime: @escaping (Double) -> Void,
-            onClipEnded: @escaping () -> Void
+            onClipEnded: @escaping (UUID) -> Void
         ) {
             self.onReady = onReady
             self.onTime = onTime
@@ -95,7 +95,9 @@ struct YouTubeEmbedView: UIViewRepresentable {
             case "time":
                 if let sec = dict["sec"] as? Double { onTime(sec) }
             case "clipEnded":
-                onClipEnded()
+                guard let rawNonce = dict["nonce"] as? String,
+                      let nonce = UUID(uuidString: rawNonce) else { return }
+                onClipEnded(nonce)
             default:
                 break
             }
@@ -133,6 +135,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
               }
               if (window.player.setPlaybackRate) { window.player.setPlaybackRate(closestRate); }
               window.whatsubClipEnd = \(end);
+              window.whatsubClipNonce = "\(command.nonce.uuidString)";
               if (window.player.seekTo) { window.player.seekTo(\(safeStart), true); }
               if (window.player.playVideo) { window.player.playVideo(); }
             })();
@@ -158,13 +161,14 @@ struct YouTubeEmbedView: UIViewRepresentable {
             return """
             (function() {
               window.whatsubClipEnd = null;
+              window.whatsubClipNonce = null;
               if (window.player && window.player.pauseVideo) { window.player.pauseVideo(); }
             })();
             """
         }
     }
 
-    private static func html(videoId rawVideoId: String, startSeconds: Double?) -> String {
+    static func html(videoId rawVideoId: String, startSeconds: Double?) -> String {
         // Defense-in-depth: only a real YouTube id shape ([A-Za-z0-9_-]{11})
         // may be interpolated into the inline <script>. A hostile/malformed id
         // (e.g. one containing a quote or `</script>`) would otherwise break
@@ -183,6 +187,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
         <script>
           window.player = null;
           window.whatsubClipEnd = null;
+          window.whatsubClipNonce = null;
           function onYouTubeIframeAPIReady() {
             window.player = new YT.Player('player', {
               videoId: '\(videoId)',
@@ -197,8 +202,13 @@ struct YouTubeEmbedView: UIViewRepresentable {
                         var currentTime = window.player.getCurrentTime();
                         if (window.whatsubClipEnd !== null && currentTime >= window.whatsubClipEnd) {
                           if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                          var clipNonce = window.whatsubClipNonce;
                           window.whatsubClipEnd = null;
-                          window.webkit.messageHandlers.iosBridge.postMessage({ type: 'clipEnded' });
+                          window.whatsubClipNonce = null;
+                          if (clipNonce !== null) {
+                            window.webkit.messageHandlers.iosBridge.postMessage(
+                              { type: 'clipEnded', nonce: clipNonce });
+                          }
                         }
                         window.webkit.messageHandlers.iosBridge.postMessage(
                           { type: 'time', sec: currentTime });

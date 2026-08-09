@@ -266,7 +266,7 @@ struct LibraryDetailView: View {
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) },
                     clipCommand: youtubeClipPlayback.command,
-                    onClipEnded: { youtubeClipPlayback.clipEnded() }
+                    onClipEnded: { nonce in youtubeClipPlayback.clipEnded(nonce: nonce) }
                 )
             } else if entry.videoUrl == nil {
                 desktopOnlyPlaceholder

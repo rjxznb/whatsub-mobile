@@ -71,6 +71,7 @@ struct YouTubeClipCommandDeliveryState {
 final class YouTubeClipPlaybackController: ObservableObject {
     @Published private(set) var command: YouTubeClipPlaybackCommand?
     @Published private(set) var isPlaying = false
+    private var activeClipNonce: UUID?
 
     @discardableResult
     func play(start: Double, end: Double, rate: Double) -> Bool {
@@ -80,7 +81,13 @@ final class YouTubeClipPlaybackController: ObservableObject {
         guard end > safeStart else { return false }
 
         let safeRate = min(max(rate, 0.25), 2.0)
-        command = .play(start: safeStart, end: end, rate: safeRate)
+        let nextCommand = YouTubeClipPlaybackCommand.play(
+            start: safeStart,
+            end: end,
+            rate: safeRate
+        )
+        command = nextCommand
+        activeClipNonce = nextCommand.nonce
         isPlaying = true
         return true
     }
@@ -92,10 +99,13 @@ final class YouTubeClipPlaybackController: ObservableObject {
 
     func stop() {
         command = .stop()
+        activeClipNonce = nil
         isPlaying = false
     }
 
-    func clipEnded() {
+    func clipEnded(nonce: UUID) {
+        guard activeClipNonce == nonce else { return }
+        activeClipNonce = nil
         isPlaying = false
     }
 }
