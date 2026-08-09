@@ -41,18 +41,12 @@ struct CameraTabView: View {
                     Button {
                         showPhotoTranslate = true
                     } label: {
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Image(systemName: "camera.viewfinder")
-                                .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(.whatsubAccent)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                            FeatureTrialBadge(presentation: featureAccess.presentation(
-                                for: .photoAI,
-                                localPro: store.hasLocalSub
-                            ))
-                        }
-                        .contentShape(Rectangle())
+                        Image(systemName: "camera.viewfinder")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.whatsubAccent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
                     }
                     .accessibilityLabel("拍照翻译")
                 }
