@@ -40,6 +40,20 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         XCTAssertNil(job(.completed).libraryProgressLabel)
     }
 
+    func testLibraryProgressCancellationCapabilityAndLabels() {
+        XCTAssertTrue(ManagedAnalysisProgressState(job: job(.queued)).canCancel)
+        XCTAssertTrue(ManagedAnalysisProgressState(job: job(.running)).canCancel)
+        XCTAssertFalse(ManagedAnalysisProgressState(job: job(.failed)).canCancel)
+        XCTAssertEqual(
+            ManagedAnalysisProgressState(job: job(.cancelled, completed: 25)).label,
+            "部分解析 · 已停止"
+        )
+        XCTAssertEqual(
+            ManagedAnalysisProgressState(job: job(.cancelled, completed: 0)).label,
+            "仅英文 · 已停止"
+        )
+    }
+
     func testProvisionalEntryCanOpenBeforeAnalysisCompletes() {
         XCTAssertEqual(job(.queued, entryID: "entry-1").provisionalEntryID, "entry-1")
         XCTAssertEqual(job(.running, entryID: "entry-1").provisionalEntryID, "entry-1")

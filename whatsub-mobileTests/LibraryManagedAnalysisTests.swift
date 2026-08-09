@@ -8,21 +8,32 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         private var detailCallCount = 0
         private let failingDetailCalls: Set<Int>
         private(set) var requestedCursors: [Int] = []
+        private var cancelError: ManagedAnalysisClientError?
+        private var cancelResponse: ManagedAnalysisJob?
+        private var jobQueue: [ManagedAnalysisJob]
+        private(set) var cancelledJobIDs: [String] = []
         var listedJobs: [ManagedAnalysisJob]
 
         init(
             details: [LibraryEntryDetail],
             jobs: [ManagedAnalysisJob],
             results: [ManagedAnalysisResultsPage],
-            failingDetailCalls: Set<Int> = []
+            failingDetailCalls: Set<Int> = [],
+            cancelResponse: ManagedAnalysisJob? = nil,
+            cancelError: ManagedAnalysisClientError? = nil,
+            jobResponses: [ManagedAnalysisJob] = []
         ) {
             detailQueue = details
             listedJobs = jobs
             resultQueue = results
             self.failingDetailCalls = failingDetailCalls
+            self.cancelResponse = cancelResponse
+            self.cancelError = cancelError
+            jobQueue = jobResponses
         }
 
         func cursors() -> [Int] { requestedCursors }
+        func cancelCalls() -> [String] { cancelledJobIDs }
 
         func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
             detailCallCount += 1
@@ -56,7 +67,11 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             token: String
         ) async throws -> ManagedAnalysisJob { listedJobs[0] }
 
-        func job(id: String, token: String) async throws -> ManagedAnalysisJob { listedJobs[0] }
+        func job(id: String, token: String) async throws -> ManagedAnalysisJob {
+            if !jobQueue.isEmpty { return jobQueue.removeFirst() }
+            guard let first = listedJobs.first else { throw ManagedAnalysisClientError.notFound }
+            return first
+        }
         func jobs(token: String) async throws -> [ManagedAnalysisJob] { listedJobs }
 
         func results(
@@ -69,7 +84,14 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             return resultQueue.removeFirst()
         }
 
-        func cancel(id: String, token: String) async throws -> ManagedAnalysisJob { listedJobs[0] }
+        func cancel(id: String, token: String) async throws -> ManagedAnalysisJob {
+            cancelledJobIDs.append(id)
+            if let cancelError { throw cancelError }
+            guard let cancelResponse else {
+                throw ManagedAnalysisClientError.invalidResponse("missing cancel response")
+            }
+            return cancelResponse
+        }
 
         func resume(id: String, token: String) async throws -> ManagedAnalysisJob {
             let old = listedJobs[0]
@@ -110,11 +132,29 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         )
     }
 
-    private func job(status: ManagedAnalysisJobStatus = .running) -> ManagedAnalysisJob {
+    private func job(
+        status: ManagedAnalysisJobStatus = .running,
+        completedCues: Int = 0
+    ) -> ManagedAnalysisJob {
         ManagedAnalysisJob(
             jobId: "job-1", status: status, tier: .pro,
-            createdAt: 1, updatedAt: 2, completedCues: 0, totalCues: 2,
+            createdAt: 1, updatedAt: 2, completedCues: completedCues, totalCues: 2,
             tokensIn: 0, tokensOut: 0, errorCode: nil, resultEntryId: "entry-1"
+        )
+    }
+
+    private func runningPage(firstTranslation: String = "") -> ManagedAnalysisResultsPage {
+        let batches = firstTranslation.isEmpty
+            ? []
+            : [ManagedAnalysisCompletedBatch(
+                batchIndex: 0,
+                subtitles: [cue(0, translation: firstTranslation)]
+            )]
+        return ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .running,
+            completedCues: batches.isEmpty ? 0 : 1, totalCues: 2,
+            nextBatchCursor: batches.isEmpty ? -1 : 0,
+            batches: batches, errorCode: nil
         )
     }
 
@@ -210,5 +250,65 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         XCTAssertFalse(viewModel.managedFinalSyncPending)
         XCTAssertFalse(viewModel.managedEditingBlocked)
         XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["最终第一句", "最终第二句"])
+    }
+
+    @MainActor
+    func testCancelKeepsMergedCuesAndExposesResume() async throws {
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [runningPage(firstTranslation: "第一句")],
+            cancelResponse: job(status: .cancelled, completedCues: 1)
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        let before = viewModel.displayedCues.map(\.translation)
+        await viewModel.cancelManagedAnalysis(token: "token")
+
+        XCTAssertEqual(viewModel.managedProgress?.status, .cancelled)
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), before)
+        XCTAssertTrue(viewModel.managedProgress?.canResume == true)
+        let calls = await api.cancelCalls()
+        XCTAssertEqual(calls, ["job-1"])
+        XCTAssertNil(viewModel.managedProgressError)
+    }
+
+    @MainActor
+    func testCancelFailurePreservesRunningStateAndShowsRetryableError() async throws {
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [runningPage()],
+            cancelError: .network("offline")
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        await viewModel.cancelManagedAnalysis(token: "token")
+
+        XCTAssertEqual(viewModel.managedProgress?.status, .running)
+        XCTAssertEqual(viewModel.managedProgressError, "暂时无法停止解析，请稍后重试")
+        XCTAssertFalse(viewModel.managedCancelling)
+    }
+
+    @MainActor
+    func testCancelCompletionRaceReloadsFinalEntry() async throws {
+        let final = entry(translations: ["最终第一句", "最终第二句"])
+        let api = API(
+            details: [entry(translations: ["", ""]), final],
+            jobs: [job()],
+            results: [runningPage()],
+            cancelError: .invalidState,
+            jobResponses: [job(status: .completed, completedCues: 2)]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        await viewModel.cancelManagedAnalysis(token: "token")
+
+        XCTAssertEqual(viewModel.managedProgress?.status, .completed)
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["最终第一句", "最终第二句"])
+        XCTAssertNil(viewModel.managedProgressError)
     }
 }
