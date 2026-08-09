@@ -6,6 +6,7 @@ struct LibraryDetailView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryDetailViewModel()
     @StateObject private var pollingLifecycle = LibraryDetailPollingLifecycle()
+    @StateObject private var youtubeClipPlayback = YouTubeClipPlaybackController()
     @Environment(\.verticalSizeClass) private var vSize
     @Environment(\.scenePhase) private var scenePhase
     @State private var playerReady = false
@@ -38,7 +39,6 @@ struct LibraryDetailView: View {
     /// Skipping the alert when `!vm.dirty` lets users back out of an
     /// untouched edit session without a noisy "are you sure" prompt.
     @State private var confirmCancelEdit: Bool = false
-    @State private var confirmStopAnalysis: Bool = false
     @State private var confirmDesktopReplacement: Bool = false
     @State private var showDesktopReplacementSheet: Bool = false
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
@@ -64,6 +64,11 @@ struct LibraryDetailView: View {
     private var ossAudioURL: URL? {
         guard let s = vm.entry?.audioUrl else { return nil }
         return URL(string: s)
+    }
+
+    private var youtubePlaybackAvailable: Bool {
+        guard let entry = vm.entry else { return false }
+        return entry.videoUrl == nil && VideoSource.isLikelyYouTubeId(entry.youtubeId)
     }
 
     var body: some View {
@@ -187,7 +192,9 @@ struct LibraryDetailView: View {
                 cue: cue,
                 sharedPlayer: avPlayer,
                 audioURL: ossAudioURL,
-                videoURL: ossVideoURL
+                videoURL: ossVideoURL,
+                youtubePlaybackController: youtubeClipPlayback,
+                youtubePlaybackAvailable: youtubePlaybackAvailable
             )
         }
         .sheet(item: $clozeCue) { cue in
@@ -202,19 +209,6 @@ struct LibraryDetailView: View {
                 audioURL: ossAudioURL,
                 videoURL: ossVideoURL
             )
-        }
-        .confirmationDialog(
-            "停止 AI 解析？",
-            isPresented: $confirmStopAnalysis,
-            titleVisibility: .visible
-        ) {
-            Button("停止解析", role: .destructive) {
-                guard let token = appState.session?.sessionToken else { return }
-                Task { await vm.cancelManagedAnalysis(token: token) }
-            }
-            Button("继续解析", role: .cancel) {}
-        } message: {
-            Text("已完成的翻译会保留，未完成部分将停止解析，之后可以继续。")
         }
         // Pause whenever this view leaves the screen — covers:
         //   • bottom TabView switch (Library → 语料库 / 我的): without this
@@ -235,6 +229,7 @@ struct LibraryDetailView: View {
         .onDisappear {
             pollingLifecycle.disappear()
             avPlayer?.pause()
+            youtubeClipPlayback.stop()
             vm.stopManagedProgress()
         }
     }
@@ -269,7 +264,10 @@ struct LibraryDetailView: View {
                     videoId: entry.youtubeId,
                     seek: vm.seek,
                     onReady: { playerReady = true },
-                    onTime: { sec in vm.onPlayerTime(sec) }
+                    onTime: { sec in vm.onPlayerTime(sec) },
+                    clipCommand: youtubeClipPlayback.command,
+                    replaySnapshot: youtubeClipPlayback.consumerRebuildReplaySnapshot,
+                    onClipEnded: { nonce in youtubeClipPlayback.clipEnded(nonce: nonce) }
                 )
             } else if entry.videoUrl == nil {
                 desktopOnlyPlaceholder
@@ -437,13 +435,12 @@ struct LibraryDetailView: View {
                         .font(.subheadline.weight(.semibold))
                     Spacer()
                     if progress.canCancel {
-                        Button(vm.managedCancelling ? "正在停止…" : "停止") {
-                            confirmStopAnalysis = true
+                        ManagedAnalysisStopButton(
+                            isBusy: vm.managedCancelling || vm.managedResuming
+                        ) {
+                            guard let token = appState.session?.sessionToken else { return }
+                            Task { await vm.cancelManagedAnalysis(token: token) }
                         }
-                        .font(.caption.weight(.semibold))
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.red)
-                        .disabled(vm.managedCancelling || vm.managedResuming)
                     } else if progress.canResume {
                         Button(vm.managedResuming ? "正在继续…" : "继续 AI 解析") {
                             guard let token = appState.session?.sessionToken else { return }
@@ -704,7 +701,10 @@ struct LibraryDetailView: View {
                                 )
                             },
                             onCollect: { collectCue = cue },
-                            onShadow: { shadowCue = cue },
+                            onShadow: {
+                                youtubeClipPlayback.stop()
+                                shadowCue = cue
+                            },
                             onCloze: { clozeCue = cue }
                         )
                         .id(cue.index)

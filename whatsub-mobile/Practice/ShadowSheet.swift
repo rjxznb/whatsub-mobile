@@ -3,6 +3,30 @@ import AVFoundation
 import Speech
 import UIKit
 
+enum ShadowPlaybackSource: Equatable {
+    case oss
+    case youtube
+    case unavailable
+
+    static func resolve(hasOSS: Bool, hasYouTube: Bool) -> Self {
+        if hasOSS { return .oss }
+        if hasYouTube { return .youtube }
+        return .unavailable
+    }
+
+    static func resolve(audioURL: URL?, videoURL: URL?, hasYouTube: Bool) -> Self {
+        resolve(hasOSS: audioURL != nil || videoURL != nil, hasYouTube: hasYouTube)
+    }
+
+    var availableRates: [Double] {
+        switch self {
+        case .oss: return [0.5, 0.65, 0.8, 1.0]
+        case .youtube: return [0.5, 0.75, 1.0]
+        case .unavailable: return []
+        }
+    }
+}
+
 /// 跟读 sheet. Flow:
 ///   1. cue text + 听原文 button (auto-plays once on appear)
 ///   2. 录音 button → 3-second countdown → records → 停止
@@ -14,10 +38,13 @@ import UIKit
 /// for the locale — en-US is supported on-device since iOS 13). No backend.
 struct ShadowSheet: View {
     let cue: Cue
+    let audioURL: URL?
     let videoURL: URL?
+    let youtubePlaybackAvailable: Bool
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var audio: CueAudioPlayer
+    @ObservedObject private var youtubePlaybackController: YouTubeClipPlaybackController
     @State private var phase: Phase = .idle
     @State private var countdown: Int = 0
     @State private var permissionDenied = false
@@ -38,11 +65,6 @@ struct ShadowSheet: View {
     /// every cue. Pitch is preserved via CueAudioPlayer's `.spectral`
     /// algorithm so 0.5× still sounds like the speaker.
     @AppStorage("shadow.playbackRate") private var playbackRate: Double = 1.0
-    /// Slow→fast presets tuned for connected-speech parsing (连读细听). Denser
-    /// in the slow range (0.5/0.65/0.8) since that's where the drill happens,
-    /// vs YouTube's 0.25-step uniform pattern.
-    private let availableRates: [Double] = [0.5, 0.65, 0.8, 1.0]
-
     enum Phase: Equatable {
         case idle
         case playingOriginal
@@ -53,9 +75,19 @@ struct ShadowSheet: View {
         case error(String)
     }
 
-    init(cue: Cue, sharedPlayer: AVPlayer?, audioURL: URL?, videoURL: URL?) {
+    init(
+        cue: Cue,
+        sharedPlayer: AVPlayer?,
+        audioURL: URL?,
+        videoURL: URL?,
+        youtubePlaybackController: YouTubeClipPlaybackController,
+        youtubePlaybackAvailable: Bool
+    ) {
         self.cue = cue
+        self.audioURL = audioURL
         self.videoURL = videoURL
+        self.youtubePlaybackAvailable = youtubePlaybackAvailable
+        self.youtubePlaybackController = youtubePlaybackController
         // Priority: audioURL (small .m4a sidecar, ~30× less bandwidth per cue)
         // → sharedPlayer (reuse LibraryDetailView's buffered video) → standalone
         // built from videoURL. Old entries (synced before 2026-05-29) have
@@ -99,7 +131,7 @@ struct ShadowSheet: View {
             // player from LibraryDetailView, this is what makes practice
             // responsive on big videos (the cold-buffer case where the user
             // jumps straight to practice without playing the main video).
-            if videoURL != nil { audio.preload(at: cue.time) }
+            if playbackSource == .oss { audio.preload(at: cue.time) }
         }
         // 2026-06-18 — make the speed picker live during playback: tapping a
         // different chip while the cue is currently playing flips the rate
@@ -107,10 +139,49 @@ struct ShadowSheet: View {
         // taking effect only on the NEXT 听原文 tap. Idle case is a no-op
         // (CueAudioPlayer.setRate gates on `isPlaying`); the next play()
         // picks up the new value via the `playbackRate` argument.
+        .onAppear {
+            youtubePlaybackController.stop()
+            resetUnsupportedPlaybackRate()
+        }
         .onChange(of: playbackRate) { newRate in
-            audio.setRate(Float(newRate))
+            switch playbackSource {
+            case .oss:
+                audio.setRate(Float(newRate))
+            case .youtube:
+                youtubePlaybackController.setRate(newRate)
+            case .unavailable:
+                break
+            }
+        }
+        .onChange(of: youtubePlaybackController.isPlaying) { isPlaying in
+            guard playbackSource == .youtube,
+                  !isPlaying,
+                  phase == .playingOriginal else { return }
+            phase = .idle
         }
         .onDisappear { stopAll() }
+    }
+
+    private var playbackSource: ShadowPlaybackSource {
+        ShadowPlaybackSource.resolve(
+            audioURL: audioURL,
+            videoURL: videoURL,
+            hasYouTube: youtubePlaybackAvailable
+        )
+    }
+
+    private var availableRates: [Double] { playbackSource.availableRates }
+
+    private var isOriginalPlaying: Bool {
+        switch playbackSource {
+        case .oss: return audio.isPlaying
+        case .youtube: return youtubePlaybackController.isPlaying
+        case .unavailable: return false
+        }
+    }
+
+    private var isLoadingOriginal: Bool {
+        playbackSource == .oss && audio.isLoading
     }
 
     // ---------------------------------------------------------------- cue card
@@ -182,7 +253,7 @@ struct ShadowSheet: View {
                 Button { togglePlayCue() } label: { playCueLabel }
                 .buttonStyle(.bordered)
                 .tint(.whatsubAccent)
-                .disabled(videoURL == nil || phase == .countingDown || phase == .recording || phase == .transcribing)
+                .disabled(playbackSource == .unavailable || phase == .countingDown || phase == .recording || phase == .transcribing)
 
                 recordButton
             }
@@ -196,12 +267,12 @@ struct ShadowSheet: View {
     @ViewBuilder
     private var playCueLabel: some View {
         HStack(spacing: 6) {
-            if audio.isLoading {
+            if isLoadingOriginal {
                 ProgressView().controlSize(.small).tint(.whatsubAccent)
             } else {
-                Image(systemName: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                Image(systemName: isOriginalPlaying ? "pause.circle.fill" : "play.circle.fill")
             }
-            Text(audio.isLoading ? "加载中…" : (audio.isPlaying ? "暂停" : "听原文"))
+            Text(isLoadingOriginal ? "加载中…" : (isOriginalPlaying ? "暂停" : "听原文"))
                 .font(.subheadline.weight(.semibold))
         }
         .frame(maxWidth: .infinity)
@@ -209,10 +280,9 @@ struct ShadowSheet: View {
     }
 
     private func togglePlayCue() {
-        // Tap during loading cancels the request (.stop pauses + clears the
-        // periodic time observer + KVO will flip isLoading back to false).
-        if audio.isPlaying || audio.isLoading {
-            audio.stop()
+        if isOriginalPlaying || isLoadingOriginal {
+            stopOriginalPlayback()
+            phase = .idle
         } else {
             Task { await playOriginal() }
         }
@@ -318,7 +388,7 @@ struct ShadowSheet: View {
                     togglePlayCue()
                 } label: { playCueLabel.padding(.vertical, -4) }
                 .buttonStyle(.bordered).tint(.whatsubAccent)
-                .disabled(videoURL == nil)
+                .disabled(playbackSource == .unavailable)
 
                 Button {
                     toggleRecordingPlayback()
@@ -370,24 +440,35 @@ struct ShadowSheet: View {
     // ----------------------------------------------------------- play original
 
     private func playOriginal() async {
-        guard videoURL != nil else { return }
-        phase = .playingOriginal
-        let rate = Float(playbackRate)
-        audio.play(from: cue.time, to: cue.endTime, rate: rate)
-        // Wait through the cue duration so the button reflects 播放中.
-        // Wall-clock duration scales inversely with rate: 0.5× takes 2× as
-        // long. Without this scaling the phase would flip back to .idle
-        // before the audio finished, breaking the button state.
-        let mediaDuration = max(0.4, cue.endTime - cue.time)
-        let wallDuration = mediaDuration / max(0.1, playbackRate)
-        try? await Task.sleep(nanoseconds: UInt64(wallDuration * 1_000_000_000))
-        phase = .idle
+        switch playbackSource {
+        case .oss:
+            phase = .playingOriginal
+            audio.play(from: cue.time, to: cue.endTime, rate: Float(playbackRate))
+            // Wait through the cue duration so the button reflects 播放中.
+            // Wall-clock duration scales inversely with rate: 0.5× takes 2× as
+            // long. Without this scaling the phase would flip back to .idle
+            // before the audio finished, breaking the button state.
+            let mediaDuration = max(0.4, cue.endTime - cue.time)
+            let wallDuration = mediaDuration / max(0.1, playbackRate)
+            try? await Task.sleep(nanoseconds: UInt64(wallDuration * 1_000_000_000))
+            phase = .idle
+        case .youtube:
+            guard youtubePlaybackController.play(
+                start: cue.time,
+                end: cue.endTime,
+                rate: playbackRate
+            ) else { return }
+            phase = .playingOriginal
+        case .unavailable:
+            return
+        }
     }
 
     // ------------------------------------------------------ countdown + record
 
     private func startCountdown() async {
         guard !permissionDenied else { return }
+        stopOriginalPlayback()
         diff = nil
         transcribedText = ""
         phase = .countingDown
@@ -399,6 +480,7 @@ struct ShadowSheet: View {
     }
 
     private func startRecording() {
+        stopOriginalPlayback()
         // Switch the audio session to record-capable. We use .playAndRecord so
         // a subsequent "听原文" still works without re-config.
         let session = AVAudioSession.sharedInstance()
@@ -492,7 +574,7 @@ struct ShadowSheet: View {
         }
         guard let url = recordingURL else { return }
         // Stop the cue audio first so the two never overlap.
-        audio.stop()
+        stopOriginalPlayback()
         // .playAndRecord session is still active from the recording step and
         // supports playback — no category switch needed. AVAudioPlayer reads
         // the local m4a from temp; no network, no recognition, no cost.
@@ -528,6 +610,7 @@ struct ShadowSheet: View {
     // -------------------------------------------------------------- reset/teardown
 
     private func resetForRetry() {
+        stopOriginalPlayback()
         stopRecordingPlayback()
         diff = nil
         transcribedText = ""
@@ -537,10 +620,21 @@ struct ShadowSheet: View {
     }
 
     private func stopAll() {
-        audio.stop()
+        stopOriginalPlayback()
         stopRecordingPlayback()
         recorder?.stop()
         recorder = nil
         if let url = recordingURL { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private func stopOriginalPlayback() {
+        audio.stop()
+        youtubePlaybackController.stop()
+    }
+
+    private func resetUnsupportedPlaybackRate() {
+        guard playbackSource != .unavailable,
+              !availableRates.contains(playbackRate) else { return }
+        playbackRate = 1.0
     }
 }

@@ -24,46 +24,46 @@ struct CueRow: View {
     /// Long-press → 听抄 (cloze) entry from the contextMenu. Defaults to no-op.
     var onCloze: () -> Void = {}
 
-    private struct WordToken: Identifiable {
-        let id: Int
-        let text: String
-        let phrase: String?   // the highlight phrase this word belongs to (nil = normal)
+    private var cueText: CueTextPresentation {
+        CueTextPresentation.make(text: cue.text, highlights: cue.highlightWords)
     }
 
-    /// Positional runs (from splitForHighlights) split into per-word tokens so the
-    /// line wraps by word AND each highlighted word is independently tappable. A
-    /// highlight run's `.text` is the matched phrase = a key into the cue's
-    /// keyNotes / highlightTranslations.
-    private var tokens: [WordToken] {
-        var out: [WordToken] = []
-        var id = 0
-        for run in splitForHighlights(cue.text, highlights: cue.highlightWords) {
-            for w in run.text.split(separator: " ", omittingEmptySubsequences: true).map(String.init) {
-                out.append(WordToken(id: id, text: w, phrase: run.highlight ? run.text : nil))
-                id += 1
+    private var attributedCueText: AttributedString {
+        var value = AttributedString()
+        for run in cueText.runs {
+            var piece = AttributedString(run.text)
+            if let id = run.highlightID {
+                piece.font = .system(size: 22, weight: .semibold)
+                piece.foregroundColor = .whatsubHighlight
+                piece.underlineStyle = .single
+                piece.link = URL(string: "whatsub-highlight://\(id)")
+            } else {
+                piece.font = .system(size: 22)
+                piece.foregroundColor = isCurrent ? .whatsubInk : .whatsubInkSoft
             }
+            value.append(piece)
         }
-        return out
+        return value
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            FlowLayout(spacing: 5, lineSpacing: 6) {
-                ForEach(tokens) { tok in
-                    let isHL = tok.phrase != nil
-                    Text(tok.text)
-                        .font(.system(size: 22, weight: isHL ? .semibold : .regular))
-                        .foregroundColor(isHL ? .whatsubHighlight : (isCurrent ? .whatsubInk : .whatsubInkSoft))
-                        .underline(isHL, color: .whatsubHighlight)
-                        .onTapGesture {
-                            if let p = tok.phrase {
-                                onTapHighlight(p, cue.highlightTranslations[p], cue.keyNotes[p], cue)
-                            } else {
-                                onTapCue()
-                            }
-                        }
-                }
-            }
+            Text(attributedCueText)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .environment(\.openURL, OpenURLAction { url in
+                    guard url.scheme == "whatsub-highlight",
+                          let idText = url.host,
+                          let id = Int(idText),
+                          let phrase = cueText.highlightPhrase(id: id) else {
+                        return .discarded
+                    }
+                    let lookupKey = cueText.highlightLookupKey(id: id)
+                    let translation = lookupKey.flatMap { cue.highlightTranslations[$0] } ?? cue.highlightTranslations[phrase]
+                    let note = lookupKey.flatMap { cue.keyNotes[$0] } ?? cue.keyNotes[phrase]
+                    onTapHighlight(phrase, translation, note, cue)
+                    return .handled
+                })
             if isAwaitingAnalysis {
                 Text("等待 AI")
                     .font(.system(size: 13, weight: .medium))
