@@ -40,6 +40,7 @@ struct LibraryDetailView: View {
     @State private var confirmStopAnalysis: Bool = false
     @State private var confirmDesktopReplacement: Bool = false
     @State private var showDesktopReplacementSheet: Bool = false
+    @State private var isViewVisible: Bool = false
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
     // (showPendingSheet + 「待同步 N 条」 banner removed 2026-06-07.
     // PendingPhraseStore is still used — observed inside
@@ -106,7 +107,8 @@ struct LibraryDetailView: View {
             guard !taskIsCancelled else { return }
             if LibraryDetailPollingStartPolicy.shouldStart(
                 taskIsCancelled: taskIsCancelled,
-                sceneIsActive: scenePhase == .active
+                sceneIsActive: scenePhase == .active,
+                viewIsVisible: isViewVisible
             ) {
                 vm.startManagedProgress(token: token)
             }
@@ -142,6 +144,7 @@ struct LibraryDetailView: View {
         .onChange(of: scenePhase) { phase in
             guard let token = appState.session?.sessionToken else { return }
             if phase == .active {
+                guard isViewVisible else { return }
                 vm.startManagedProgress(token: token)
                 // One foreground refresh is enough to discover desktop completion.
                 if vm.entry?.needsDesktopDownload == true {
@@ -229,7 +232,11 @@ struct LibraryDetailView: View {
         // same SwiftUI view re-laid-out, not torn down.
         // Position stays at the paused timestamp, so resuming the video by
         // tapping play continues from where the user left off.
+        .onAppear {
+            isViewVisible = true
+        }
         .onDisappear {
+            isViewVisible = false
             avPlayer?.pause()
             vm.stopManagedProgress()
         }
@@ -621,7 +628,13 @@ struct LibraryDetailView: View {
     private func reloadDetail() async {
         guard let token = appState.session?.sessionToken else { return }
         await vm.load(id: entryId, token: token)
-        vm.startManagedProgress(token: token)
+        if LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: Task.isCancelled,
+            sceneIsActive: scenePhase == .active,
+            viewIsVisible: isViewVisible
+        ) {
+            vm.startManagedProgress(token: token)
+        }
     }
 
     // Landscape = fullscreen: the player fills the screen (video letterboxed on

@@ -32,8 +32,12 @@ enum DesktopReplacementToolbarPresentation {
 }
 
 enum LibraryDetailPollingStartPolicy {
-    static func shouldStart(taskIsCancelled: Bool, sceneIsActive: Bool) -> Bool {
-        !taskIsCancelled && sceneIsActive
+    static func shouldStart(
+        taskIsCancelled: Bool,
+        sceneIsActive: Bool,
+        viewIsVisible: Bool
+    ) -> Bool {
+        !taskIsCancelled && sceneIsActive && viewIsVisible
     }
 }
 
@@ -53,6 +57,7 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published var managedCancelling = false
     @Published private(set) var managedFinalSyncPending = false
     private(set) var managedHydrationPending = false
+    private(set) var managedDiscoveryPending = false
 
     // Popup for a tapped highlight.
     @Published var popupWord: String?
@@ -135,6 +140,7 @@ final class LibraryDetailViewModel: ObservableObject {
             managedProgress = nil
             managedFinalSyncPending = false
             managedHydrationPending = false
+            managedDiscoveryPending = false
             managedProgressError = nil
             loading = false
             replacementStatusTask = Task { [weak self] in
@@ -173,9 +179,11 @@ final class LibraryDetailViewModel: ObservableObject {
     /// progressive state recoverable after relaunch and on another device.
     func discoverManagedAnalysis(token: String) async {
         guard let entry else { return }
+        managedDiscoveryPending = true
         do {
             let jobs = try await managedAPI.jobs(token: token)
             guard !Task.isCancelled else { return }
+            managedDiscoveryPending = false
             guard let job = jobs
                 .filter({ $0.resultEntryId == entry.id })
                 .max(by: { $0.updatedAt < $1.updatedAt }) else {
@@ -210,9 +218,10 @@ final class LibraryDetailViewModel: ObservableObject {
         } catch is CancellationError {
             return
         } catch ManagedAnalysisClientError.unauthorized {
+            managedDiscoveryPending = false
             handleManagedAnalysisUnauthorized()
         } catch {
-            // Supplemental progress must never hide the playable English entry.
+            recordManagedProgressFailure()
         }
     }
 
@@ -290,19 +299,23 @@ final class LibraryDetailViewModel: ObservableObject {
 
     private func runManagedProgress(token: String) async {
         await discoverManagedAnalysis(token: token)
-        while !Task.isCancelled, let progress = managedProgress,
-              progress.isPolling || managedFinalSyncPending || managedHydrationPending {
+        while !Task.isCancelled {
+            let progress = managedProgress
+            guard managedDiscoveryPending
+                    || progress?.isPolling == true
+                    || managedFinalSyncPending
+                    || managedHydrationPending else { return }
             let delay: TimeInterval
             if managedFinalSyncPending {
                 delay = 4
             } else if managedHydrationPending {
                 delay = ManagedAnalysisPollPolicy.delay(
-                    status: progress.status,
+                    status: progress?.status ?? .queued,
                     failureCount: max(managedPollFailures, 1)
                 ) ?? 2
             } else {
                 delay = ManagedAnalysisPollPolicy.delay(
-                    status: progress.status,
+                    status: progress?.status ?? .queued,
                     failureCount: managedPollFailures
                 ) ?? 5
             }
@@ -310,15 +323,18 @@ final class LibraryDetailViewModel: ObservableObject {
             do {
                 try await Task.sleep(nanoseconds: UInt64((delay + jitter) * 1_000_000_000))
                 try Task.checkCancellation()
-                try await pollManagedAnalysisOnce(token: token)
+                if managedDiscoveryPending {
+                    await discoverManagedAnalysis(token: token)
+                } else {
+                    try await pollManagedAnalysisOnce(token: token)
+                }
             } catch is CancellationError {
                 return
             } catch ManagedAnalysisClientError.unauthorized {
                 handleManagedAnalysisUnauthorized()
                 return
             } catch {
-                managedPollFailures += 1
-                managedProgressError = "进度暂时无法更新，正在重试"
+                recordManagedProgressFailure()
             }
         }
     }
@@ -334,6 +350,7 @@ final class LibraryDetailViewModel: ObservableObject {
             managedHydrationPending = false
             guard let entry else { return }
             let synced = await reloadFinalEntry(id: entry.id, token: token)
+            managedFinalSyncPending = !synced
             if !synced { startManagedProgress(token: token) }
         case .queued, .running:
             startManagedProgress(token: token)
@@ -351,8 +368,16 @@ final class LibraryDetailViewModel: ObservableObject {
     }
 
     private func handleManagedAnalysisUnauthorized() {
+        managedDiscoveryPending = false
         managedProgressError = "登录已过期，请到「我的」重新登录"
         stopManagedProgress()
+    }
+
+    private func recordManagedProgressFailure() {
+        managedPollFailures += 1
+        managedProgressError = managedFinalSyncPending
+            ? "解析已完成，最终结果稍后自动同步"
+            : "进度暂时无法更新，正在重试"
     }
 
     private func reloadFinalEntry(id: String, token: String) async -> Bool {
@@ -368,6 +393,7 @@ final class LibraryDetailViewModel: ObservableObject {
             return true
         } catch {
             // Keep the fully merged durable batches visible until a later reload.
+            managedFinalSyncPending = true
             managedProgressError = "解析已完成，最终结果稍后自动同步"
             return false
         }
