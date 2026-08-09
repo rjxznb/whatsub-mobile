@@ -39,6 +39,22 @@ final class YouTubeClipPlaybackControllerTests: XCTestCase {
         XCTAssertFalse(controller.isPlaying)
     }
 
+    @MainActor
+    func testStaleClipCompletionCannotStopNewerClip() throws {
+        let controller = YouTubeClipPlaybackController()
+        XCTAssertTrue(controller.play(start: 1, end: 2, rate: 1))
+        let nonceA = try XCTUnwrap(controller.command?.nonce)
+
+        XCTAssertTrue(controller.play(start: 3, end: 4, rate: 1))
+        let nonceB = try XCTUnwrap(controller.command?.nonce)
+
+        controller.clipEnded(nonce: nonceA)
+        XCTAssertTrue(controller.isPlaying)
+
+        controller.clipEnded(nonce: nonceB)
+        XCTAssertFalse(controller.isPlaying)
+    }
+
     func testClipQueuedBeforeReadyIsDeliveredExactlyOnceAfterReady() {
         var delivery = YouTubeClipCommandDeliveryState()
         let command = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)
