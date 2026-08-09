@@ -80,20 +80,31 @@ struct ManagedAnalysisJobPresentation: Equatable {
 }
 
 extension ManagedAnalysisJob {
+    /// New servers create the English-only Library entry atomically with the
+    /// job. Older servers may still return nil, in which case the import view
+    /// simply keeps its existing job-status UI instead of navigating nowhere.
+    var provisionalEntryID: String? {
+        guard let resultEntryId,
+              !resultEntryId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return resultEntryId
+    }
+
     var presentation: ManagedAnalysisJobPresentation {
         switch status {
         case .queued:
-            return .init(label: "排队中", detail: "关闭页面后会继续解析", canCancel: true, canResume: false, entryID: nil)
+            return .init(label: "排队中", detail: "关闭页面后会继续解析", canCancel: true, canResume: false, entryID: provisionalEntryID)
         case .running:
             return .init(
                 label: "解析中 \(completedCues)/\(totalCues)",
-                detail: nil, canCancel: true, canResume: false, entryID: nil
+                detail: nil, canCancel: true, canResume: false, entryID: provisionalEntryID
             )
         case .pausedQuota:
             let detail = errorCode == .freeUsedUp
                 ? "免费体验额度已用完；订阅 Pro 后可继续"
                 : "额度恢复后可继续"
-            return .init(label: "额度不足，已暂停", detail: detail, canCancel: true, canResume: true, entryID: nil)
+            return .init(label: "额度不足，已暂停", detail: detail, canCancel: true, canResume: true, entryID: provisionalEntryID)
         case .completed:
             return .init(label: "已完成", detail: nil, canCancel: false, canResume: false, entryID: resultEntryId)
         case .failed:
@@ -106,9 +117,21 @@ extension ManagedAnalysisJob {
             case .durationUnknown: detail = "无法确认视频时长"
             case nil: detail = "解析任务未完成"
             }
-            return .init(label: "解析失败", detail: detail, canCancel: false, canResume: false, entryID: nil)
+            return .init(label: "解析失败", detail: detail, canCancel: false, canResume: true, entryID: provisionalEntryID)
         case .cancelled:
-            return .init(label: "已取消", detail: nil, canCancel: false, canResume: false, entryID: nil)
+            return .init(label: "已取消", detail: nil, canCancel: false, canResume: true, entryID: provisionalEntryID)
+        }
+    }
+
+    var libraryProgressLabel: String? {
+        let progressPrefix = completedCues > 0 ? "部分解析" : "仅英文"
+        switch status {
+        case .queued: return "等待 AI 解析"
+        case .running: return "AI 解析中 · \(completedCues)/\(totalCues)"
+        case .pausedQuota: return "\(progressPrefix) · 解析已暂停"
+        case .failed: return "\(progressPrefix) · AI 解析失败"
+        case .cancelled: return "\(progressPrefix) · 已停止"
+        case .completed: return nil
         }
     }
 }
@@ -134,6 +157,22 @@ enum ManagedAnalysisClientError: Error, Equatable {
     )
 }
 
+struct ManagedAnalysisCompletedBatch: Decodable {
+    let batchIndex: Int
+    let subtitles: [Cue]
+}
+
+struct ManagedAnalysisResultsPage: Decodable {
+    let jobId: String
+    let entryId: String
+    let status: ManagedAnalysisJobStatus
+    let completedCues: Int
+    let totalCues: Int
+    let nextBatchCursor: Int
+    let batches: [ManagedAnalysisCompletedBatch]
+    let errorCode: ManagedAnalysisFailureCode?
+}
+
 enum ManagedEntitlementState: Equatable {
     case freshFree
     case freshPro
@@ -157,6 +196,7 @@ protocol ManagedAnalysisClientProtocol {
     ) async throws -> ManagedAnalysisJob
     func job(id: String, token: String) async throws -> ManagedAnalysisJob
     func jobs(token: String) async throws -> [ManagedAnalysisJob]
+    func results(id: String, afterBatch: Int, token: String) async throws -> ManagedAnalysisResultsPage
     func cancel(id: String, token: String) async throws -> ManagedAnalysisJob
     func resume(id: String, token: String) async throws -> ManagedAnalysisJob
 }

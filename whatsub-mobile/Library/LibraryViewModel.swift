@@ -13,18 +13,69 @@ final class LibraryViewModel: ObservableObject {
     /// from cache and never noticed a network state change (VPN flip
     /// → poisoned URLCache + iOS DNS). See `RemoteImage.swift`.
     @Published var thumbRefreshNonce: Int = 0
+    @Published private(set) var managedJobsByEntryID: [String: ManagedAnalysisJob] = [:]
 
     /// Injectable for tests; production uses the shared on-disk cache.
     private let cache: LibraryCache
+    private let managedAPI: any ManagedAnalysisClientProtocol
+    private var managedPollingTask: Task<Void, Never>?
 
-    init(cache: LibraryCache = .shared) {
+    init(
+        cache: LibraryCache = .shared,
+        managedAPI: any ManagedAnalysisClientProtocol = WhatsubAPI.shared
+    ) {
         self.cache = cache
+        self.managedAPI = managedAPI
+    }
+
+    func managedJob(for entryID: String) -> ManagedAnalysisJob? {
+        managedJobsByEntryID[entryID]
+    }
+
+    func startManagedJobPolling(token: String) {
+        managedPollingTask?.cancel()
+        managedPollingTask = Task { [weak self] in
+            guard let self else { return }
+            await refreshManagedJobs(token: token)
+            while !Task.isCancelled,
+                  managedJobsByEntryID.values.contains(where: { $0.status == .queued || $0.status == .running }) {
+                do {
+                    let delay = 5.0 + Double.random(in: 0...0.5)
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                } catch { return }
+                await refreshManagedJobs(token: token)
+            }
+        }
+    }
+
+    func stopManagedJobPolling() {
+        managedPollingTask?.cancel()
+        managedPollingTask = nil
+    }
+
+    func refreshManagedJobs(token: String) async {
+        do {
+            let jobs = try await managedAPI.jobs(token: token)
+            var newest: [String: ManagedAnalysisJob] = [:]
+            for job in jobs {
+                guard let entryID = job.provisionalEntryID else { continue }
+                if newest[entryID].map({ $0.updatedAt < job.updatedAt }) ?? true {
+                    newest[entryID] = job
+                }
+            }
+            managedJobsByEntryID = newest
+        } catch is CancellationError {
+            return
+        } catch {
+            // Progress is supplemental; keep the cached Library list usable.
+        }
     }
 
     func delete(_ id: String, token: String) async {
         do {
             try await WhatsubAPI.shared.deleteLibraryEntry(id: id, token: token)
             entries.removeAll { $0.id == id }
+            managedJobsByEntryID[id] = nil
             // The cached list still contains the row (and the cached server
             // version predates the delete) — drop it so a cold start can't
             // resurrect the removed video.

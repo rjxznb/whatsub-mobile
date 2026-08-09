@@ -5,6 +5,7 @@ struct LibraryDetailView: View {
     let entryId: String
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryDetailViewModel()
+    @StateObject private var pollingLifecycle = LibraryDetailPollingLifecycle()
     @Environment(\.verticalSizeClass) private var vSize
     @Environment(\.scenePhase) private var scenePhase
     @State private var playerReady = false
@@ -37,6 +38,7 @@ struct LibraryDetailView: View {
     /// Skipping the alert when `!vm.dirty` lets users back out of an
     /// untouched edit session without a noisy "are you sure" prompt.
     @State private var confirmCancelEdit: Bool = false
+    @State private var confirmStopAnalysis: Bool = false
     @State private var confirmDesktopReplacement: Bool = false
     @State private var showDesktopReplacementSheet: Bool = false
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
@@ -101,6 +103,11 @@ struct LibraryDetailView: View {
         .task {
             guard let token = appState.session?.sessionToken else { return }
             await vm.load(id: entryId, token: token)
+            let taskIsCancelled = Task.isCancelled
+            guard !taskIsCancelled else { return }
+            if pollingLifecycle.shouldStart(taskIsCancelled: taskIsCancelled) {
+                vm.startManagedProgress(token: token)
+            }
             // Create the AVPlayer once the OSS videoUrl is known; held in @State
             // so a portrait↔landscape rebuild reuses it (playback continues)
             // rather than spawning a new player from 0.
@@ -131,10 +138,18 @@ struct LibraryDetailView: View {
             avPlayer = player
         }
         .onChange(of: scenePhase) { phase in
-            // One foreground refresh is enough to discover desktop completion;
-            // no detail polling loop is added.
-            guard phase == .active, vm.entry?.needsDesktopDownload == true else { return }
-            Task { await reloadDetail() }
+            pollingLifecycle.sceneChanged(isActive: phase == .active)
+            guard let token = appState.session?.sessionToken else { return }
+            if phase == .active {
+                guard pollingLifecycle.shouldStart(taskIsCancelled: false) else { return }
+                vm.startManagedProgress(token: token)
+                // One foreground refresh is enough to discover desktop completion.
+                if vm.entry?.needsDesktopDownload == true {
+                    Task { await reloadDetail() }
+                }
+            } else {
+                vm.stopManagedProgress()
+            }
         }
         .sheet(isPresented: $showDesktopReplacementSheet) {
             desktopReplacementSheet
@@ -182,11 +197,24 @@ struct LibraryDetailView: View {
             // when picking distractors.
             ClozeSheet(
                 cue: cue,
-                allCues: vm.entry?.analysisJson.subtitles ?? [],
+                allCues: vm.displayedCues,
                 sharedPlayer: avPlayer,
                 audioURL: ossAudioURL,
                 videoURL: ossVideoURL
             )
+        }
+        .confirmationDialog(
+            "停止 AI 解析？",
+            isPresented: $confirmStopAnalysis,
+            titleVisibility: .visible
+        ) {
+            Button("停止解析", role: .destructive) {
+                guard let token = appState.session?.sessionToken else { return }
+                Task { await vm.cancelManagedAnalysis(token: token) }
+            }
+            Button("继续解析", role: .cancel) {}
+        } message: {
+            Text("已完成的翻译会保留，未完成部分将停止解析，之后可以继续。")
         }
         // Pause whenever this view leaves the screen — covers:
         //   • bottom TabView switch (Library → 语料库 / 我的): without this
@@ -201,7 +229,14 @@ struct LibraryDetailView: View {
         // same SwiftUI view re-laid-out, not torn down.
         // Position stays at the paused timestamp, so resuming the video by
         // tapping play continues from where the user left off.
-        .onDisappear { avPlayer?.pause() }
+        .onAppear {
+            pollingLifecycle.appear(sceneIsActive: scenePhase == .active)
+        }
+        .onDisappear {
+            pollingLifecycle.disappear()
+            avPlayer?.pause()
+            vm.stopManagedProgress()
+        }
     }
 
     /// The video surface + loading state + the caption / CC-toggle overlays.
@@ -354,6 +389,7 @@ struct LibraryDetailView: View {
                 // now rendered inline inside the 收藏 tab below, with a
                 // per-row ☁️ upload button. A top-of-page banner +
                 // separate sheet was redundant.)
+                managedAnalysisBanner
                 contentArea(entry)
                     .refreshable { await reloadDetail() }
             }
@@ -388,6 +424,55 @@ struct LibraryDetailView: View {
                 // taps play themselves if they want the video back.
                 RoleplayTabView(entry: entry, onSessionStart: { avPlayer?.pause() })
             }
+        }
+    }
+
+    @ViewBuilder
+    private var managedAnalysisBanner: some View {
+        if let progress = vm.managedProgress, let label = vm.managedBannerLabel {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: progress.isPolling ? "sparkles" : "exclamationmark.circle")
+                    Text(label)
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if progress.canCancel {
+                        Button(vm.managedCancelling ? "正在停止…" : "停止") {
+                            confirmStopAnalysis = true
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.red)
+                        .disabled(vm.managedCancelling || vm.managedResuming)
+                    } else if progress.canResume {
+                        Button(vm.managedResuming ? "正在继续…" : "继续 AI 解析") {
+                            guard let token = appState.session?.sessionToken else { return }
+                            Task { await vm.resumeManagedAnalysis(token: token) }
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderless)
+                        .disabled(vm.managedResuming || vm.managedCancelling)
+                    }
+                }
+
+                if progress.isPolling {
+                    ProgressView(value: progress.fraction)
+                        .tint(.whatsubAccent)
+                }
+
+                if let error = vm.managedProgressError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                } else if vm.managedEditingBlocked {
+                    Text("英文字幕已可播放；翻译和重点会分批自动出现。")
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.whatsubAccent.opacity(0.10))
         }
     }
 
@@ -540,6 +625,9 @@ struct LibraryDetailView: View {
     private func reloadDetail() async {
         guard let token = appState.session?.sessionToken else { return }
         await vm.load(id: entryId, token: token)
+        if pollingLifecycle.shouldStart(taskIsCancelled: Task.isCancelled) {
+            vm.startManagedProgress(token: token)
+        }
     }
 
     // Landscape = fullscreen: the player fills the screen (video letterboxed on
@@ -567,28 +655,31 @@ struct LibraryDetailView: View {
                     // "编辑字幕" entry point — kept above the list (vs. in the
                     // nav toolbar) so it's discoverable on first scroll. Only
                     // visible on the 字幕 tab; vanishes on 收藏 / 角色扮演.
-                    Button {
-                        vm.startEditing()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "pencil")
-                            Text("编辑字幕（修字 / 删 / 调顺序）")
-                                .font(.subheadline.weight(.medium))
+                    if !vm.managedEditingBlocked {
+                        Button {
+                            vm.startEditing()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "pencil")
+                                Text("编辑字幕（修字 / 删 / 调顺序）")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .foregroundStyle(.whatsubAccent)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.whatsubAccent.opacity(0.10))
+                            )
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .foregroundStyle(.whatsubAccent)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.whatsubAccent.opacity(0.10))
-                        )
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 4)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
-                    ForEach(entry.analysisJson.subtitles) { cue in
+                    ForEach(vm.displayedCues) { cue in
                         CueRow(
                             cue: cue,
                             isCurrent: cue.index == vm.currentIndex,
+                            isAwaitingAnalysis: vm.isWaitingForAI(cue),
                             onTapCue: { vm.seekTo(cue) },
                             onTapHighlight: { w, t, n, cue in
                                 // Build the gloss WITH a save context so the

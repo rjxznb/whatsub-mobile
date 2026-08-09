@@ -28,7 +28,82 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         XCTAssertEqual(job(.cancelled).presentation.label, "已取消")
         XCTAssertTrue(job(.queued).presentation.canCancel)
         XCTAssertTrue(job(.pausedQuota).presentation.canResume)
+        XCTAssertTrue(job(.failed).presentation.canResume)
+        XCTAssertTrue(job(.cancelled).presentation.canResume)
         XCTAssertEqual(job(.completed, entryID: "entry-1").presentation.entryID, "entry-1")
+    }
+
+    func testLibraryProgressLabelsStayCompactAndTerminalCompletionDisappears() {
+        XCTAssertEqual(job(.queued).libraryProgressLabel, "等待 AI 解析")
+        XCTAssertEqual(job(.running).libraryProgressLabel, "AI 解析中 · 25/100")
+        XCTAssertEqual(job(.pausedQuota).libraryProgressLabel, "部分解析 · 解析已暂停")
+        XCTAssertNil(job(.completed).libraryProgressLabel)
+    }
+
+    func testLibraryProgressCancellationCapabilityAndLabels() {
+        XCTAssertTrue(ManagedAnalysisProgressState(job: job(.queued)).canCancel)
+        XCTAssertTrue(ManagedAnalysisProgressState(job: job(.running)).canCancel)
+        XCTAssertFalse(ManagedAnalysisProgressState(job: job(.failed)).canCancel)
+        XCTAssertEqual(
+            ManagedAnalysisProgressState(job: job(.cancelled, completed: 25)).label,
+            "部分解析 · 已停止"
+        )
+        XCTAssertEqual(
+            ManagedAnalysisProgressState(job: job(.cancelled, completed: 0)).label,
+            "仅英文 · 已停止"
+        )
+    }
+
+    func testLibraryCardLabelsAcknowledgePartialProgress() {
+        XCTAssertEqual(job(.pausedQuota, completed: 25).libraryProgressLabel, "部分解析 · 解析已暂停")
+        XCTAssertEqual(job(.failed, completed: 25).libraryProgressLabel, "部分解析 · AI 解析失败")
+        XCTAssertEqual(job(.cancelled, completed: 25).libraryProgressLabel, "部分解析 · 已停止")
+        XCTAssertEqual(job(.cancelled, completed: 0).libraryProgressLabel, "仅英文 · 已停止")
+    }
+
+    func testLibraryDetailPollingStartPolicyRequiresVisibleActiveTask() {
+        XCTAssertTrue(LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: false,
+            sceneIsActive: true,
+            viewIsVisible: true
+        ))
+        XCTAssertFalse(LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: true,
+            sceneIsActive: true,
+            viewIsVisible: true
+        ))
+        XCTAssertFalse(LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: false,
+            sceneIsActive: false,
+            viewIsVisible: true
+        ))
+        XCTAssertFalse(LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: false,
+            sceneIsActive: true,
+            viewIsVisible: false
+        ))
+    }
+
+    func testPollingLifecycleReevaluatesCurrentSceneAndVisibility() {
+        let lifecycle = LibraryDetailPollingLifecycle()
+        lifecycle.appear(sceneIsActive: true)
+        XCTAssertTrue(lifecycle.shouldStart(taskIsCancelled: false))
+
+        lifecycle.sceneChanged(isActive: false)
+        XCTAssertFalse(lifecycle.shouldStart(taskIsCancelled: false))
+
+        lifecycle.sceneChanged(isActive: true)
+        XCTAssertTrue(lifecycle.shouldStart(taskIsCancelled: false))
+
+        lifecycle.disappear()
+        XCTAssertFalse(lifecycle.shouldStart(taskIsCancelled: false))
+    }
+
+    func testProvisionalEntryCanOpenBeforeAnalysisCompletes() {
+        XCTAssertEqual(job(.queued, entryID: "entry-1").provisionalEntryID, "entry-1")
+        XCTAssertEqual(job(.running, entryID: "entry-1").provisionalEntryID, "entry-1")
+        XCTAssertNil(job(.running).provisionalEntryID)
+        XCTAssertNil(job(.running, entryID: "  ").provisionalEntryID)
     }
 
     func testOldLiveActivityPayloadDecodesWithoutRecentEntryID() throws {

@@ -89,6 +89,34 @@ final class ManagedAnalysisClientTests: XCTestCase {
         ])
     }
 
+    func testResultsUsesEncodedJobPathAndBatchCursor() async throws {
+        let recorder = Recorder()
+        let json = """
+        {"jobId":"job / one","entryId":"entry-1","status":"running",
+         "completedCues":1,"totalCues":2,"nextBatchCursor":0,"errorCode":null,
+         "batches":[{"batchIndex":0,"subtitles":[{
+           "index":0,"time":0,"endTime":1.5,"text":"Hello","translation":"你好",
+           "isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}
+         }]}]}
+        """
+        let client = ManagedAnalysisClient(baseURL: URL(string: "https://example.test/api")!) {
+            request in
+            await recorder.append(request)
+            return self.response(200, json: json)
+        }
+
+        let page = try await client.results(id: "job / one", afterBatch: -1, token: "session")
+
+        XCTAssertEqual(page.nextBatchCursor, 0)
+        XCTAssertEqual(page.batches.first?.subtitles.first?.translation, "你好")
+        let lastRequest = await recorder.last()
+        let sent = try XCTUnwrap(lastRequest)
+        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(sent.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.percentEncodedPath, "/api/jobs/job%20%2F%20one/results")
+        XCTAssertEqual(components.queryItems, [URLQueryItem(name: "afterBatch", value: "-1")])
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Authorization"), "Bearer session")
+    }
+
     func testMapsTypedCreatePolicyErrors() async {
         let cases: [(Int, String, ManagedAnalysisClientError)] = [
             (400, "duration_unknown", .durationUnknown),

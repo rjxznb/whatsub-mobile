@@ -60,7 +60,13 @@ struct LibraryView: View {
                 LibraryDetailView(entryId: id)
             }
             .task { if !vm.loadedOnce { await reload() } }
-            .onAppear { openPendingEntryIfNeeded() }
+            .onAppear {
+                openPendingEntryIfNeeded()
+                if let token = appState.session?.sessionToken {
+                    vm.startManagedJobPolling(token: token)
+                }
+            }
+            .onDisappear { vm.stopManagedJobPolling() }
             .onChange(of: appState.pendingLibraryEntryID) { _ in
                 openPendingEntryIfNeeded()
             }
@@ -91,6 +97,9 @@ struct LibraryView: View {
         guard let id = appState.pendingLibraryEntryID, !id.isEmpty else { return }
         if navigationPath.last != id { navigationPath = [id] }
         appState.pendingLibraryEntryID = nil
+        // The provisional row changed the Library fingerprint. Refresh the
+        // cached list in parallel so it is already present when the user goes back.
+        Task { await reload() }
     }
 
     private func reload() async {
@@ -180,7 +189,9 @@ struct LibraryView: View {
         } else {
             List(vm.entries) { entry in
                 NavigationLink(value: entry.id) {
-                    LibraryRow(entry: entry, refreshNonce: vm.thumbRefreshNonce,
+                    LibraryRow(entry: entry,
+                               managedJob: vm.managedJob(for: entry.id),
+                               refreshNonce: vm.thumbRefreshNonce,
                                onNeedsVPNTap: { showVPNHelp = true })
                 }
                 .listRowBackground(Color.whatsubBgElev)
@@ -234,6 +245,7 @@ struct LibraryView: View {
 
 private struct LibraryRow: View {
     let entry: LibraryListItem
+    let managedJob: ManagedAnalysisJob?
     /// Bumped by `LibraryViewModel.thumbRefreshNonce` on every reload —
     /// threaded into `RemoteImage` so pull-to-refresh also forces the
     /// thumbnail to re-fetch (bypassing URLCache + iOS DNS staleness
@@ -256,6 +268,18 @@ private struct LibraryRow: View {
                 HStack(spacing: 8) {
                     Text(durationText).font(.caption).foregroundStyle(.whatsubInkMuted)
                     vpnBadge
+                }
+                if let job = managedJob, let label = job.libraryProgressLabel {
+                    HStack(spacing: 6) {
+                        if job.status == .queued || job.status == .running {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+                        Text(label)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(job.status == .failed || job.status == .cancelled
+                                             ? Color.whatsubHighlight : Color.whatsubAccent)
+                    }
                 }
             }
             Spacer()

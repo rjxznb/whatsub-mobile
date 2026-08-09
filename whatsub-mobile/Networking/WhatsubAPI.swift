@@ -124,6 +124,18 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         try await ManagedAnalysisClient(session: session).jobs(token: token)
     }
 
+    func results(
+        id: String,
+        afterBatch: Int,
+        token: String
+    ) async throws -> ManagedAnalysisResultsPage {
+        try await ManagedAnalysisClient(session: session).results(
+            id: id,
+            afterBatch: afterBatch,
+            token: token
+        )
+    }
+
     func cancel(id: String, token: String) async throws -> ManagedAnalysisJob {
         try await ManagedAnalysisClient(session: session).cancel(id: id, token: token)
     }
