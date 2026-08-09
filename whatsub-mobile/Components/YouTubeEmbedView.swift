@@ -53,10 +53,9 @@ struct YouTubeEmbedView: UIViewRepresentable {
             webView.evaluateJavaScript(js)
         }
 
-        if let clipCommand, clipCommand != context.coordinator.lastClipCommand,
-           let js = Self.clipJavaScript(for: clipCommand) {
-            context.coordinator.lastClipCommand = clipCommand
-            webView.evaluateJavaScript(js)
+        if let clipCommand,
+           let commandToDeliver = context.coordinator.clipDeliveryState.queue(clipCommand) {
+            context.coordinator.deliverClipCommand(commandToDeliver)
         }
     }
 
@@ -67,6 +66,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
         weak var webView: WKWebView?
         var lastSeek: SeekRequest?
         var lastClipCommand: YouTubeClipPlaybackCommand?
+        var clipDeliveryState = YouTubeClipCommandDeliveryState()
         private var didSignalReady = false
         init(
             onReady: @escaping () -> Void,
@@ -84,7 +84,13 @@ struct YouTubeEmbedView: UIViewRepresentable {
                   let type = dict["type"] as? String else { return }
             switch type {
             case "ready":
-                if !didSignalReady { didSignalReady = true; onReady() }
+                if !didSignalReady {
+                    didSignalReady = true
+                    if let commandToDeliver = clipDeliveryState.markReady() {
+                        deliverClipCommand(commandToDeliver)
+                    }
+                    onReady()
+                }
             case "time":
                 if let sec = dict["sec"] as? Double { onTime(sec) }
             case "clipEnded":
@@ -92,6 +98,12 @@ struct YouTubeEmbedView: UIViewRepresentable {
             default:
                 break
             }
+        }
+
+        func deliverClipCommand(_ command: YouTubeClipPlaybackCommand) {
+            lastClipCommand = command
+            guard let js = YouTubeEmbedView.clipJavaScript(for: command) else { return }
+            webView?.evaluateJavaScript(js)
         }
     }
 

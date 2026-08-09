@@ -27,6 +27,34 @@ struct YouTubeClipPlaybackCommand: Equatable {
     }
 }
 
+struct YouTubeClipCommandDeliveryState {
+    private var isReady = false
+    private var pendingCommand: YouTubeClipPlaybackCommand?
+    private var lastDeliveredCommand: YouTubeClipPlaybackCommand?
+
+    mutating func queue(_ command: YouTubeClipPlaybackCommand) -> YouTubeClipPlaybackCommand? {
+        guard command != lastDeliveredCommand else { return nil }
+        guard isReady else {
+            pendingCommand = command
+            return nil
+        }
+        return deliver(command)
+    }
+
+    mutating func markReady() -> YouTubeClipPlaybackCommand? {
+        isReady = true
+        guard let pendingCommand else { return nil }
+        self.pendingCommand = nil
+        return deliver(pendingCommand)
+    }
+
+    private mutating func deliver(_ command: YouTubeClipPlaybackCommand) -> YouTubeClipPlaybackCommand? {
+        guard command != lastDeliveredCommand else { return nil }
+        lastDeliveredCommand = command
+        return command
+    }
+}
+
 @MainActor
 final class YouTubeClipPlaybackController: ObservableObject {
     @Published private(set) var command: YouTubeClipPlaybackCommand?

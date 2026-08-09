@@ -48,6 +48,15 @@ final class YouTubeClipPlaybackControllerTests: XCTestCase {
         XCTAssertNil(delivery.markReady())
     }
 
+    func testClipQueuedAfterReadyDeliversImmediatelyOncePerNonce() {
+        var delivery = YouTubeClipCommandDeliveryState()
+        let command = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)
+
+        XCTAssertNil(delivery.markReady())
+        XCTAssertEqual(delivery.queue(command), command)
+        XCTAssertNil(delivery.queue(command))
+    }
+
     func testClipJavaScriptContainsBoundaryAndPauseLogic() {
         let play = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)
         let script = YouTubeEmbedView.clipJavaScript(for: play) ?? ""
