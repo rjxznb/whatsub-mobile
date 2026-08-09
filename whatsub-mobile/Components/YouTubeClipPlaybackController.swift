@@ -117,7 +117,6 @@ final class YouTubeClipPlaybackController: ObservableObject {
 
     func clipEnded(nonce: UUID) {
         guard activeClip?.nonce == nonce else { return }
-        activeClip = nil
-        isPlaying = false
+        stop()
     }
 }

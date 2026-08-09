@@ -18,13 +18,15 @@ struct CueTextPresentation: Equatable {
     }
 
     static func make(text: String, highlights: [String]) -> CueTextPresentation {
+        let normalizedText = normalizeWhitespace(text)
+        let normalizedHighlights = highlights.map(normalizeWhitespace).filter { !$0.isEmpty }
         var runs: [CueDisplayRun] = []
         var nextHighlightID = 0
         var hasText = false
         var pendingSpace = false
         var pendingSpaceHighlightID: Int?
 
-        for sourceRun in splitForHighlights(text, highlights: highlights) {
+        for sourceRun in splitForHighlights(normalizedText, highlights: normalizedHighlights) {
             let highlightID: Int?
             let phrase: String?
             if sourceRun.highlight {
@@ -64,5 +66,24 @@ struct CueTextPresentation: Equatable {
         }
 
         return CueTextPresentation(runs: runs)
+    }
+
+    private static func normalizeWhitespace(_ text: String) -> String {
+        var normalized = ""
+        var pendingSpace = false
+
+        for character in text {
+            if character.isWhitespace {
+                pendingSpace = !normalized.isEmpty
+            } else {
+                if pendingSpace {
+                    normalized.append(" ")
+                    pendingSpace = false
+                }
+                normalized.append(character)
+            }
+        }
+
+        return normalized
     }
 }
