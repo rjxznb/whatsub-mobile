@@ -105,7 +105,9 @@ a nonce-bearing command value consumed by the existing `YouTubeEmbedView`:
 The IFrame's existing 250 ms timer will also compare `getCurrentTime()` with the
 active clip end. It pauses and clears the boundary when the end is reached. This
 is more reliable than a wall-clock timeout because buffering does not consume cue
-playback time.
+playback time. It then posts a `clipEnded` bridge message so the shared controller
+clears its published playing state and the Shadow button returns to `听原文` at
+the same moment as actual playback.
 
 `ShadowSheet` receives the shared controller plus an explicit
 `youtubePlaybackAvailable` flag. Its original-audio availability becomes:
