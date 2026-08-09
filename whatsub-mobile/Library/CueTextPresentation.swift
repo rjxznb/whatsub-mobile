@@ -20,7 +20,9 @@ struct CueTextPresentation: Equatable {
     static func make(text: String, highlights: [String]) -> CueTextPresentation {
         var runs: [CueDisplayRun] = []
         var nextHighlightID = 0
-        var wasWhitespace = false
+        var hasText = false
+        var pendingSpace = false
+        var pendingSpaceHighlightID: Int?
 
         for sourceRun in splitForHighlights(text, highlights: highlights) {
             let highlightID: Int?
@@ -37,13 +39,22 @@ struct CueTextPresentation: Equatable {
             var displayText = ""
             for character in sourceRun.text {
                 if character.isWhitespace {
-                    if !wasWhitespace {
-                        displayText.append(" ")
+                    if hasText && !pendingSpace {
+                        pendingSpace = true
+                        pendingSpaceHighlightID = highlightID
                     }
-                    wasWhitespace = true
                 } else {
+                    if pendingSpace {
+                        if pendingSpaceHighlightID == highlightID {
+                            displayText.append(" ")
+                        } else {
+                            runs.append(CueDisplayRun(text: " ", highlightID: nil, phrase: nil))
+                        }
+                        pendingSpace = false
+                        pendingSpaceHighlightID = nil
+                    }
                     displayText.append(character)
-                    wasWhitespace = false
+                    hasText = true
                 }
             }
 

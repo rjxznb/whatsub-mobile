@@ -14,6 +14,10 @@ enum ShadowPlaybackSource: Equatable {
         return .unavailable
     }
 
+    static func resolve(audioURL: URL?, videoURL: URL?, hasYouTube: Bool) -> Self {
+        resolve(hasOSS: audioURL != nil || videoURL != nil, hasYouTube: hasYouTube)
+    }
+
     var availableRates: [Double] {
         switch self {
         case .oss: return [0.5, 0.65, 0.8, 1.0]
@@ -34,6 +38,7 @@ enum ShadowPlaybackSource: Equatable {
 /// for the locale — en-US is supported on-device since iOS 13). No backend.
 struct ShadowSheet: View {
     let cue: Cue
+    let audioURL: URL?
     let videoURL: URL?
     let youtubePlaybackAvailable: Bool
 
@@ -79,6 +84,7 @@ struct ShadowSheet: View {
         youtubePlaybackAvailable: Bool
     ) {
         self.cue = cue
+        self.audioURL = audioURL
         self.videoURL = videoURL
         self.youtubePlaybackAvailable = youtubePlaybackAvailable
         self.youtubePlaybackController = youtubePlaybackController
@@ -158,7 +164,8 @@ struct ShadowSheet: View {
 
     private var playbackSource: ShadowPlaybackSource {
         ShadowPlaybackSource.resolve(
-            hasOSS: videoURL != nil,
+            audioURL: audioURL,
+            videoURL: videoURL,
             hasYouTube: youtubePlaybackAvailable
         )
     }

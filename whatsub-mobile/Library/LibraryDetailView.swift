@@ -266,6 +266,7 @@ struct LibraryDetailView: View {
                     onReady: { playerReady = true },
                     onTime: { sec in vm.onPlayerTime(sec) },
                     clipCommand: youtubeClipPlayback.command,
+                    replaySnapshot: youtubeClipPlayback.consumerRebuildReplaySnapshot,
                     onClipEnded: { nonce in youtubeClipPlayback.clipEnded(nonce: nonce) }
                 )
             } else if entry.videoUrl == nil {

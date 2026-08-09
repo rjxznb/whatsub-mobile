@@ -25,6 +25,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
     var startSeconds: Double? = nil
     /// Optional bounded-playback command shared by cue-driven consumers.
     var clipCommand: YouTubeClipPlaybackCommand? = nil
+    /// Full active clip state to replay when this representable gets a new coordinator.
+    var replaySnapshot: YouTubeClipPlaybackCommand? = nil
     /// Called when the IFrame player reaches the active clip boundary.
     var onClipEnded: (UUID) -> Void = { _ in }
 
@@ -53,7 +55,17 @@ struct YouTubeEmbedView: UIViewRepresentable {
             webView.evaluateJavaScript(js)
         }
 
-        if let clipCommand {
+        if context.coordinator.isFirstClipUpdate {
+            context.coordinator.isFirstClipUpdate = false
+            context.coordinator.lastObservedClipCommandNonce = clipCommand?.nonce
+            if let replaySnapshot {
+                for commandToDeliver in context.coordinator.clipDeliveryState.queue(replaySnapshot) {
+                    context.coordinator.deliverClipCommand(commandToDeliver)
+                }
+            }
+        } else if let clipCommand,
+                  clipCommand.nonce != context.coordinator.lastObservedClipCommandNonce {
+            context.coordinator.lastObservedClipCommandNonce = clipCommand.nonce
             for commandToDeliver in context.coordinator.clipDeliveryState.queue(clipCommand) {
                 context.coordinator.deliverClipCommand(commandToDeliver)
             }
@@ -68,6 +80,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
         var lastSeek: SeekRequest?
         var lastClipCommand: YouTubeClipPlaybackCommand?
         var clipDeliveryState = YouTubeClipCommandDeliveryState()
+        var isFirstClipUpdate = true
+        var lastObservedClipCommandNonce: UUID?
         private var didSignalReady = false
         init(
             onReady: @escaping () -> Void,

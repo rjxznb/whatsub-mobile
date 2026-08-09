@@ -25,6 +25,8 @@ final class CueTextPresentationTests: XCTestCase {
         let value = CueTextPresentation.make(text: "Use  catch up \n now!", highlights: ["catch up"])
         XCTAssertEqual(value.plainText, "Use catch up now!")
         XCTAssertEqual(value.highlightPhrase(id: 0), "catch up")
+        XCTAssertFalse(value.runs.contains { $0.highlightID != nil && $0.text.hasPrefix(" ") })
+        XCTAssertTrue(value.runs.contains { $0.highlightID == nil && $0.text == " " })
     }
 
     func testTrimsLeadingAndTrailingWhitespaceFromPlainTextAndRuns() {
