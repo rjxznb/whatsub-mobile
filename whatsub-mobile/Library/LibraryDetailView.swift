@@ -6,6 +6,7 @@ struct LibraryDetailView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var vm = LibraryDetailViewModel()
     @StateObject private var pollingLifecycle = LibraryDetailPollingLifecycle()
+    @StateObject private var youtubeClipPlayback = YouTubeClipPlaybackController()
     @Environment(\.verticalSizeClass) private var vSize
     @Environment(\.scenePhase) private var scenePhase
     @State private var playerReady = false
@@ -63,6 +64,11 @@ struct LibraryDetailView: View {
     private var ossAudioURL: URL? {
         guard let s = vm.entry?.audioUrl else { return nil }
         return URL(string: s)
+    }
+
+    private var youtubePlaybackAvailable: Bool {
+        guard let entry = vm.entry else { return false }
+        return entry.videoUrl == nil && VideoSource.isLikelyYouTubeId(entry.youtubeId)
     }
 
     var body: some View {
@@ -186,7 +192,9 @@ struct LibraryDetailView: View {
                 cue: cue,
                 sharedPlayer: avPlayer,
                 audioURL: ossAudioURL,
-                videoURL: ossVideoURL
+                videoURL: ossVideoURL,
+                youtubePlaybackController: youtubeClipPlayback,
+                youtubePlaybackAvailable: youtubePlaybackAvailable
             )
         }
         .sheet(item: $clozeCue) { cue in
@@ -221,6 +229,7 @@ struct LibraryDetailView: View {
         .onDisappear {
             pollingLifecycle.disappear()
             avPlayer?.pause()
+            youtubeClipPlayback.stop()
             vm.stopManagedProgress()
         }
     }
@@ -255,7 +264,9 @@ struct LibraryDetailView: View {
                     videoId: entry.youtubeId,
                     seek: vm.seek,
                     onReady: { playerReady = true },
-                    onTime: { sec in vm.onPlayerTime(sec) }
+                    onTime: { sec in vm.onPlayerTime(sec) },
+                    clipCommand: youtubeClipPlayback.command,
+                    onClipEnded: { youtubeClipPlayback.clipEnded() }
                 )
             } else if entry.videoUrl == nil {
                 desktopOnlyPlaceholder
@@ -689,7 +700,10 @@ struct LibraryDetailView: View {
                                 )
                             },
                             onCollect: { collectCue = cue },
-                            onShadow: { shadowCue = cue },
+                            onShadow: {
+                                youtubeClipPlayback.stop()
+                                shadowCue = cue
+                            },
                             onCloze: { clozeCue = cue }
                         )
                         .id(cue.index)
