@@ -57,6 +57,7 @@ final class CueTextPresentationTests: XCTestCase {
 
         XCTAssertEqual(value.plainText, "Hello world")
         XCTAssertEqual(value.highlightPhrase(id: 0), "world")
+        XCTAssertEqual(value.highlightLookupKey(id: 0), " \n world \t")
         XCTAssertEqual(highlightedRuns.map(\.text), ["world"])
         XCTAssertFalse(highlightedRuns.contains { $0.text.hasPrefix(" ") || $0.text.hasSuffix(" ") })
         XCTAssertTrue(value.runs.contains { $0.highlightID == nil && $0.text == " " })
