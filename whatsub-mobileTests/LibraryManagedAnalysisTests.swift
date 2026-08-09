@@ -14,6 +14,8 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         private var cancelResponse: ManagedAnalysisJob?
         private var jobQueue: [ManagedAnalysisJob]
         private(set) var cancelledJobIDs: [String] = []
+        private var jobListCallCount = 0
+        private let failingJobListCalls: Set<Int>
         var listedJobs: [ManagedAnalysisJob]
 
         init(
@@ -24,7 +26,8 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             failingResultCalls: Set<Int> = [],
             cancelResponse: ManagedAnalysisJob? = nil,
             cancelError: ManagedAnalysisClientError? = nil,
-            jobResponses: [ManagedAnalysisJob] = []
+            jobResponses: [ManagedAnalysisJob] = [],
+            failingJobListCalls: Set<Int> = []
         ) {
             detailQueue = details
             listedJobs = jobs
@@ -34,10 +37,12 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             self.cancelResponse = cancelResponse
             self.cancelError = cancelError
             jobQueue = jobResponses
+            self.failingJobListCalls = failingJobListCalls
         }
 
         func cursors() -> [Int] { requestedCursors }
         func cancelCalls() -> [String] { cancelledJobIDs }
+        func jobListCalls() -> Int { jobListCallCount }
 
         func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
             detailCallCount += 1
@@ -76,7 +81,13 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             guard let first = listedJobs.first else { throw ManagedAnalysisClientError.notFound }
             return first
         }
-        func jobs(token: String) async throws -> [ManagedAnalysisJob] { listedJobs }
+        func jobs(token: String) async throws -> [ManagedAnalysisJob] {
+            jobListCallCount += 1
+            if failingJobListCalls.contains(jobListCallCount) {
+                throw ManagedAnalysisClientError.network("temporary")
+            }
+            return listedJobs
+        }
 
         func results(
             id: String,
@@ -385,5 +396,50 @@ final class LibraryManagedAnalysisTests: XCTestCase {
 
         XCTAssertEqual(viewModel.managedProgressError, "登录已过期，请到「我的」重新登录")
         XCTAssertFalse(viewModel.managedCancelling)
+    }
+
+    @MainActor
+    func testCompletedCancelKeepsFinalSyncPendingWhenReloadAndDiscoveryFail() async throws {
+        let final = entry(translations: ["最终第一句", "最终第二句"])
+        let api = API(
+            details: [entry(translations: ["", ""]), final],
+            jobs: [job()],
+            results: [runningPage()],
+            failingDetailCalls: [2],
+            cancelResponse: job(status: .completed, completedCues: 2),
+            failingJobListCalls: [2]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        await viewModel.cancelManagedAnalysis(token: "token")
+
+        for _ in 0..<100 {
+            if await api.jobListCalls() >= 2 { break }
+            await Task.yield()
+        }
+        let jobListCalls = await api.jobListCalls()
+        XCTAssertGreaterThanOrEqual(jobListCalls, 2)
+        XCTAssertTrue(viewModel.managedFinalSyncPending)
+        XCTAssertEqual(viewModel.managedProgressError, "解析已完成，最终结果稍后自动同步")
+    }
+
+    @MainActor
+    func testDiscoveryFailureRemainsRetryable() async throws {
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [runningPage()],
+            failingJobListCalls: [1]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+
+        await viewModel.discoverManagedAnalysis(token: "token")
+        XCTAssertTrue(viewModel.managedDiscoveryPending)
+
+        await viewModel.discoverManagedAnalysis(token: "token")
+        XCTAssertFalse(viewModel.managedDiscoveryPending)
+        XCTAssertEqual(viewModel.managedProgress?.status, .running)
     }
 }

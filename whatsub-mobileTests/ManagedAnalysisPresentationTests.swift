@@ -64,15 +64,23 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
     func testLibraryDetailPollingStartPolicyRequiresVisibleActiveTask() {
         XCTAssertTrue(LibraryDetailPollingStartPolicy.shouldStart(
             taskIsCancelled: false,
-            sceneIsActive: true
+            sceneIsActive: true,
+            viewIsVisible: true
         ))
         XCTAssertFalse(LibraryDetailPollingStartPolicy.shouldStart(
             taskIsCancelled: true,
-            sceneIsActive: true
+            sceneIsActive: true,
+            viewIsVisible: true
         ))
         XCTAssertFalse(LibraryDetailPollingStartPolicy.shouldStart(
             taskIsCancelled: false,
-            sceneIsActive: false
+            sceneIsActive: false,
+            viewIsVisible: true
+        ))
+        XCTAssertFalse(LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: false,
+            sceneIsActive: true,
+            viewIsVisible: false
         ))
     }
 
