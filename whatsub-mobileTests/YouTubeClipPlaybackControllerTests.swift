@@ -43,18 +43,38 @@ final class YouTubeClipPlaybackControllerTests: XCTestCase {
         var delivery = YouTubeClipCommandDeliveryState()
         let command = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)
 
-        XCTAssertNil(delivery.queue(command))
-        XCTAssertEqual(delivery.markReady(), command)
-        XCTAssertNil(delivery.markReady())
+        XCTAssertEqual(delivery.queue(command), [])
+        XCTAssertEqual(delivery.markReady(), [command])
+        XCTAssertEqual(delivery.markReady(), [])
     }
 
     func testClipQueuedAfterReadyDeliversImmediatelyOncePerNonce() {
         var delivery = YouTubeClipCommandDeliveryState()
         let command = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)
 
-        XCTAssertNil(delivery.markReady())
-        XCTAssertEqual(delivery.queue(command), command)
-        XCTAssertNil(delivery.queue(command))
+        XCTAssertEqual(delivery.markReady(), [])
+        XCTAssertEqual(delivery.queue(command), [command])
+        XCTAssertEqual(delivery.queue(command), [])
+    }
+
+    func testPreReadyPlayThenRateDeliversBothCommandsInOrder() {
+        var delivery = YouTubeClipCommandDeliveryState()
+        let play = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)
+        let rate = YouTubeClipPlaybackCommand.setRate(0.5)
+
+        XCTAssertEqual(delivery.queue(play), [])
+        XCTAssertEqual(delivery.queue(rate), [])
+        XCTAssertEqual(delivery.markReady(), [play, rate])
+    }
+
+    func testPreReadyPlayThenStopDeliversOnlyStop() {
+        var delivery = YouTubeClipCommandDeliveryState()
+        let play = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)
+        let stop = YouTubeClipPlaybackCommand.stop()
+
+        XCTAssertEqual(delivery.queue(play), [])
+        XCTAssertEqual(delivery.queue(stop), [])
+        XCTAssertEqual(delivery.markReady(), [stop])
     }
 
     func testClipJavaScriptContainsBoundaryAndPauseLogic() {
