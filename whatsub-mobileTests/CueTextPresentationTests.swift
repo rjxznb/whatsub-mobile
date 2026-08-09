@@ -50,4 +50,15 @@ final class CueTextPresentationTests: XCTestCase {
         XCTAssertEqual(value.runs.map(\.text).joined(), value.plainText)
         XCTAssertEqual(value.highlightPhrase(id: 0), "Hello")
     }
+
+    func testNormalizesWhitespaceAroundHighlightedInputWithoutHighlightingBoundarySpace() {
+        let value = CueTextPresentation.make(text: "Hello world", highlights: [" \n world \t"])
+        let highlightedRuns = value.runs.filter { $0.highlightID != nil }
+
+        XCTAssertEqual(value.plainText, "Hello world")
+        XCTAssertEqual(value.highlightPhrase(id: 0), "world")
+        XCTAssertEqual(highlightedRuns.map(\.text), ["world"])
+        XCTAssertFalse(highlightedRuns.contains { $0.text.hasPrefix(" ") || $0.text.hasSuffix(" ") })
+        XCTAssertTrue(value.runs.contains { $0.highlightID == nil && $0.text == " " })
+    }
 }

@@ -56,6 +56,37 @@ final class YouTubeClipPlaybackControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testActiveClipCompletionPublishesFreshStopCommand() throws {
+        let controller = YouTubeClipPlaybackController()
+        XCTAssertTrue(controller.play(start: 1, end: 2, rate: 1))
+        let activePlay = try XCTUnwrap(controller.command)
+
+        controller.clipEnded(nonce: activePlay.nonce)
+
+        XCTAssertFalse(controller.isPlaying)
+        XCTAssertNil(controller.consumerRebuildReplaySnapshot)
+        let completionStop = try XCTUnwrap(controller.command)
+        XCTAssertEqual(completionStop.kind, .stop)
+        XCTAssertNotEqual(completionStop.nonce, activePlay.nonce)
+    }
+
+    @MainActor
+    func testCompletionStopCancelsPendingReplayBeforeConsumerBecomesReady() throws {
+        let controller = YouTubeClipPlaybackController()
+        XCTAssertTrue(controller.play(start: 1, end: 2, rate: 1))
+        let replay = try XCTUnwrap(controller.consumerRebuildReplaySnapshot)
+        var delivery = YouTubeClipCommandDeliveryState()
+        XCTAssertEqual(delivery.queue(replay), [])
+
+        controller.clipEnded(nonce: replay.nonce)
+        let completionStop = try XCTUnwrap(controller.command)
+        XCTAssertEqual(completionStop.kind, .stop)
+        XCTAssertEqual(delivery.queue(completionStop), [])
+
+        XCTAssertEqual(delivery.markReady(), [completionStop])
+    }
+
+    @MainActor
     func testConsumerRebuildReplaySnapshotIsNilWhenNoClipIsActive() throws {
         let controller = YouTubeClipPlaybackController()
         XCTAssertNil(controller.consumerRebuildReplaySnapshot)
