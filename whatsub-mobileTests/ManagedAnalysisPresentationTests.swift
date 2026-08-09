@@ -36,7 +36,7 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
     func testLibraryProgressLabelsStayCompactAndTerminalCompletionDisappears() {
         XCTAssertEqual(job(.queued).libraryProgressLabel, "等待 AI 解析")
         XCTAssertEqual(job(.running).libraryProgressLabel, "AI 解析中 · 25/100")
-        XCTAssertEqual(job(.pausedQuota).libraryProgressLabel, "仅英文 · 解析已暂停")
+        XCTAssertEqual(job(.pausedQuota).libraryProgressLabel, "部分解析 · 解析已暂停")
         XCTAssertNil(job(.completed).libraryProgressLabel)
     }
 

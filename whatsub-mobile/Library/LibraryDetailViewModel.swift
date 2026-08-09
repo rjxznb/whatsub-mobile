@@ -31,6 +31,12 @@ enum DesktopReplacementToolbarPresentation {
     }
 }
 
+enum LibraryDetailPollingStartPolicy {
+    static func shouldStart(taskIsCancelled: Bool, sceneIsActive: Bool) -> Bool {
+        !taskIsCancelled && sceneIsActive
+    }
+}
+
 @MainActor
 final class LibraryDetailViewModel: ObservableObject {
     @Published var entry: LibraryEntryDetail?
@@ -46,6 +52,7 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published var managedResuming = false
     @Published var managedCancelling = false
     @Published private(set) var managedFinalSyncPending = false
+    private(set) var managedHydrationPending = false
 
     // Popup for a tapped highlight.
     @Published var popupWord: String?
@@ -127,6 +134,7 @@ final class LibraryDetailViewModel: ObservableObject {
             managedBatchCursor = -1
             managedProgress = nil
             managedFinalSyncPending = false
+            managedHydrationPending = false
             managedProgressError = nil
             loading = false
             replacementStatusTask = Task { [weak self] in
@@ -172,20 +180,28 @@ final class LibraryDetailViewModel: ObservableObject {
                 .filter({ $0.resultEntryId == entry.id })
                 .max(by: { $0.updatedAt < $1.updatedAt }) else {
                 managedProgress = nil
+                managedHydrationPending = false
                 return
             }
+            let isNewJob = managedProgress?.jobID != job.jobId
             managedProgress = ManagedAnalysisProgressState(job: job)
-            progressiveOverlay = ProgressiveAnalysisOverlay(baseline: entry.analysisJson.subtitles)
-            displayedCues = entry.analysisJson.subtitles
+            if isNewJob {
+                progressiveOverlay = ProgressiveAnalysisOverlay(baseline: entry.analysisJson.subtitles)
+                displayedCues = entry.analysisJson.subtitles
+            }
             managedBatchCursor = -1
             managedPollFailures = 0
             if job.status == .completed {
+                managedHydrationPending = false
                 managedFinalSyncPending = !(await reloadFinalEntry(id: entry.id, token: token))
             } else {
+                managedHydrationPending = true
                 do {
                     try await pollManagedAnalysisOnce(token: token)
                 } catch is CancellationError {
                     return
+                } catch ManagedAnalysisClientError.unauthorized {
+                    handleManagedAnalysisUnauthorized()
                 } catch {
                     managedPollFailures = 1
                     managedProgressError = "进度暂时无法更新，正在重试"
@@ -193,6 +209,8 @@ final class LibraryDetailViewModel: ObservableObject {
             }
         } catch is CancellationError {
             return
+        } catch ManagedAnalysisClientError.unauthorized {
+            handleManagedAnalysisUnauthorized()
         } catch {
             // Supplemental progress must never hide the playable English entry.
         }
@@ -207,6 +225,7 @@ final class LibraryDetailViewModel: ObservableObject {
         )
         try Task.checkCancellation()
         guard page.entryId == entry.id else { return }
+        managedHydrationPending = false
         progressiveOverlay?.merge(page.batches)
         if let progressiveOverlay {
             displayedCues = progressiveOverlay.displayedCues(from: entry.analysisJson.subtitles)
@@ -237,6 +256,8 @@ final class LibraryDetailViewModel: ObservableObject {
             managedFinalSyncPending = false
             managedPollFailures = 0
             startManagedProgress(token: token)
+        } catch ManagedAnalysisClientError.unauthorized {
+            handleManagedAnalysisUnauthorized()
         } catch {
             managedProgressError = "暂时无法继续解析，请稍后重试"
         }
@@ -250,23 +271,18 @@ final class LibraryDetailViewModel: ObservableObject {
 
         do {
             let job = try await managedAPI.cancel(id: progress.jobID, token: token)
-            managedProgress = ManagedAnalysisProgressState(job: job)
-            stopManagedProgress()
+            await reconcileManagedCancellation(job, token: token)
         } catch ManagedAnalysisClientError.invalidState {
             do {
                 let latest = try await managedAPI.job(id: progress.jobID, token: token)
-                managedProgress = ManagedAnalysisProgressState(job: latest)
-                if latest.status == .completed, let entry {
-                    stopManagedProgress()
-                    managedFinalSyncPending = !(await reloadFinalEntry(id: entry.id, token: token))
-                } else if latest.status == .queued || latest.status == .running {
-                    startManagedProgress(token: token)
-                } else {
-                    stopManagedProgress()
-                }
+                await reconcileManagedCancellation(latest, token: token)
+            } catch ManagedAnalysisClientError.unauthorized {
+                handleManagedAnalysisUnauthorized()
             } catch {
                 managedProgressError = "暂时无法停止解析，请稍后重试"
             }
+        } catch ManagedAnalysisClientError.unauthorized {
+            handleManagedAnalysisUnauthorized()
         } catch {
             managedProgressError = "暂时无法停止解析，请稍后重试"
         }
@@ -275,11 +291,21 @@ final class LibraryDetailViewModel: ObservableObject {
     private func runManagedProgress(token: String) async {
         await discoverManagedAnalysis(token: token)
         while !Task.isCancelled, let progress = managedProgress,
-              progress.isPolling || managedFinalSyncPending {
-            let delay = managedFinalSyncPending ? 4 : (ManagedAnalysisPollPolicy.delay(
-                status: progress.status,
-                failureCount: managedPollFailures
-            ) ?? 5)
+              progress.isPolling || managedFinalSyncPending || managedHydrationPending {
+            let delay: TimeInterval
+            if managedFinalSyncPending {
+                delay = 4
+            } else if managedHydrationPending {
+                delay = ManagedAnalysisPollPolicy.delay(
+                    status: progress.status,
+                    failureCount: max(managedPollFailures, 1)
+                ) ?? 2
+            } else {
+                delay = ManagedAnalysisPollPolicy.delay(
+                    status: progress.status,
+                    failureCount: managedPollFailures
+                ) ?? 5
+            }
             let jitter = Double.random(in: 0...0.35)
             do {
                 try await Task.sleep(nanoseconds: UInt64((delay + jitter) * 1_000_000_000))
@@ -287,11 +313,46 @@ final class LibraryDetailViewModel: ObservableObject {
                 try await pollManagedAnalysisOnce(token: token)
             } catch is CancellationError {
                 return
+            } catch ManagedAnalysisClientError.unauthorized {
+                handleManagedAnalysisUnauthorized()
+                return
             } catch {
                 managedPollFailures += 1
                 managedProgressError = "进度暂时无法更新，正在重试"
             }
         }
+    }
+
+    private func reconcileManagedCancellation(
+        _ job: ManagedAnalysisJob,
+        token: String
+    ) async {
+        managedProgress = ManagedAnalysisProgressState(job: job)
+        switch job.status {
+        case .completed:
+            stopManagedProgress()
+            managedHydrationPending = false
+            guard let entry else { return }
+            let synced = await reloadFinalEntry(id: entry.id, token: token)
+            if !synced { startManagedProgress(token: token) }
+        case .queued, .running:
+            startManagedProgress(token: token)
+        case .pausedQuota, .failed, .cancelled:
+            // The cancel response has counters but no subtitle batches. Hydrate
+            // once more so a batch committed just before cancellation is kept.
+            let resolvedCueCount = progressiveOverlay?.resolvedIndexes.count ?? 0
+            managedHydrationPending = job.completedCues > resolvedCueCount
+            if managedHydrationPending {
+                startManagedProgress(token: token)
+            } else {
+                stopManagedProgress()
+            }
+        }
+    }
+
+    private func handleManagedAnalysisUnauthorized() {
+        managedProgressError = "登录已过期，请到「我的」重新登录"
+        stopManagedProgress()
     }
 
     private func reloadFinalEntry(id: String, token: String) async -> Bool {
@@ -301,6 +362,7 @@ final class LibraryDetailViewModel: ObservableObject {
             entry = finalEntry
             displayedCues = finalEntry.analysisJson.subtitles
             progressiveOverlay = nil
+            managedHydrationPending = false
             managedFinalSyncPending = false
             managedProgressError = nil
             return true

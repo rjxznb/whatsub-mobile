@@ -124,12 +124,13 @@ extension ManagedAnalysisJob {
     }
 
     var libraryProgressLabel: String? {
+        let progressPrefix = completedCues > 0 ? "部分解析" : "仅英文"
         switch status {
         case .queued: return "等待 AI 解析"
         case .running: return "AI 解析中 · \(completedCues)/\(totalCues)"
-        case .pausedQuota: return "仅英文 · 解析已暂停"
-        case .failed: return "仅英文 · AI 解析失败"
-        case .cancelled: return "仅英文 · 已取消"
+        case .pausedQuota: return "\(progressPrefix) · 解析已暂停"
+        case .failed: return "\(progressPrefix) · AI 解析失败"
+        case .cancelled: return "\(progressPrefix) · 已停止"
         case .completed: return nil
         }
     }

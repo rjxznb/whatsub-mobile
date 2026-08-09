@@ -102,7 +102,14 @@ struct LibraryDetailView: View {
         .task {
             guard let token = appState.session?.sessionToken else { return }
             await vm.load(id: entryId, token: token)
-            vm.startManagedProgress(token: token)
+            let taskIsCancelled = Task.isCancelled
+            guard !taskIsCancelled else { return }
+            if LibraryDetailPollingStartPolicy.shouldStart(
+                taskIsCancelled: taskIsCancelled,
+                sceneIsActive: scenePhase == .active
+            ) {
+                vm.startManagedProgress(token: token)
+            }
             // Create the AVPlayer once the OSS videoUrl is known; held in @State
             // so a portrait↔landscape rebuild reuses it (playback continues)
             // rather than spawning a new player from 0.
