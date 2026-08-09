@@ -53,9 +53,10 @@ struct YouTubeEmbedView: UIViewRepresentable {
             webView.evaluateJavaScript(js)
         }
 
-        if let clipCommand,
-           let commandToDeliver = context.coordinator.clipDeliveryState.queue(clipCommand) {
-            context.coordinator.deliverClipCommand(commandToDeliver)
+        if let clipCommand {
+            for commandToDeliver in context.coordinator.clipDeliveryState.queue(clipCommand) {
+                context.coordinator.deliverClipCommand(commandToDeliver)
+            }
         }
     }
 
@@ -86,7 +87,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
             case "ready":
                 if !didSignalReady {
                     didSignalReady = true
-                    if let commandToDeliver = clipDeliveryState.markReady() {
+                    for commandToDeliver in clipDeliveryState.markReady() {
                         deliverClipCommand(commandToDeliver)
                     }
                     onReady()

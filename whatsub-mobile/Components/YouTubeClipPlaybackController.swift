@@ -29,29 +29,41 @@ struct YouTubeClipPlaybackCommand: Equatable {
 
 struct YouTubeClipCommandDeliveryState {
     private var isReady = false
-    private var pendingCommand: YouTubeClipPlaybackCommand?
-    private var lastDeliveredCommand: YouTubeClipPlaybackCommand?
+    private var pendingCommands: [YouTubeClipPlaybackCommand] = []
+    private var deliveredNonces: Set<UUID> = []
 
-    mutating func queue(_ command: YouTubeClipPlaybackCommand) -> YouTubeClipPlaybackCommand? {
-        guard command != lastDeliveredCommand else { return nil }
-        guard isReady else {
-            pendingCommand = command
-            return nil
+    mutating func queue(_ command: YouTubeClipPlaybackCommand) -> [YouTubeClipPlaybackCommand] {
+        guard !deliveredNonces.contains(command.nonce) else { return [] }
+        if isReady {
+            return deliver([command])
         }
-        return deliver(command)
+
+        if command.kind == .stop {
+            pendingCommands.removeAll()
+            pendingCommands.append(command)
+            return []
+        }
+
+        guard !pendingCommands.contains(where: { $0.nonce == command.nonce }) else { return [] }
+        pendingCommands.append(command)
+        return []
     }
 
-    mutating func markReady() -> YouTubeClipPlaybackCommand? {
+    mutating func markReady() -> [YouTubeClipPlaybackCommand] {
         isReady = true
-        guard let pendingCommand else { return nil }
-        self.pendingCommand = nil
-        return deliver(pendingCommand)
+        let commands = pendingCommands
+        pendingCommands.removeAll()
+        return deliver(commands)
     }
 
-    private mutating func deliver(_ command: YouTubeClipPlaybackCommand) -> YouTubeClipPlaybackCommand? {
-        guard command != lastDeliveredCommand else { return nil }
-        lastDeliveredCommand = command
-        return command
+    private mutating func deliver(
+        _ commands: [YouTubeClipPlaybackCommand]
+    ) -> [YouTubeClipPlaybackCommand] {
+        var undelivered: [YouTubeClipPlaybackCommand] = []
+        for command in commands where deliveredNonces.insert(command.nonce).inserted {
+            undelivered.append(command)
+        }
+        return undelivered
     }
 }
 
