@@ -90,6 +90,7 @@ struct ManagedAnalysisProgressState: Equatable {
     }
 
     var isPolling: Bool { status == .queued || status == .running }
+    var canCancel: Bool { status == .queued || status == .running }
     var canResume: Bool { status == .pausedQuota || status == .failed || status == .cancelled }
     var blocksEditing: Bool { status != .completed }
 
@@ -99,7 +100,8 @@ struct ManagedAnalysisProgressState: Equatable {
         case .running: return "AI 解析中 · \(completedCues)/\(totalCues)"
         case .pausedQuota: return "仅英文 · 解析已暂停"
         case .failed: return "仅英文 · AI 解析失败"
-        case .cancelled: return "仅英文 · 已取消"
+        case .cancelled:
+            return completedCues > 0 ? "部分解析 · 已停止" : "仅英文 · 已停止"
         case .completed: return nil
         }
     }

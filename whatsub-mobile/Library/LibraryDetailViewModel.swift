@@ -44,6 +44,7 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published private(set) var managedProgress: ManagedAnalysisProgressState?
     @Published var managedProgressError: String?
     @Published var managedResuming = false
+    @Published var managedCancelling = false
     @Published private(set) var managedFinalSyncPending = false
 
     // Popup for a tapped highlight.
@@ -238,6 +239,36 @@ final class LibraryDetailViewModel: ObservableObject {
             startManagedProgress(token: token)
         } catch {
             managedProgressError = "暂时无法继续解析，请稍后重试"
+        }
+    }
+
+    func cancelManagedAnalysis(token: String) async {
+        guard let progress = managedProgress, progress.canCancel, !managedCancelling else { return }
+        managedCancelling = true
+        managedProgressError = nil
+        defer { managedCancelling = false }
+
+        do {
+            let job = try await managedAPI.cancel(id: progress.jobID, token: token)
+            managedProgress = ManagedAnalysisProgressState(job: job)
+            stopManagedProgress()
+        } catch ManagedAnalysisClientError.invalidState {
+            do {
+                let latest = try await managedAPI.job(id: progress.jobID, token: token)
+                managedProgress = ManagedAnalysisProgressState(job: latest)
+                if latest.status == .completed, let entry {
+                    stopManagedProgress()
+                    managedFinalSyncPending = !(await reloadFinalEntry(id: entry.id, token: token))
+                } else if latest.status == .queued || latest.status == .running {
+                    startManagedProgress(token: token)
+                } else {
+                    stopManagedProgress()
+                }
+            } catch {
+                managedProgressError = "暂时无法停止解析，请稍后重试"
+            }
+        } catch {
+            managedProgressError = "暂时无法停止解析，请稍后重试"
         }
     }
 
