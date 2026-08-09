@@ -26,4 +26,26 @@ final class CueTextPresentationTests: XCTestCase {
         XCTAssertEqual(value.plainText, "Use catch up now!")
         XCTAssertEqual(value.highlightPhrase(id: 0), "catch up")
     }
+
+    func testTrimsLeadingAndTrailingWhitespaceFromPlainTextAndRuns() {
+        let value = CueTextPresentation.make(text: " \nHello \t", highlights: [])
+
+        XCTAssertEqual(value.plainText, "Hello")
+        XCTAssertEqual(value.runs.map(\.text).joined(), value.plainText)
+    }
+
+    func testWhitespaceOnlyCueProducesNoPlainTextOrRuns() {
+        let value = CueTextPresentation.make(text: " \n\t ", highlights: [])
+
+        XCTAssertEqual(value.plainText, "")
+        XCTAssertTrue(value.runs.isEmpty)
+    }
+
+    func testLeadingWhitespaceBeforeHighlightedPhraseDoesNotCreateLeadingRun() {
+        let value = CueTextPresentation.make(text: " \nHello there", highlights: ["Hello"])
+
+        XCTAssertEqual(value.plainText, "Hello there")
+        XCTAssertEqual(value.runs.map(\.text).joined(), value.plainText)
+        XCTAssertEqual(value.highlightPhrase(id: 0), "Hello")
+    }
 }

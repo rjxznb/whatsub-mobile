@@ -55,6 +55,55 @@ final class YouTubeClipPlaybackControllerTests: XCTestCase {
         XCTAssertFalse(controller.isPlaying)
     }
 
+    @MainActor
+    func testConsumerRebuildReplaySnapshotIsNilWhenNoClipIsActive() throws {
+        let controller = YouTubeClipPlaybackController()
+        XCTAssertNil(controller.consumerRebuildReplaySnapshot)
+
+        XCTAssertTrue(controller.play(start: 1, end: 2, rate: 1))
+        let activeNonce = try XCTUnwrap(controller.command?.nonce)
+        controller.clipEnded(nonce: activeNonce)
+        XCTAssertNil(controller.consumerRebuildReplaySnapshot)
+
+        XCTAssertTrue(controller.play(start: 3, end: 4, rate: 1))
+        controller.stop()
+        XCTAssertNil(controller.consumerRebuildReplaySnapshot)
+    }
+
+    @MainActor
+    func testConsumerRebuildReplaySnapshotRestoresTheActivePlayCommand() throws {
+        let controller = YouTubeClipPlaybackController()
+        XCTAssertTrue(controller.play(start: 3, end: 7, rate: 0.75))
+        let livePlay = try XCTUnwrap(controller.command)
+        let replay = try XCTUnwrap(controller.consumerRebuildReplaySnapshot)
+
+        XCTAssertEqual(replay.kind, .play)
+        XCTAssertEqual(replay.start, 3)
+        XCTAssertEqual(replay.end, 7)
+        XCTAssertEqual(replay.rate, 0.75)
+        XCTAssertEqual(replay.nonce, livePlay.nonce)
+    }
+
+    @MainActor
+    func testConsumerRebuildReplaySnapshotKeepsActivePlayAfterLiveRateEvent() throws {
+        let controller = YouTubeClipPlaybackController()
+        XCTAssertTrue(controller.play(start: 3, end: 7, rate: 0.75))
+        let activeNonce = try XCTUnwrap(controller.command?.nonce)
+
+        controller.setRate(1.5)
+
+        let liveRate = try XCTUnwrap(controller.command)
+        XCTAssertEqual(liveRate.kind, .setRate)
+        XCTAssertEqual(liveRate.rate, 1.5)
+
+        let replay = try XCTUnwrap(controller.consumerRebuildReplaySnapshot)
+        XCTAssertEqual(replay.kind, .play)
+        XCTAssertEqual(replay.start, 3)
+        XCTAssertEqual(replay.end, 7)
+        XCTAssertEqual(replay.rate, 1.5)
+        XCTAssertEqual(replay.nonce, activeNonce)
+    }
+
     func testClipQueuedBeforeReadyIsDeliveredExactlyOnceAfterReady() {
         var delivery = YouTubeClipCommandDeliveryState()
         let command = YouTubeClipPlaybackCommand.play(start: 1, end: 2, rate: 0.75)

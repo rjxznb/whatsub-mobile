@@ -2,25 +2,28 @@ import XCTest
 @testable import whatsub_mobile
 
 final class ShadowPlaybackAvailabilityTests: XCTestCase {
-    func testResolvePrefersOSSWhenBothSourcesAreAvailable() {
-        XCTAssertEqual(
-            ShadowPlaybackSource.resolve(hasOSS: true, hasYouTube: true),
-            .oss
-        )
-    }
+    func testResolveMapsOSSURLsBeforeYouTubeAvailability() {
+        let ossAudioURL = URL(string: "https://cdn.example.com/library/audio.m4a")!
+        let ossVideoURL = URL(string: "https://cdn.example.com/library/video.mp4")!
 
-    func testResolveFallsBackToYouTubeWhenOSSIsUnavailable() {
-        XCTAssertEqual(
-            ShadowPlaybackSource.resolve(hasOSS: false, hasYouTube: true),
-            .youtube
-        )
-    }
+        let cases: [(name: String, audioURL: URL?, videoURL: URL?, hasYouTube: Bool, expected: ShadowPlaybackSource)] = [
+            ("audio-only OSS wins over YouTube", ossAudioURL, nil, true, .oss),
+            ("video-only OSS is available", nil, ossVideoURL, false, .oss),
+            ("YouTube is used when no OSS URL exists", nil, nil, true, .youtube),
+            ("no source is unavailable", nil, nil, false, .unavailable),
+        ]
 
-    func testResolveIsUnavailableWhenNeitherSourceIsAvailable() {
-        XCTAssertEqual(
-            ShadowPlaybackSource.resolve(hasOSS: false, hasYouTube: false),
-            .unavailable
-        )
+        for testCase in cases {
+            XCTAssertEqual(
+                ShadowPlaybackSource.resolve(
+                    audioURL: testCase.audioURL,
+                    videoURL: testCase.videoURL,
+                    hasYouTube: testCase.hasYouTube
+                ),
+                testCase.expected,
+                testCase.name
+            )
+        }
     }
 
     func testYouTubeUsesSupportedOriginalAudioRates() {
