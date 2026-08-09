@@ -23,8 +23,14 @@ struct YouTubeEmbedView: UIViewRepresentable {
     /// If set, the player starts at this timestamp (seconds). Default nil = no start offset.
     /// Pass this for corpus phrase instances that have a `timestampSec`; omit for Library callers.
     var startSeconds: Double? = nil
+    /// Optional bounded-playback command shared by cue-driven consumers.
+    var clipCommand: YouTubeClipPlaybackCommand? = nil
+    /// Called when the IFrame player reaches the active clip boundary.
+    var onClipEnded: () -> Void = {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onReady: onReady, onTime: onTime) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onReady: onReady, onTime: onTime, onClipEnded: onClipEnded)
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -41,21 +47,35 @@ struct YouTubeEmbedView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        guard let seek, seek != context.coordinator.lastSeek else { return }
-        context.coordinator.lastSeek = seek
-        let js = "if (window.player && window.player.seekTo) { window.player.seekTo(\(seek.seconds), true); window.player.playVideo(); }"
-        webView.evaluateJavaScript(js)
+        if let seek, seek != context.coordinator.lastSeek {
+            context.coordinator.lastSeek = seek
+            let js = "if (window.player && window.player.seekTo) { window.player.seekTo(\(seek.seconds), true); window.player.playVideo(); }"
+            webView.evaluateJavaScript(js)
+        }
+
+        if let clipCommand, clipCommand != context.coordinator.lastClipCommand,
+           let js = Self.clipJavaScript(for: clipCommand) {
+            context.coordinator.lastClipCommand = clipCommand
+            webView.evaluateJavaScript(js)
+        }
     }
 
     final class Coordinator: NSObject, WKScriptMessageHandler {
         let onReady: () -> Void
         let onTime: (Double) -> Void
+        let onClipEnded: () -> Void
         weak var webView: WKWebView?
         var lastSeek: SeekRequest?
+        var lastClipCommand: YouTubeClipPlaybackCommand?
         private var didSignalReady = false
-        init(onReady: @escaping () -> Void, onTime: @escaping (Double) -> Void) {
+        init(
+            onReady: @escaping () -> Void,
+            onTime: @escaping (Double) -> Void,
+            onClipEnded: @escaping () -> Void
+        ) {
             self.onReady = onReady
             self.onTime = onTime
+            self.onClipEnded = onClipEnded
         }
 
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -67,9 +87,67 @@ struct YouTubeEmbedView: UIViewRepresentable {
                 if !didSignalReady { didSignalReady = true; onReady() }
             case "time":
                 if let sec = dict["sec"] as? Double { onTime(sec) }
+            case "clipEnded":
+                onClipEnded()
             default:
                 break
             }
+        }
+    }
+
+    static func clipJavaScript(for command: YouTubeClipPlaybackCommand) -> String? {
+        switch command.kind {
+        case .play:
+            guard let start = command.start,
+                  let end = command.end,
+                  let rate = command.rate,
+                  start.isFinite,
+                  end.isFinite,
+                  rate.isFinite else { return nil }
+            let safeStart = max(0, start)
+            guard end > safeStart else { return nil }
+            let safeRate = min(max(rate, 0.25), 2.0)
+            return """
+            (function() {
+              if (!window.player) { return; }
+              var requestedRate = \(safeRate);
+              var rates = window.player.getAvailablePlaybackRates ? window.player.getAvailablePlaybackRates() : [];
+              var closestRate = requestedRate;
+              if (rates.length) {
+                closestRate = rates.reduce(function(closest, candidate) {
+                  return Math.abs(candidate - requestedRate) < Math.abs(closest - requestedRate) ? candidate : closest;
+                }, rates[0]);
+              }
+              if (window.player.setPlaybackRate) { window.player.setPlaybackRate(closestRate); }
+              window.whatsubClipEnd = \(end);
+              if (window.player.seekTo) { window.player.seekTo(\(safeStart), true); }
+              if (window.player.playVideo) { window.player.playVideo(); }
+            })();
+            """
+        case .setRate:
+            guard let rate = command.rate, rate.isFinite else { return nil }
+            let safeRate = min(max(rate, 0.25), 2.0)
+            return """
+            (function() {
+              if (!window.player || !window.player.setPlaybackRate) { return; }
+              var requestedRate = \(safeRate);
+              var rates = window.player.getAvailablePlaybackRates ? window.player.getAvailablePlaybackRates() : [];
+              var closestRate = requestedRate;
+              if (rates.length) {
+                closestRate = rates.reduce(function(closest, candidate) {
+                  return Math.abs(candidate - requestedRate) < Math.abs(closest - requestedRate) ? candidate : closest;
+                }, rates[0]);
+              }
+              window.player.setPlaybackRate(closestRate);
+            })();
+            """
+        case .stop:
+            return """
+            (function() {
+              window.whatsubClipEnd = null;
+              if (window.player && window.player.pauseVideo) { window.player.pauseVideo(); }
+            })();
+            """
         }
     }
 
@@ -91,6 +169,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
         <script src="https://www.youtube.com/iframe_api"></script>
         <script>
           window.player = null;
+          window.whatsubClipEnd = null;
           function onYouTubeIframeAPIReady() {
             window.player = new YT.Player('player', {
               videoId: '\(videoId)',
@@ -102,8 +181,14 @@ struct YouTubeEmbedView: UIViewRepresentable {
                   setInterval(function() {
                     if (window.player && window.player.getCurrentTime) {
                       try {
+                        var currentTime = window.player.getCurrentTime();
+                        if (window.whatsubClipEnd !== null && currentTime >= window.whatsubClipEnd) {
+                          if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                          window.whatsubClipEnd = null;
+                          window.webkit.messageHandlers.iosBridge.postMessage({ type: 'clipEnded' });
+                        }
                         window.webkit.messageHandlers.iosBridge.postMessage(
-                          { type: 'time', sec: window.player.getCurrentTime() });
+                          { type: 'time', sec: currentTime });
                       } catch (e) {}
                     }
                   }, 250);
