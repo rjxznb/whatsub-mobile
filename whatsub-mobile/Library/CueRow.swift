@@ -58,7 +58,10 @@ struct CueRow: View {
                           let phrase = cueText.highlightPhrase(id: id) else {
                         return .discarded
                     }
-                    onTapHighlight(phrase, cue.highlightTranslations[phrase], cue.keyNotes[phrase], cue)
+                    let lookupKey = cueText.highlightLookupKey(id: id)
+                    let translation = lookupKey.flatMap { cue.highlightTranslations[$0] } ?? cue.highlightTranslations[phrase]
+                    let note = lookupKey.flatMap { cue.keyNotes[$0] } ?? cue.keyNotes[phrase]
+                    onTapHighlight(phrase, translation, note, cue)
                     return .handled
                 })
             if isAwaitingAnalysis {

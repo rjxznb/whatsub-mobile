@@ -4,6 +4,7 @@ struct CueDisplayRun: Equatable {
     let text: String
     let highlightID: Int?
     let phrase: String?
+    let lookupKey: String?
 }
 
 struct CueTextPresentation: Equatable {
@@ -17,9 +18,20 @@ struct CueTextPresentation: Equatable {
         runs.first { $0.highlightID == id }?.phrase
     }
 
+    func highlightLookupKey(id: Int) -> String? {
+        runs.first { $0.highlightID == id }?.lookupKey
+    }
+
     static func make(text: String, highlights: [String]) -> CueTextPresentation {
         let normalizedText = normalizeWhitespace(text)
-        let normalizedHighlights = highlights.map(normalizeWhitespace).filter { !$0.isEmpty }
+        var rawLookupKeys: [String: String] = [:]
+        var normalizedHighlights: [String] = []
+        for rawHighlight in highlights {
+            let normalizedHighlight = normalizeWhitespace(rawHighlight)
+            guard !normalizedHighlight.isEmpty, rawLookupKeys[normalizedHighlight] == nil else { continue }
+            rawLookupKeys[normalizedHighlight] = rawHighlight
+            normalizedHighlights.append(normalizedHighlight)
+        }
         var runs: [CueDisplayRun] = []
         var nextHighlightID = 0
         var hasText = false
@@ -29,13 +41,16 @@ struct CueTextPresentation: Equatable {
         for sourceRun in splitForHighlights(normalizedText, highlights: normalizedHighlights) {
             let highlightID: Int?
             let phrase: String?
+            let lookupKey: String?
             if sourceRun.highlight {
                 highlightID = nextHighlightID
                 phrase = sourceRun.text
+                lookupKey = rawLookupKeys[sourceRun.text]
                 nextHighlightID += 1
             } else {
                 highlightID = nil
                 phrase = nil
+                lookupKey = nil
             }
 
             var displayText = ""
@@ -50,7 +65,7 @@ struct CueTextPresentation: Equatable {
                         if pendingSpaceHighlightID == highlightID {
                             displayText.append(" ")
                         } else {
-                            runs.append(CueDisplayRun(text: " ", highlightID: nil, phrase: nil))
+                            runs.append(CueDisplayRun(text: " ", highlightID: nil, phrase: nil, lookupKey: nil))
                         }
                         pendingSpace = false
                         pendingSpaceHighlightID = nil
@@ -61,7 +76,7 @@ struct CueTextPresentation: Equatable {
             }
 
             if !displayText.isEmpty {
-                runs.append(CueDisplayRun(text: displayText, highlightID: highlightID, phrase: phrase))
+                runs.append(CueDisplayRun(text: displayText, highlightID: highlightID, phrase: phrase, lookupKey: lookupKey))
             }
         }
 
