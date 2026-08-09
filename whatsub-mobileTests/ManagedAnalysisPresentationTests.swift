@@ -54,6 +54,28 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         )
     }
 
+    func testLibraryCardLabelsAcknowledgePartialProgress() {
+        XCTAssertEqual(job(.pausedQuota, completed: 25).libraryProgressLabel, "部分解析 · 解析已暂停")
+        XCTAssertEqual(job(.failed, completed: 25).libraryProgressLabel, "部分解析 · AI 解析失败")
+        XCTAssertEqual(job(.cancelled, completed: 25).libraryProgressLabel, "部分解析 · 已停止")
+        XCTAssertEqual(job(.cancelled, completed: 0).libraryProgressLabel, "仅英文 · 已停止")
+    }
+
+    func testLibraryDetailPollingStartPolicyRequiresVisibleActiveTask() {
+        XCTAssertTrue(LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: false,
+            sceneIsActive: true
+        ))
+        XCTAssertFalse(LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: true,
+            sceneIsActive: true
+        ))
+        XCTAssertFalse(LibraryDetailPollingStartPolicy.shouldStart(
+            taskIsCancelled: false,
+            sceneIsActive: false
+        ))
+    }
+
     func testProvisionalEntryCanOpenBeforeAnalysisCompletes() {
         XCTAssertEqual(job(.queued, entryID: "entry-1").provisionalEntryID, "entry-1")
         XCTAssertEqual(job(.running, entryID: "entry-1").provisionalEntryID, "entry-1")

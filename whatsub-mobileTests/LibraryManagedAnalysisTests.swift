@@ -7,6 +7,8 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         private var resultQueue: [ManagedAnalysisResultsPage]
         private var detailCallCount = 0
         private let failingDetailCalls: Set<Int>
+        private var resultCallCount = 0
+        private let failingResultCalls: Set<Int>
         private(set) var requestedCursors: [Int] = []
         private var cancelError: ManagedAnalysisClientError?
         private var cancelResponse: ManagedAnalysisJob?
@@ -19,6 +21,7 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             jobs: [ManagedAnalysisJob],
             results: [ManagedAnalysisResultsPage],
             failingDetailCalls: Set<Int> = [],
+            failingResultCalls: Set<Int> = [],
             cancelResponse: ManagedAnalysisJob? = nil,
             cancelError: ManagedAnalysisClientError? = nil,
             jobResponses: [ManagedAnalysisJob] = []
@@ -27,6 +30,7 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             listedJobs = jobs
             resultQueue = results
             self.failingDetailCalls = failingDetailCalls
+            self.failingResultCalls = failingResultCalls
             self.cancelResponse = cancelResponse
             self.cancelError = cancelError
             jobQueue = jobResponses
@@ -80,6 +84,10 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             token: String
         ) async throws -> ManagedAnalysisResultsPage {
             requestedCursors.append(afterBatch)
+            resultCallCount += 1
+            if failingResultCalls.contains(resultCallCount) {
+                throw ManagedAnalysisClientError.network("temporary")
+            }
             guard !resultQueue.isEmpty else { throw ManagedAnalysisClientError.notFound }
             return resultQueue.removeFirst()
         }
@@ -310,5 +318,72 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         XCTAssertEqual(viewModel.managedProgress?.status, .completed)
         XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["最终第一句", "最终第二句"])
         XCTAssertNil(viewModel.managedProgressError)
+    }
+
+    @MainActor
+    func testCompletedCancelResponseReloadsFinalEntry() async throws {
+        let final = entry(translations: ["最终第一句", "最终第二句"])
+        let api = API(
+            details: [entry(translations: ["", ""]), final],
+            jobs: [job()],
+            results: [runningPage()],
+            cancelResponse: job(status: .completed, completedCues: 2)
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        await viewModel.cancelManagedAnalysis(token: "token")
+
+        XCTAssertEqual(viewModel.managedProgress?.status, .completed)
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["最终第一句", "最终第二句"])
+        XCTAssertFalse(viewModel.managedFinalSyncPending)
+    }
+
+    @MainActor
+    func testTerminalHydrationFailureKeepsExistingTranslationAndCanRecover() async throws {
+        let partialPage = ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .cancelled,
+            completedCues: 1, totalCues: 2, nextBatchCursor: 0,
+            batches: [ManagedAnalysisCompletedBatch(
+                batchIndex: 0,
+                subtitles: [cue(0, translation: "第一句")]
+            )],
+            errorCode: nil
+        )
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job(status: .cancelled, completedCues: 1)],
+            results: [partialPage, partialPage],
+            failingResultCalls: [2]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["第一句", ""])
+
+        await viewModel.discoverManagedAnalysis(token: "token")
+
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["第一句", ""])
+        XCTAssertTrue(viewModel.managedHydrationPending)
+        try await viewModel.pollManagedAnalysisOnce(token: "token")
+        XCTAssertFalse(viewModel.managedHydrationPending)
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["第一句", ""])
+    }
+
+    @MainActor
+    func testCancelUnauthorizedShowsLoginExpiredMessage() async throws {
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [runningPage()],
+            cancelError: .unauthorized
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        await viewModel.cancelManagedAnalysis(token: "token")
+
+        XCTAssertEqual(viewModel.managedProgressError, "登录已过期，请到「我的」重新登录")
+        XCTAssertFalse(viewModel.managedCancelling)
     }
 }
