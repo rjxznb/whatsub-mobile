@@ -37,6 +37,7 @@ struct LibraryDetailView: View {
     /// Skipping the alert when `!vm.dirty` lets users back out of an
     /// untouched edit session without a noisy "are you sure" prompt.
     @State private var confirmCancelEdit: Bool = false
+    @State private var confirmStopAnalysis: Bool = false
     @State private var confirmDesktopReplacement: Bool = false
     @State private var showDesktopReplacementSheet: Bool = false
     enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
@@ -194,6 +195,19 @@ struct LibraryDetailView: View {
                 audioURL: ossAudioURL,
                 videoURL: ossVideoURL
             )
+        }
+        .confirmationDialog(
+            "停止 AI 解析？",
+            isPresented: $confirmStopAnalysis,
+            titleVisibility: .visible
+        ) {
+            Button("停止解析", role: .destructive) {
+                guard let token = appState.session?.sessionToken else { return }
+                Task { await vm.cancelManagedAnalysis(token: token) }
+            }
+            Button("继续解析", role: .cancel) {}
+        } message: {
+            Text("已完成的翻译会保留，未完成部分将停止解析，之后可以继续。")
         }
         // Pause whenever this view leaves the screen — covers:
         //   • bottom TabView switch (Library → 语料库 / 我的): without this
@@ -411,14 +425,22 @@ struct LibraryDetailView: View {
                     Text(label)
                         .font(.subheadline.weight(.semibold))
                     Spacer()
-                    if progress.canResume {
+                    if progress.canCancel {
+                        Button(vm.managedCancelling ? "正在停止…" : "停止") {
+                            confirmStopAnalysis = true
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.red)
+                        .disabled(vm.managedCancelling || vm.managedResuming)
+                    } else if progress.canResume {
                         Button(vm.managedResuming ? "正在继续…" : "继续 AI 解析") {
                             guard let token = appState.session?.sessionToken else { return }
                             Task { await vm.resumeManagedAnalysis(token: token) }
                         }
                         .font(.caption.weight(.semibold))
                         .buttonStyle(.borderless)
-                        .disabled(vm.managedResuming)
+                        .disabled(vm.managedResuming || vm.managedCancelling)
                     }
                 }
 
