@@ -42,7 +42,11 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
     }
 
     func me(token: String) async throws -> MeResponse {
-        let data = try await get(Endpoints.auth("me"), bearer: token)
+        let data = try await get(
+            Endpoints.auth("me"),
+            bearer: token,
+            headers: ["X-Whatsub-Client": "ios"]
+        )
         return try decode(MeResponse.self, from: data)
     }
 
@@ -545,10 +549,17 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
 
     // ----- HTTP primitives -----
 
-    private func get(_ url: URL, bearer: String?) async throws -> Data {
+    private func get(
+        _ url: URL,
+        bearer: String?,
+        headers: [String: String] = [:]
+    ) async throws -> Data {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         applyBearer(&req, bearer)
+        for (name, value) in headers {
+            req.setValue(value, forHTTPHeaderField: name)
+        }
         return try await send(req)
     }
 
