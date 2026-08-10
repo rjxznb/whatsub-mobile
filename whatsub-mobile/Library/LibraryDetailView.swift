@@ -430,7 +430,11 @@ struct LibraryDetailView: View {
         if let progress = vm.managedProgress, let label = vm.managedBannerLabel {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Image(systemName: progress.isPolling ? "sparkles" : "exclamationmark.circle")
+                    if progress.isPolling {
+                        ManagedAnalysisSparkleIcon(isActive: true)
+                    } else {
+                        Image(systemName: "exclamationmark.circle")
+                    }
                     Text(label)
                         .font(.subheadline.weight(.semibold))
                     Spacer()
