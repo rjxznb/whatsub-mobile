@@ -61,6 +61,29 @@ final class PendingPhraseStore: ObservableObject {
         save()
     }
 
+    /// True when this Library entry already has the same staged phrase.
+    /// Comparison ignores case and whitespace differences while keeping
+    /// phrases from different videos independent because their context and
+    /// playback timestamp are different.
+    func contains(entryId: String, phraseRaw: String) -> Bool {
+        let key = Self.normalizedPhrase(phraseRaw)
+        return items.contains {
+            $0.entryId == entryId && Self.normalizedPhrase($0.phraseRaw) == key
+        }
+    }
+
+    /// Adds a phrase only when the same normalized phrase is not already
+    /// staged for this Library entry. Returns true when insertion occurred.
+    @discardableResult
+    func addIfAbsent(_ phrase: PendingPhrase) -> Bool {
+        guard !contains(entryId: phrase.entryId, phraseRaw: phrase.phraseRaw) else {
+            return false
+        }
+        items.append(phrase)
+        save()
+        return true
+    }
+
     /// Remove all listed ids. No-op for ids not in the store.
     func remove(ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
@@ -126,6 +149,13 @@ final class PendingPhraseStore: ObservableObject {
         guard let data = try? Data(contentsOf: url),
               let shape = try? JSONDecoder().decode(FileShape.self, from: data) else { return [] }
         return shape.items
+    }
+
+    private static func normalizedPhrase(_ phrase: String) -> String {
+        phrase
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .lowercased()
     }
 }
 

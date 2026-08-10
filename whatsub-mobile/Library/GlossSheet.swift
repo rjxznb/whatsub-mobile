@@ -23,26 +23,44 @@ struct WordGloss: Identifiable {
 }
 
 /// A quick, read-only 释义 box for ONE tapped highlight phrase — shown when the
-/// user single-taps a highlighted word (which intercepts the seek). Medium-detent
-/// sheet; responsive.
+/// user single-taps a highlighted word (which intercepts the seek). Compact
+/// bottom sheet with pronunciation and one-tap pending collection.
 struct GlossSheet: View {
     let gloss: WordGloss
     @Environment(\.dismiss) private var dismiss
-    /// Local state for the 加入暂存 button — `false` until the user taps it,
-    /// after which the button label flips to ✓ 已加入 and disables. The
-    /// sheet stays open so the user can keep reading the gloss or tap 完成
-    /// when they're ready. The dedicated state (vs. checking the store)
-    /// keeps things snappy and works even before PendingPhraseStore has a
-    /// chance to write through.
-    @State private var saved = false
+    @StateObject private var model: HighlightWordCardModel
+
+    init(gloss: WordGloss) {
+        self.gloss = gloss
+        _model = StateObject(wrappedValue: HighlightWordCardModel(gloss: gloss))
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(gloss.word)
-                        .font(.title2.weight(.bold))
-                        .foregroundStyle(.whatsubHighlight)
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(gloss.word)
+                                .font(.title2.weight(.bold))
+                                .foregroundStyle(.whatsubHighlight)
+                            if let ipa = model.ipa {
+                                Text(ipa)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.whatsubInkMuted)
+                            }
+                        }
+                        Spacer(minLength: 8)
+                        Button {
+                            model.replay()
+                        } label: {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.title3)
+                                .frame(width: 44, height: 44)
+                                .background(Color.whatsubAccent.opacity(0.14), in: Circle())
+                        }
+                        .accessibilityLabel("再次播放发音")
+                    }
                     if let t = gloss.translation, !t.isEmpty {
                         Text(t).font(.title3).foregroundStyle(.whatsubInk)
                     }
@@ -67,10 +85,17 @@ struct GlossSheet: View {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             }
         }
-        .presentationDetents([.medium])
+        .task(id: gloss.id) {
+            model.appear()
+        }
+        .onDisappear {
+            model.disappear()
+        }
+        .presentationDetents([.height(340)])
+        .presentationDragIndicator(.visible)
     }
 
-    /// 加入待同步暂存 — one-tap collect. Builds a PendingPhrase from
+    /// 收藏 — one-tap pending collection. Builds a PendingPhrase from
     /// the gloss + saveContext and writes it to the shared local store.
     /// Same path CollectSheet.save() uses (just without the per-cue word
     /// selection + AI note step) — the phrase IS the highlighted word,
@@ -82,36 +107,20 @@ struct GlossSheet: View {
             performSave()
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: saved ? "checkmark.circle.fill" : "tray.and.arrow.down")
-                Text(saved ? "已加入暂存" : "加入待同步暂存")
+                Image(systemName: model.saved ? "checkmark.circle.fill" : "bookmark.fill")
+                Text(model.saved ? "已收藏" : "收藏")
                     .font(.subheadline.weight(.semibold))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
         }
         .buttonStyle(.borderedProminent)
-        .tint(saved ? Color.green : Color.whatsubAccent)
-        .disabled(saved)
+        .tint(model.saved ? Color.green : Color.whatsubAccent)
+        .disabled(model.saved)
     }
 
     private func performSave() {
-        guard let ctx = gloss.saveContext, !saved else { return }
-        let trimmedNote = (gloss.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedMeaning = (gloss.translation ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let pending = PendingPhrase(
-            id: UUID(),
-            entryId: ctx.entryId,
-            videoTitle: ctx.videoTitle,
-            youtubeId: ctx.youtubeId,
-            phraseRaw: gloss.word,
-            contextSentence: ctx.contextSentence,
-            meaningZh: trimmedMeaning.isEmpty ? nil : trimmedMeaning,
-            usageNote: trimmedNote.isEmpty ? nil : trimmedNote,
-            timestampSec: ctx.timestampSec,
-            collectedAt: Date().timeIntervalSince1970
-        )
-        PendingPhraseStore.shared.add(pending)
+        guard model.collect() else { return }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        saved = true
     }
 }
