@@ -112,7 +112,7 @@ struct EntryCollectionsList: View {
             Text("这个视频还没收藏")
                 .font(.headline)
                 .foregroundStyle(.whatsubInk)
-            Text("在字幕里长按一句话 → 选词加入收藏\n这里就会出现")
+            Text("点击黄色重点词可直接收藏\n也可以长按一句话自由选词")
                 .font(.footnote)
                 .foregroundStyle(.whatsubInkMuted)
                 .multilineTextAlignment(.center)

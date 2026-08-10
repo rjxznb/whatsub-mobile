@@ -679,8 +679,12 @@ struct LibraryDetailView: View {
                             isAwaitingAnalysis: vm.isWaitingForAI(cue),
                             onTapCue: { vm.seekTo(cue) },
                             onTapHighlight: { w, t, n, cue in
+                                // Keep the video's audio from overlapping the
+                                // standard pronunciation played by GlossSheet.
+                                // Closing the sheet intentionally does not resume.
+                                avPlayer?.pause()
                                 // Build the gloss WITH a save context so the
-                                // sheet's 「加入待同步暂存」 button can fire a
+                                // sheet's 「收藏」 button can fire a
                                 // PendingPhrase straight from the popup —
                                 // shortcut for users who like the highlight
                                 // gloss and want to collect it without going
