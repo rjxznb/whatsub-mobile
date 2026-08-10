@@ -104,54 +104,67 @@ git commit -m "feat: prevent duplicate pending phrases"
 ### Task 2: Pronouncing compact word card
 
 **Files:**
+- Create: `whatsub-mobile/Library/HighlightWordCardModel.swift`
 - Modify: `whatsub-mobile/Library/GlossSheet.swift`
-- Create: `whatsub-mobileTests/HighlightWordActionsSourceTests.swift`
+- Create: `whatsub-mobileTests/HighlightWordCardModelTests.swift`
 
 **Interfaces:**
 - Consumes: `Speaker.speak(_:)`, `Speaker.stop()`, `IPADict.shared.lookup(_:)`.
 - Consumes: `PendingPhraseStore.contains(entryId:phraseRaw:)` and `addIfAbsent(_:)` from Task 1.
+- Produces: `HighlightWordCardModel` with `appear()`, `replay()`, `disappear()`, and `collect() -> Bool` behavior.
 - Keeps: `GlossSheet(gloss:)` call site unchanged.
 
-- [ ] **Step 1: Write failing source-contract test**
+- [ ] **Step 1: Write failing behavior tests**
 
-Read `GlossSheet.swift` as UTF-8 and assert the user-visible contract:
+Instantiate the real model with a temporary `PendingPhraseStore` and injected audio closures. Verify lifecycle and collection side effects:
 
 ```swift
-XCTAssertTrue(source.contains("Speaker.speak(gloss.word)"))
-XCTAssertTrue(source.contains("IPADict.shared.lookup(gloss.word)"))
-XCTAssertTrue(source.contains("Speaker.stop()"))
-XCTAssertTrue(source.contains("addIfAbsent(pending)"))
-XCTAssertTrue(source.contains("Text(saved ? \"已收藏\" : \"收藏\")"))
-XCTAssertTrue(source.contains("presentationDetents([.height("))
-```
+func testAppearanceSpeaksOnceReplaySpeaksAgainAndDisappearStops() {
+    var spoken: [String] = []
+    var stopCount = 0
+    let model = makeModel(speak: { spoken.append($0) }, stop: { stopCount += 1 })
+    model.appear()
+    model.appear()
+    XCTAssertEqual(spoken, ["welcome back"])
+    model.replay()
+    XCTAssertEqual(spoken, ["welcome back", "welcome back"])
+    model.disappear()
+    XCTAssertEqual(stopCount, 1)
+}
 
-Also assert the source still includes a separate replay button with accessibility label `再次播放发音`.
+func testCollectWritesOnceAndReportsSaved() {
+    let model = makeModel()
+    XCTAssertTrue(model.collect())
+    XCTAssertTrue(model.saved)
+    XCTAssertFalse(model.collect())
+    XCTAssertEqual(store.total, 1)
+}
+```
 
 - [ ] **Step 2: Push RED test and run branch CI**
 
-Commit/push only the new test and trigger `ci.yml`. Expected: failure because pronunciation, IPA, compact detent, and new button copy are absent.
+Commit/push only the new test and trigger `ci.yml`. Expected: compile failure because `HighlightWordCardModel` does not exist.
 
 - [ ] **Step 3: Implement the word-card UI**
 
-Update `GlossSheet` so it:
+Implement `HighlightWordCardModel` so lifecycle methods own one-shot pronunciation and duplicate-safe collection. Update `GlossSheet` so it:
 
-- uses `.task(id: gloss.id)` to call `Speaker.speak(gloss.word)` exactly once per presentation;
-- calls `Speaker.stop()` in `.onDisappear`;
+- calls `model.appear()` from `.task(id: gloss.id)` and `model.disappear()` from `.onDisappear`;
 - shows `IPADict.shared.lookup(gloss.word)` beneath the highlighted phrase when non-nil;
-- places a replay button beside the phrase and labels it `再次播放发音`;
+- places a replay button beside the phrase that calls `model.replay()` and labels it `再次播放发音`;
 - uses a compact `.presentationDetents([.height(340)])` with a visible drag indicator and retains `ScrollView` for Dynamic Type;
-- derives initial saved state from `PendingPhraseStore.shared.contains(...)`;
+- derives initial saved state through the model from `PendingPhraseStore.shared.contains(...)`;
 - changes the prominent CTA to `收藏` / `已收藏` with bookmark/checkmark icons;
-- calls `addIfAbsent(pending)` and only fires success haptics when insertion succeeds.
+- calls `model.collect()` and only fires success haptics when insertion succeeds.
 
 - [ ] **Step 4: Run branch CI for GREEN**
 
-Commit/push and trigger `ci.yml`. Expected: source-contract test passes, app compiles for simulator, full unit suite passes, screenshot artifact is generated.
+Commit/push and trigger `ci.yml`. Expected: model behavior tests pass, app compiles for simulator, full unit suite passes, screenshot artifact is generated.
 
 - [ ] **Step 5: Commit implementation**
 
 ```powershell
-git add whatsub-mobile/Library/GlossSheet.swift
+git add whatsub-mobile/Library/HighlightWordCardModel.swift whatsub-mobile/Library/GlossSheet.swift whatsub-mobileTests/HighlightWordCardModelTests.swift
 git commit -m "feat: add pronunciation to highlight word card"
 ```
 
@@ -162,32 +175,23 @@ git commit -m "feat: add pronunciation to highlight word card"
 **Files:**
 - Modify: `whatsub-mobile/Library/LibraryDetailView.swift`
 - Modify: `whatsub-mobile/Library/EntryCollectionsList.swift`
-- Modify: `whatsub-mobileTests/HighlightWordActionsSourceTests.swift`
 
 **Interfaces:**
 - Consumes: existing `@State avPlayer` in `LibraryDetailView`.
 - Keeps: `CueRow.onTapCue`, `onCollect`, `onShadow`, `onCloze`, and copy context-menu behavior.
 
-- [ ] **Step 1: Extend the failing source-contract test**
-
-Assert that the highlighted-word callback pauses playback before assigning `glossWord`, that the `CueRow` context menu still contains its four actions, and that the collections empty-state copy mentions both tapping a highlighted word and long-pressing a sentence.
-
-- [ ] **Step 2: Run branch CI to verify RED**
-
-Expected: failure because the player is not paused and the old empty-state copy only teaches long press.
-
-- [ ] **Step 3: Implement minimal integration**
+- [ ] **Step 1: Implement minimal integration**
 
 Insert `avPlayer?.pause()` as the first action in `onTapHighlight`, before constructing `WordGloss`. Update only the instructional empty-state sentence in `EntryCollectionsList`; do not change `CueRow` gesture wiring or context-menu actions.
 
-- [ ] **Step 4: Run branch CI for GREEN**
+- [ ] **Step 2: Run branch CI for integration verification**
 
-Expected: complete simulator build and test suite pass with the new integration assertions.
+Expected: complete simulator build and test suite pass. This compile gate proves the existing `AVPlayer` and `CueRow` interfaces remain valid; device verification covers the gesture/audio interaction.
 
-- [ ] **Step 5: Commit integration**
+- [ ] **Step 3: Commit integration**
 
 ```powershell
-git add whatsub-mobile/Library/LibraryDetailView.swift whatsub-mobile/Library/EntryCollectionsList.swift whatsub-mobileTests/HighlightWordActionsSourceTests.swift
+git add whatsub-mobile/Library/LibraryDetailView.swift whatsub-mobile/Library/EntryCollectionsList.swift
 git commit -m "feat: pause video for highlight pronunciation"
 ```
 
