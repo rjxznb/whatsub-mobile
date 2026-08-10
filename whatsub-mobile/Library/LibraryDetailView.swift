@@ -683,6 +683,7 @@ struct LibraryDetailView: View {
                                 // standard pronunciation played by GlossSheet.
                                 // Closing the sheet intentionally does not resume.
                                 avPlayer?.pause()
+                                youtubeClipPlayback.stop()
                                 // Build the gloss WITH a save context so the
                                 // sheet's 「收藏」 button can fire a
                                 // PendingPhrase straight from the popup —
