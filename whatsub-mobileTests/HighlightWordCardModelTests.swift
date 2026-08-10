@@ -1,7 +1,6 @@
 import XCTest
 @testable import whatsub_mobile
 
-@MainActor
 final class HighlightWordCardModelTests: XCTestCase {
     private var fileURL: URL!
     private var store: PendingPhraseStore!
