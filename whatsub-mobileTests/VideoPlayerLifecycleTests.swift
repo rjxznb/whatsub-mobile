@@ -41,4 +41,26 @@ final class VideoPlayerLifecycleTests: XCTestCase {
             .ready
         )
     }
+
+    func testNewestExplicitSeekWaitsForReadyAndThenDeliversImmediately() {
+        var state = PlayerSeekDeliveryState()
+        let first = SeekRequest(seconds: 12, nonce: UUID())
+        let newest = SeekRequest(seconds: 36, nonce: UUID())
+        let afterReady = SeekRequest(seconds: 50, nonce: UUID())
+
+        XCTAssertNil(state.queue(first))
+        XCTAssertNil(state.queue(newest))
+        XCTAssertEqual(state.markReady(), newest)
+        XCTAssertEqual(state.queue(afterReady), afterReady)
+    }
+
+    func testNewPlaybackOperationInvalidatesOlderCompletion() {
+        var revision = PlayerOperationRevision()
+
+        let passiveRestore = revision.begin()
+        let explicitSeek = revision.begin()
+
+        XCTAssertFalse(revision.isCurrent(passiveRestore))
+        XCTAssertTrue(revision.isCurrent(explicitSeek))
+    }
 }
