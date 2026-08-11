@@ -44,6 +44,16 @@ final class PlaybackResumeSessionTests: XCTestCase {
         XCTAssertEqual(session.resumePosition, 8)
     }
 
+    func testOnlyCurrentGenerationAcceptsFailureEvenAfterReady() {
+        var session = PlaybackResumeSession(restoredPosition: 8)
+        let first = session.beginReload()
+        let current = session.beginReload()
+        session.markReady(generation: current)
+
+        XCTAssertFalse(session.isCurrent(generation: first))
+        XCTAssertTrue(session.isCurrent(generation: current))
+    }
+
     private func date(_ seconds: TimeInterval) -> Date {
         Date(timeIntervalSince1970: seconds)
     }
