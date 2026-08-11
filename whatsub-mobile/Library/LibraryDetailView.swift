@@ -1,6 +1,24 @@
 import SwiftUI
 import AVFoundation
 
+enum LibraryDetailRootPresentation: Equatable {
+    case loading
+    case content(inlineRefreshError: String?)
+    case blockingError(String)
+    case empty
+
+    static func resolve(
+        hasEntry: Bool,
+        loading: Bool,
+        errorMessage: String?
+    ) -> LibraryDetailRootPresentation {
+        if hasEntry { return .content(inlineRefreshError: errorMessage) }
+        if loading { return .loading }
+        if let errorMessage { return .blockingError(errorMessage) }
+        return .empty
+    }
+}
+
 struct LibraryDetailView: View {
     let entryId: String
     @EnvironmentObject var appState: AppState
@@ -72,18 +90,28 @@ struct LibraryDetailView: View {
     }
 
     var body: some View {
+        let rootPresentation = LibraryDetailRootPresentation.resolve(
+            hasEntry: vm.entry != nil,
+            loading: vm.loading,
+            errorMessage: vm.errorMessage
+        )
         ZStack {
             Color.whatsubBg.ignoresSafeArea()
-            if vm.loading {
+            switch rootPresentation {
+            case .loading:
                 ProgressView().tint(.whatsubAccent)
-            } else if let err = vm.errorMessage {
+            case .blockingError(let err):
                 Text(err).foregroundStyle(.whatsubInkMuted).padding()
-            } else if let entry = vm.entry {
-                if isLandscape {
-                    landscape(entry)
-                } else {
-                    portrait(entry)
+            case .content(let inlineRefreshError):
+                if let entry = vm.entry {
+                    if isLandscape {
+                        landscape(entry, inlineRefreshError: inlineRefreshError)
+                    } else {
+                        portrait(entry, inlineRefreshError: inlineRefreshError)
+                    }
                 }
+            case .empty:
+                EmptyView()
             }
         }
         .navigationTitle(vm.entry?.title ?? "")
@@ -369,7 +397,10 @@ struct LibraryDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func portrait(_ entry: LibraryEntryDetail) -> some View {
+    private func portrait(
+        _ entry: LibraryEntryDetail,
+        inlineRefreshError: String?
+    ) -> some View {
         GeometryReader { geo in
             // Height at which a 16:9 player exactly fills the content width.
             let fullWidthH = geo.size.width * 9.0 / 16.0
@@ -400,6 +431,9 @@ struct LibraryDetailView: View {
                 // per-row ☁️ upload button. A top-of-page banner +
                 // separate sheet was redundant.)
                 managedAnalysisBanner
+                if let inlineRefreshError {
+                    detailRefreshErrorBanner(inlineRefreshError)
+                }
                 VideoLearningGuideCard(
                     guide: vm.entry?.analysisJson.learningGuide,
                     phase: vm.guidePhase,
@@ -653,6 +687,32 @@ struct LibraryDetailView: View {
         }
     }
 
+    private func detailRefreshErrorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInk)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("重新加载") {
+                Task { await reloadDetail() }
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.borderless)
+            .foregroundStyle(.whatsubAccent)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.yellow.opacity(0.5), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
     private func requestGuideGeneration() {
         guard let token = appState.session?.sessionToken else { return }
         let settings = LlmSettingsStore.load()
@@ -661,10 +721,18 @@ struct LibraryDetailView: View {
 
     // Landscape = fullscreen: the player fills the screen (video letterboxed on
     // black); the on-video caption overlay is the reading surface here (no list).
-    private func landscape(_ entry: LibraryEntryDetail) -> some View {
+    private func landscape(
+        _ entry: LibraryEntryDetail,
+        inlineRefreshError: String?
+    ) -> some View {
         player(entry, fullscreen: true)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
+            .overlay(alignment: .top) {
+                if let inlineRefreshError {
+                    detailRefreshErrorBanner(inlineRefreshError)
+                }
+            }
     }
 
     private func subtitleList(_ entry: LibraryEntryDetail) -> some View {
