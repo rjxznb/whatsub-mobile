@@ -202,7 +202,7 @@ final class LibraryDetailViewModel: ObservableObject {
             // first-paint loading before starting its best-effort queue read.
             entry = fetchedEntry
             displayedCues = fetchedEntry.analysisJson.subtitles
-            guidePhase = fetchedEntry.analysisJson.learningGuide == nil ? .idle : .ready
+            restoreGuidePhaseForDisplayedEntry()
             guideExpanded = false
             guideMustReloadBeforeGeneration = false
             progressiveOverlay = ProgressiveAnalysisOverlay(baseline: displayedCues)
@@ -230,7 +230,10 @@ final class LibraryDetailViewModel: ObservableObject {
             guard revision == loadRevision else { return }
             errorMessage = "加载失败"
         }
-        if revision == loadRevision { loading = false }
+        if revision == loadRevision {
+            loading = false
+            restoreGuidePhaseForDisplayedEntry()
+        }
     }
 
     func startManagedProgress(token: String) {
@@ -673,7 +676,7 @@ final class LibraryDetailViewModel: ObservableObject {
         } catch let error as APIError {
             guard isCurrentGuideTask(operation) else { return }
             if Task.isCancelled {
-                guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
+                restoreGuidePhaseForDisplayedEntry()
                 return
             }
             if case .server(let code, let reason) = error,
@@ -700,7 +703,7 @@ final class LibraryDetailViewModel: ObservableObject {
             }
         } catch is CancellationError {
             guard isCurrentGuideTask(operation) else { return }
-            guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
+            restoreGuidePhaseForDisplayedEntry()
         } catch VideoLearningGuideServiceError.missingAnalysisFingerprint {
             guard isCurrentGuideTask(operation) else { return }
             guideMustReloadBeforeGeneration = true
@@ -708,7 +711,7 @@ final class LibraryDetailViewModel: ObservableObject {
         } catch {
             guard isCurrentGuideTask(operation) else { return }
             if Task.isCancelled {
-                guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
+                restoreGuidePhaseForDisplayedEntry()
             } else {
                 guidePhase = .failed(RemoteFailure.from(error, fallback: "学习导览生成失败"))
             }
@@ -737,6 +740,10 @@ final class LibraryDetailViewModel: ObservableObject {
         guideTask?.cancel()
         guideTask = nil
         guideTaskID = nil
+    }
+
+    private func restoreGuidePhaseForDisplayedEntry() {
+        guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
     }
 
     private func isCurrentGuideTask(_ operation: GuideOperation) -> Bool {
