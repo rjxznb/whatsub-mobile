@@ -360,7 +360,7 @@ final class LibraryDesktopReplacementTests: XCTestCase {
         await load.value
     }
 
-    func testPlaybackRefreshPublishesSignedURLWithoutPageLoadingOrManagedWork() async throws {
+    func testPlaybackRefreshFetchesWithoutPublishingUntilCallerAcceptsRevision() async throws {
         let refreshed = try entry(videoUrl: "https://cdn.example.com/refreshed.mp4")
         let api = LibraryDesktopReplacementAPISpy(detail: refreshed)
         let viewModel = LibraryDetailViewModel(api: api)
@@ -372,13 +372,16 @@ final class LibraryDesktopReplacementTests: XCTestCase {
         )
 
         XCTAssertEqual(result.videoUrl, "https://cdn.example.com/refreshed.mp4")
-        XCTAssertEqual(viewModel.entry?.videoUrl, "https://cdn.example.com/refreshed.mp4")
+        XCTAssertNil(viewModel.entry)
         XCTAssertFalse(viewModel.loading)
         XCTAssertNil(viewModel.managedProgress)
         let detailCalls = await api.libraryEntryCallCount()
         let listCalls = await api.listCallCount()
         XCTAssertEqual(detailCalls, 1)
         XCTAssertEqual(listCalls, 0)
+
+        viewModel.publishPlaybackDetail(result)
+        XCTAssertEqual(viewModel.entry?.videoUrl, "https://cdn.example.com/refreshed.mp4")
     }
 
     func testKnownOverLimitBlocksBeforeCallingEnqueueAPI() async throws {

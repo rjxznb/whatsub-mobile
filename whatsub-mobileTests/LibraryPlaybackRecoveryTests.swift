@@ -55,4 +55,28 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
         XCTAssertTrue(source.contains("reusableSurface: youtubeSurface"))
         XCTAssertTrue(source.contains("surfaceKey: \"\\(entry.id)-\\(generation)\""))
     }
+
+    func testOnlyNewestOSSReloadRevisionCanPublish() {
+        var state = LibraryPlaybackReloadState()
+
+        state.begin(generation: 1)
+        state.begin(generation: 2)
+
+        XCTAssertFalse(state.accept(generation: 1))
+        XCTAssertTrue(state.accept(generation: 2))
+        XCTAssertNil(state.activeGeneration)
+    }
+
+    func testDetailKeepsOneActiveSourceAndCancelsSupersededOSSTask() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = tests.deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Library/LibraryDetailView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("@State private var activePlayerSource"))
+        XCTAssertTrue(source.contains("@State private var ossReloadTask"))
+        XCTAssertTrue(source.contains("ossReloadTask?.cancel()"))
+        XCTAssertTrue(source.contains("vm.publishPlaybackDetail(refreshed)"))
+    }
 }
