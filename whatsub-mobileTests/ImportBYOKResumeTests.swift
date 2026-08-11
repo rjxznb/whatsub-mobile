@@ -25,6 +25,7 @@ final class ImportBYOKResumeTests: XCTestCase {
         let store = AnalysisCheckpointStore(directory: directory)
         let resumed = expectation(description: "resumed from checkpoint")
         var callCount = 0
+        var receivedDurations: [Double?] = []
         let cue = Cue(index: 0, time: 0, endTime: 1, text: "Hello")
         let analyzed = Cue(
             index: 0, time: 0, endTime: 1, text: "Hello", translation: "你好"
@@ -37,8 +38,9 @@ final class ImportBYOKResumeTests: XCTestCase {
             titleFetcher: { _ in "Title" },
             thumbnailFetcher: { _ in nil },
             checkpointStore: store,
-            localAnalyzer: { _, _, resume, _, _ in
+            localAnalyzer: { _, durationSec, _, resume, _, _ in
                 callCount += 1
+                receivedDurations.append(durationSec)
                 if callCount == 1 {
                     try resume.onBatchCompleted(0, [analyzed])
                     throw AnalysisPausedError()
@@ -58,6 +60,7 @@ final class ImportBYOKResumeTests: XCTestCase {
         vm.setSceneActive(true, token: "token")
         await fulfillment(of: [resumed], timeout: 1)
         XCTAssertEqual(callCount, 2)
+        XCTAssertEqual(receivedDurations.compactMap { $0 }, [60, 60])
     }
 
     func testPersistedCompletedSummaryIsForwardedForResume() async throws {

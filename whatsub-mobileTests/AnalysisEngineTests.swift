@@ -244,6 +244,50 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertEqual(result.subtitles.count, 60)
     }
 
+    func testAnalyzeUsesKnownVideoDurationForSegmentExtendingPastLastCue() async throws {
+        let source = [Cue(index: 0, time: 55, endTime: 58, text: "Closing thought")]
+        let analyzedCue = #"{"index":0,"time":55,"endTime":58,"text":"Closing thought","translation":"结尾想法","isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}"#
+        let segment = #"{"startTime":57,"endTime":60,"title":"结尾重点片段","reason":"该片段与最后一条字幕在时间上有重叠，并且持续到视频结尾。","focusExpressions":[]}"#
+        let summary = validSummaryJSON().replacingOccurrences(
+            of: #""topSegments":[]"#,
+            with: #""topSegments":[\#(segment)]"#
+        )
+        let script = StreamScript([analyzedCue, summary])
+        let engine = AnalysisEngine(streamProvider: script.stream)
+
+        let result = try await engine.analyze(
+            source,
+            durationSec: 60,
+            onProgress: { _, _ in }
+        )
+
+        XCTAssertEqual(result.learningGuide?.topSegments.first?.startTime, 57)
+        XCTAssertEqual(result.learningGuide?.topSegments.first?.endTime, 60)
+    }
+
+    func testInvalidSummaryDoesNotCheckpointEmptyCompletion() async throws {
+        let source = [cueFixture(index: 0)]
+        let analyzedCue = #"{"index":0,"time":0,"endTime":1.5,"text":"word 0","translation":"译文","isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}"#
+        let script = StreamScript([analyzedCue, #"{"type":"summary","keyPhrases":[]}"#])
+        let engine = AnalysisEngine(streamProvider: script.stream)
+        var checkpointed = false
+
+        let result = try await engine.analyze(
+            source,
+            durationSec: nil,
+            completedBatches: [:],
+            completedSummary: nil,
+            onBatchCompleted: { _, _ in },
+            onSummaryCompleted: { _ in checkpointed = true },
+            shouldBeginRequest: { true },
+            onProgress: { _, _ in }
+        )
+
+        XCTAssertFalse(checkpointed)
+        XCTAssertNil(result.learningGuide)
+        XCTAssertNil(result.contextProfile)
+    }
+
     func testCompletedSummaryResumeDoesNotOpenAnotherProviderRequest() async throws {
         let source = [cueFixture(index: 0)]
         let draft = try XCTUnwrap(
