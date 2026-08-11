@@ -166,9 +166,10 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertEqual(first.map(\.content), second.map(\.content))
         XCTAssertTrue(text.contains(manyCues.first!.text))
         XCTAssertTrue(text.contains(manyCues.last!.text))
-        XCTAssertTrue(text.contains(#""index":0"#))
-        XCTAssertTrue(text.contains(#""time":0"#))
-        XCTAssertTrue(text.contains(#""endTime":1.25"#))
+        let userContent = try XCTUnwrap(first.last?.content)
+        XCTAssertTrue(userContent.contains(#""index":0"#))
+        XCTAssertTrue(userContent.contains(#""time":0"#))
+        XCTAssertTrue(userContent.contains(#""endTime":1.25"#))
         XCTAssertLessThanOrEqual(text.count, 20_000)
     }
 
