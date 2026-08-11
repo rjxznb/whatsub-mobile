@@ -366,9 +366,7 @@ struct LibraryDetailView: View {
                     resumeSeconds: playerRestorePosition,
                     onFailure: { handlePlayerFailure(generation: generation) },
                     onEnded: { handlePlayerEnded(generation: generation) },
-                    onPlaying: { handlePlayerPlaying(generation: generation) },
-                    reusableSurface: youtubeSurface,
-                    surfaceKey: "\(entry.id)-\(generation)"
+                    onPlaying: { handlePlayerPlaying(generation: generation) }
                 )
             } else if playbackPrepared,
                       entry.videoUrl == nil,
@@ -384,7 +382,9 @@ struct LibraryDetailView: View {
                     onClipEnded: { nonce in youtubeClipPlayback.clipEnded(nonce: nonce) },
                     onFailure: { handlePlayerFailure(generation: generation) },
                     onEnded: { handlePlayerEnded(generation: generation) },
-                    onPlaying: { handlePlayerPlaying(generation: generation) }
+                    onPlaying: { handlePlayerPlaying(generation: generation) },
+                    reusableSurface: youtubeSurface,
+                    surfaceKey: "\(entry.id)-\(generation)"
                 )
                 .id("youtube-\(entry.id)-\(generation)")
             } else if entry.videoUrl == nil {
