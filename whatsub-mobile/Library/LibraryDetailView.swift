@@ -24,6 +24,25 @@ enum LibraryPlayerSource: Equatable {
     case oss
 }
 
+struct LibraryPlaybackReloadState: Equatable {
+    private(set) var activeGeneration: Int?
+
+    mutating func begin(generation: Int) {
+        activeGeneration = generation
+    }
+
+    mutating func accept(generation: Int) -> Bool {
+        guard activeGeneration == generation else { return false }
+        activeGeneration = nil
+        return true
+    }
+
+    mutating func cancel(generation: Int) {
+        guard activeGeneration == generation else { return }
+        activeGeneration = nil
+    }
+}
+
 enum LibraryPlayerRecoveryAction: Equatable {
     case rebuildYouTube
     case refreshDetailThenRebuildAVPlayer
@@ -73,7 +92,9 @@ struct LibraryDetailView: View {
     @State private var playbackPrepared = false
     @State private var playbackSession = PlaybackResumeSession(restoredPosition: nil)
     @State private var playerRestorePosition: Double?
-    @State private var ossReloadGeneration: Int?
+    @State private var activePlayerSource: LibraryPlayerSource?
+    @State private var ossReloadState = LibraryPlaybackReloadState()
+    @State private var ossReloadTask: Task<Void, Never>?
     @State private var playbackPersistenceTask: Task<Void, Never>?
     @State private var showCaptions = true
     /// Owned here (not inside VideoPlayerView) so the AVPlayer survives the
@@ -190,6 +211,7 @@ struct LibraryDetailView: View {
             _ = session.beginReload()
             playbackSession = session
             playerRestorePosition = session.resumePosition
+            activePlayerSource = vm.entry?.videoUrl == nil ? .youtube : .oss
             playerReady = false
             playerTimedOut = false
             playbackPrepared = true
@@ -208,12 +230,13 @@ struct LibraryDetailView: View {
             // refresh. Swap from YouTube embed to native AVPlayer once; later
             // signed-URL refreshes must not interrupt current playback.
             guard playbackPrepared,
-                  ossReloadGeneration == nil,
+                  ossReloadState.activeGeneration == nil,
                   avPlayer == nil,
                   let newValue,
                   let url = URL(string: newValue) else { return }
             flushPlaybackProgress()
             _ = beginPlaybackGeneration()
+            activePlayerSource = .oss
             avPlayer = makeAVPlayer(url: url)
         }
         .onChange(of: vm.seek) { request in
@@ -330,6 +353,10 @@ struct LibraryDetailView: View {
         .onDisappear {
             pollingLifecycle.disappear()
             flushPlaybackProgress()
+            ossReloadTask?.cancel()
+            if let generation = ossReloadState.activeGeneration {
+                ossReloadState.cancel(generation: generation)
+            }
             avPlayer?.pause()
             youtubeClipPlayback.stop()
             vm.stopManagedProgress()
@@ -341,9 +368,9 @@ struct LibraryDetailView: View {
     /// Sizing (16:9 box vs fullscreen fill) is applied by the caller.
     private func player(_ entry: LibraryEntryDetail, fullscreen: Bool) -> some View {
         let generation = playbackSession.generation
-        let source: LibraryPlayerSource = entry.videoUrl == nil ? .youtube : .oss
+        let source = activePlayerSource ?? (entry.videoUrl == nil ? .youtube : .oss)
         return ZStack {
-            if playbackPrepared, let p = avPlayer {
+            if playbackPrepared, source == .oss, let p = avPlayer {
                 VideoPlayerView(
                     player: p,
                     seek: vm.seek,
@@ -369,7 +396,7 @@ struct LibraryDetailView: View {
                     onPlaying: { handlePlayerPlaying(generation: generation) }
                 )
             } else if playbackPrepared,
-                      entry.videoUrl == nil,
+                      source == .youtube,
                       VideoSource.isLikelyYouTubeId(entry.youtubeId) {
                 YouTubeEmbedView(
                     videoId: entry.youtubeId,
@@ -387,7 +414,7 @@ struct LibraryDetailView: View {
                     surfaceKey: "\(entry.id)-\(generation)"
                 )
                 .id("youtube-\(entry.id)-\(generation)")
-            } else if entry.videoUrl == nil {
+            } else if source == .youtube {
                 desktopOnlyPlaceholder
             }
             // (videoUrl present but player not yet created → nothing here; the
@@ -932,8 +959,10 @@ struct LibraryDetailView: View {
 
     private func reloadActivePlayer() {
         guard playbackPrepared, let entry = vm.entry else { return }
+        ossReloadTask?.cancel()
+        ossReloadTask = nil
         flushPlaybackProgress()
-        let source: LibraryPlayerSource = entry.videoUrl == nil ? .youtube : .oss
+        let source = activePlayerSource ?? (entry.videoUrl == nil ? .youtube : .oss)
         let generation = beginPlaybackGeneration()
 
         switch LibraryPlayerRecoveryAction.forSource(source) {
@@ -942,33 +971,48 @@ struct LibraryDetailView: View {
         case .refreshDetailThenRebuildAVPlayer:
             avPlayer?.pause()
             avPlayer = nil
-            ossReloadGeneration = generation
+            activePlayerSource = .oss
+            ossReloadState.begin(generation: generation)
             let fallbackURL = entry.videoUrl
             let token = appState.session?.sessionToken
-            Task {
+            ossReloadTask = Task {
                 var candidateURL = fallbackURL
+                var refreshedDetail: LibraryEntryDetail?
                 if let token {
                     do {
                         let refreshed = try await vm.refreshPlaybackDetail(
                             id: entryId,
                             token: token
                         )
-                        candidateURL = refreshed.videoUrl ?? fallbackURL
+                        refreshedDetail = refreshed
+                        if let refreshedURL = refreshed.videoUrl,
+                           URL(string: refreshedURL) != nil {
+                            candidateURL = refreshedURL
+                        }
+                    } catch is CancellationError {
+                        return
                     } catch {
                         candidateURL = fallbackURL
                     }
                 }
 
-                guard playbackSession.isCurrent(generation: generation) else { return }
-                if ossReloadGeneration == generation {
-                    ossReloadGeneration = nil
-                }
+                guard !Task.isCancelled,
+                      playbackSession.isCurrent(generation: generation),
+                      ossReloadState.accept(generation: generation) else { return }
                 guard let candidateURL,
                       let url = URL(string: candidateURL) else {
+                    ossReloadTask = nil
                     handlePlayerFailure(generation: generation)
                     return
                 }
                 avPlayer = makeAVPlayer(url: url)
+                if let refreshed = refreshedDetail,
+                   let refreshedURL = refreshed.videoUrl,
+                   refreshedURL == candidateURL,
+                   URL(string: refreshedURL) != nil {
+                    vm.publishPlaybackDetail(refreshed)
+                }
+                ossReloadTask = nil
             }
         }
     }

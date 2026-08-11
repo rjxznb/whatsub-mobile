@@ -590,8 +590,13 @@ final class LibraryDetailViewModel: ObservableObject {
     ) async throws -> LibraryEntryDetail {
         let refreshed = try await replacementAPI.libraryEntry(id: id, token: token)
         try Task.checkCancellation()
-        entry = refreshed
         return refreshed
+    }
+
+    /// Publishes a playback-only refresh after the owning view has verified
+    /// that its reload generation is still current.
+    func publishPlaybackDetail(_ refreshed: LibraryEntryDetail) {
+        entry = refreshed
     }
 
     // MARK: - Video learning guide
