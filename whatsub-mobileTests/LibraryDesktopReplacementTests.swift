@@ -28,7 +28,7 @@ private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
 
     func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
         libraryEntryCalls += 1
-        detail
+        return detail
     }
 
     func listImportQueue(
