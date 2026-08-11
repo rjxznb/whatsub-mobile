@@ -24,20 +24,20 @@ final class DeepGlossPromptTests: XCTestCase {
         XCTAssertNil(userObject["score"])
     }
 
-    func testPromptShiftsWindowAtBeginningWithoutDroppingAvailableContext() {
+    func testPromptIncludesAtMostFourFollowingCuesNearBeginning() {
         let cues = (0..<30).map { makeDeepGlossCue(index: $0) }
 
         let payload = DeepGlossPrompt.build(context: makeDeepGlossContext(cues: cues, currentCueIndex: 1))
 
-        XCTAssertEqual(payload.includedCueIndexes, Array(0...8))
+        XCTAssertEqual(payload.includedCueIndexes, Array(0...5))
     }
 
-    func testPromptShiftsWindowAtEndWithoutDroppingAvailableContext() {
+    func testPromptIncludesAtMostFourPrecedingCuesNearEnd() {
         let cues = (0..<30).map { makeDeepGlossCue(index: $0) }
 
         let payload = DeepGlossPrompt.build(context: makeDeepGlossContext(cues: cues, currentCueIndex: 28))
 
-        XCTAssertEqual(payload.includedCueIndexes, Array(21...29))
+        XCTAssertEqual(payload.includedCueIndexes, Array(24...29))
     }
 
     func testPromptUsesEveryCueWhenFewerThanNineExist() {
