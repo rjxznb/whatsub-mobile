@@ -27,8 +27,7 @@ enum DeepGlossExpression {
 }
 
 enum DeepGlossPrompt {
-    private static let maximumCueCount = 9
-    private static let precedingCueCount = 4
+    private static let surroundingCueCount = 4
 
     static func build(context: DeepGlossContext) -> DeepGlossPromptPayload {
         let window = cueWindow(
@@ -83,10 +82,9 @@ enum DeepGlossPrompt {
     private static func cueWindow(cues: [Cue], currentCueIndex: Int) -> ArraySlice<Cue> {
         guard !cues.isEmpty else { return cues[0..<0] }
         let current = min(max(0, currentCueIndex), cues.count - 1)
-        let count = min(maximumCueCount, cues.count)
-        let latestStart = cues.count - count
-        let start = min(max(0, current - precedingCueCount), latestStart)
-        return cues[start..<(start + count)]
+        let start = max(0, current - surroundingCueCount)
+        let end = min(cues.count, current + surroundingCueCount + 1)
+        return cues[start..<end]
     }
 
     private static let systemPrompt = """
