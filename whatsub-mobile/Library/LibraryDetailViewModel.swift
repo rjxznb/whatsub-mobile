@@ -148,7 +148,13 @@ final class LibraryDetailViewModel: ObservableObject {
     private let guideService: VideoLearningGuideService
     private var guideTask: Task<Void, Never>?
     private var guideTaskID: UUID?
+    private var guideRevision = 0
     private var guideMustReloadBeforeGeneration = false
+    private struct GuideOperation {
+        let detailRevision: Int
+        let guideRevision: Int
+        let taskID: UUID
+    }
     private var cues: [Cue] { displayedCues }
 
     init(
@@ -185,6 +191,7 @@ final class LibraryDetailViewModel: ObservableObject {
     func load(id: String, token: String) async {
         loadRevision += 1
         let revision = loadRevision
+        supersedeGuideGenerationForDetailLoad()
         replacementStatusTask?.cancel()
         loading = true; errorMessage = nil
         do {
@@ -581,20 +588,30 @@ final class LibraryDetailViewModel: ObservableObject {
             await guideTask.value
             return
         }
+        guard !loading else { return }
         guard entry?.analysisJson.learningGuide == nil else {
             guidePhase = .ready
             return
         }
 
-        let taskID = UUID()
+        guideRevision += 1
+        let operation = GuideOperation(
+            detailRevision: loadRevision,
+            guideRevision: guideRevision,
+            taskID: UUID()
+        )
         let task = Task { [weak self] in
             guard let self else { return }
-            await self.performGuideGeneration(settings: settings, token: token)
+            await self.performGuideGeneration(
+                settings: settings,
+                token: token,
+                operation: operation
+            )
         }
-        guideTaskID = taskID
+        guideTaskID = operation.taskID
         guideTask = task
         await task.value
-        if guideTaskID == taskID {
+        if isCurrentGuideTask(operation) {
             guideTask = nil
             guideTaskID = nil
         }
@@ -610,17 +627,28 @@ final class LibraryDetailViewModel: ObservableObject {
         seekTo(seconds: segment.startTime)
     }
 
-    private func performGuideGeneration(settings: LlmSettings, token: String) async {
+    private func performGuideGeneration(
+        settings: LlmSettings,
+        token: String,
+        operation: GuideOperation
+    ) async {
+        guard isCurrentGuideTask(operation) else { return }
         guard var target = entry else { return }
         guidePhase = .loading
 
         do {
             if guideMustReloadBeforeGeneration
                 || target.analysisFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                target = try await reloadDetailForGuide(id: target.id, token: token)
+                target = try await reloadDetailForGuide(
+                    id: target.id,
+                    token: token,
+                    operation: operation
+                )
+                guard isCurrentGuideTask(operation) else { return }
                 guideMustReloadBeforeGeneration = false
             }
             try Task.checkCancellation()
+            guard isCurrentGuideTask(operation) else { return }
 
             if target.analysisJson.learningGuide != nil {
                 guidePhase = .ready
@@ -639,9 +667,11 @@ final class LibraryDetailViewModel: ObservableObject {
                 token: token
             )
             try Task.checkCancellation()
+            guard isCurrentGuideTask(operation) else { return }
             entry = target.applyingLearningGuide(accepted)
             guidePhase = .ready
         } catch let error as APIError {
+            guard isCurrentGuideTask(operation) else { return }
             if Task.isCancelled {
                 guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
                 return
@@ -650,10 +680,16 @@ final class LibraryDetailViewModel: ObservableObject {
                code == 409, reason == "analysis_changed" {
                 guideMustReloadBeforeGeneration = true
                 do {
-                    _ = try await reloadDetailForGuide(id: target.id, token: token)
+                    _ = try await reloadDetailForGuide(
+                        id: target.id,
+                        token: token,
+                        operation: operation
+                    )
+                    guard isCurrentGuideTask(operation) else { return }
                     guideMustReloadBeforeGeneration = false
                     guidePhase = .analysisChanged
                 } catch {
+                    guard isCurrentGuideTask(operation) else { return }
                     guidePhase = .failed(RemoteFailure.from(
                         error,
                         fallback: "字幕解析已更新，但刷新失败，请重试"
@@ -663,11 +699,14 @@ final class LibraryDetailViewModel: ObservableObject {
                 guidePhase = .failed(RemoteFailure.from(error, fallback: "学习导览生成失败"))
             }
         } catch is CancellationError {
+            guard isCurrentGuideTask(operation) else { return }
             guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
         } catch VideoLearningGuideServiceError.missingAnalysisFingerprint {
+            guard isCurrentGuideTask(operation) else { return }
             guideMustReloadBeforeGeneration = true
             guidePhase = .fingerprintUnavailable
         } catch {
+            guard isCurrentGuideTask(operation) else { return }
             if Task.isCancelled {
                 guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
             } else {
@@ -679,13 +718,31 @@ final class LibraryDetailViewModel: ObservableObject {
     /// Lightweight detail refresh used by the inline guide state machine.
     /// It intentionally leaves the page-level `loading` flag alone so video
     /// and subtitles remain usable while fingerprint recovery runs.
-    private func reloadDetailForGuide(id: String, token: String) async throws -> LibraryEntryDetail {
+    private func reloadDetailForGuide(
+        id: String,
+        token: String,
+        operation: GuideOperation
+    ) async throws -> LibraryEntryDetail {
         let refreshed = try await replacementAPI.libraryEntry(id: id, token: token)
         try Task.checkCancellation()
+        guard isCurrentGuideTask(operation) else { throw CancellationError() }
         entry = refreshed
         displayedCues = refreshed.analysisJson.subtitles
         progressiveOverlay = ProgressiveAnalysisOverlay(baseline: displayedCues)
         return refreshed
+    }
+
+    private func supersedeGuideGenerationForDetailLoad() {
+        guideRevision += 1
+        guideTask?.cancel()
+        guideTask = nil
+        guideTaskID = nil
+    }
+
+    private func isCurrentGuideTask(_ operation: GuideOperation) -> Bool {
+        loadRevision == operation.detailRevision
+            && guideRevision == operation.guideRevision
+            && guideTaskID == operation.taskID
     }
 
     // MARK: - Subtitle editor actions
