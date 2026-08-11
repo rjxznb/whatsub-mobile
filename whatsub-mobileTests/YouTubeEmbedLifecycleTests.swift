@@ -60,7 +60,10 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
             .clipEnded(nonce)
         )
         XCTAssertEqual(YouTubeBridgeEvent.decode(["type": "failure"]), .failure)
-        XCTAssertEqual(YouTubeBridgeEvent.decode(["type": "ended"]), .ended)
+        XCTAssertEqual(
+            YouTubeBridgeEvent.decode(["type": "ended", "sec": 115.25]),
+            .ended(115.25)
+        )
     }
 
     func testBridgeDecoderRejectsMalformedMessages() {

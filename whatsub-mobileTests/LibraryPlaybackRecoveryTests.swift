@@ -138,11 +138,38 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
 
     func testReappearanceReusesPreparedPlayerWithoutResettingReadiness() {
         XCTAssertEqual(
-            LibraryPlaybackPreparationAction.forPrepared(false),
+            LibraryPlaybackPreparationAction.resolve(
+                isPrepared: false,
+                source: nil,
+                hasAVPlayer: false
+            ),
             .prepare
         )
         XCTAssertEqual(
-            LibraryPlaybackPreparationAction.forPrepared(true),
+            LibraryPlaybackPreparationAction.resolve(
+                isPrepared: true,
+                source: .youtube,
+                hasAVPlayer: false
+            ),
+            .resumeExisting
+        )
+    }
+
+    func testReappearanceRecoversMissingOSSPlayerAfterCancelledReload() {
+        XCTAssertEqual(
+            LibraryPlaybackPreparationAction.resolve(
+                isPrepared: true,
+                source: .oss,
+                hasAVPlayer: false
+            ),
+            .recoverMissingOSSPlayer
+        )
+        XCTAssertEqual(
+            LibraryPlaybackPreparationAction.resolve(
+                isPrepared: true,
+                source: .oss,
+                hasAVPlayer: true
+            ),
             .resumeExisting
         )
     }

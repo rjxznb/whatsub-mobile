@@ -88,7 +88,7 @@ final class PlaybackResumeSessionTests: XCTestCase {
     func testPausedScrubBackAfterCompletionStartsNewResumableSession() {
         var session = PlaybackResumeSession(restoredPosition: 90)
         XCTAssertEqual(session.receiveTime(100, now: date(0)), .save(100))
-        XCTAssertEqual(session.markEnded(), .clear)
+        XCTAssertEqual(session.markEnded(at: 100), .clear)
 
         // Trailing end callbacks remain suppressed.
         XCTAssertEqual(session.receiveTime(100, now: date(1)), .none)
@@ -96,6 +96,21 @@ final class PlaybackResumeSessionTests: XCTestCase {
         // without a playing event and must become resumable again.
         XCTAssertEqual(session.receiveTime(80, now: date(2)), .save(80))
         XCTAssertEqual(session.resumePosition, 80)
+    }
+
+    func testPausedScrubBackInsideFinalSecondStartsNewResumableSession() {
+        var session = PlaybackResumeSession(restoredPosition: nil)
+
+        XCTAssertEqual(session.markEnded(at: 100), .clear)
+        XCTAssertEqual(session.receiveTime(99.5, now: date(1)), .save(99.5))
+        XCTAssertEqual(session.resumePosition, 99.5)
+    }
+
+    func testEndedPositionReopensScrubWithoutPriorTimeSample() {
+        var session = PlaybackResumeSession(restoredPosition: nil)
+
+        XCTAssertEqual(session.markEnded(at: 115), .clear)
+        XCTAssertEqual(session.receiveTime(114.75, now: date(1)), .save(114.75))
     }
 
     func testOnlyCurrentGenerationAcceptsFailureEvenAfterReady() {

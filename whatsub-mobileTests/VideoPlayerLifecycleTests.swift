@@ -19,7 +19,7 @@ final class VideoPlayerLifecycleTests: XCTestCase {
             .failure
         )
         XCTAssertEqual(
-            AVPlayerLifecycleDecision.forEvent(.didPlayToEnd),
+            AVPlayerLifecycleDecision.forEvent(.didPlayToEnd(115)),
             .ended
         )
     }
@@ -44,14 +44,48 @@ final class VideoPlayerLifecycleTests: XCTestCase {
 
     func testNewestExplicitSeekWaitsForReadyAndThenDeliversImmediately() {
         var state = PlayerSeekDeliveryState()
+        let owner = PlayerOperationOwner()
         let first = SeekRequest(seconds: 12, nonce: UUID())
         let newest = SeekRequest(seconds: 36, nonce: UUID())
         let afterReady = SeekRequest(seconds: 50, nonce: UUID())
 
-        XCTAssertNil(state.queue(first))
-        XCTAssertNil(state.queue(newest))
-        XCTAssertEqual(state.markReady(), newest)
-        XCTAssertEqual(state.queue(afterReady), afterReady)
+        XCTAssertNil(state.queue(
+            first,
+            operationToken: owner.begin(),
+            operationOwner: owner
+        ))
+        XCTAssertNil(state.queue(
+            newest,
+            operationToken: owner.begin(),
+            operationOwner: owner
+        ))
+        XCTAssertEqual(
+            state.markReady(operationOwner: owner)?.request,
+            newest
+        )
+        XCTAssertEqual(
+            state.queue(
+                afterReady,
+                operationToken: owner.begin(),
+                operationOwner: owner
+            )?.request,
+            afterReady
+        )
+    }
+
+    func testPreReadySeekIsDroppedAfterParentCancelsPlaybackOperations() {
+        var state = PlayerSeekDeliveryState()
+        let owner = PlayerOperationOwner()
+        let request = SeekRequest(seconds: 42, nonce: UUID())
+
+        XCTAssertNil(state.queue(
+            request,
+            operationToken: owner.begin(),
+            operationOwner: owner
+        ))
+        owner.cancelAll()
+
+        XCTAssertNil(state.markReady(operationOwner: owner))
     }
 
     func testNewPlaybackOperationInvalidatesOlderCompletion() {
