@@ -133,6 +133,79 @@ private actor GatedGuideReloadDetailAPISpy: LibraryDesktopReplacementAPI {
     }
 }
 
+private actor FailingRefreshDetailAPISpy: LibraryDesktopReplacementAPI {
+    private let initial: LibraryEntryDetail
+    private(set) var detailCallCount = 0
+
+    init(initial: LibraryEntryDetail) {
+        self.initial = initial
+    }
+
+    func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
+        detailCallCount += 1
+        if detailCallCount == 1 { return initial }
+        throw APIError.server(500, "refresh_failed")
+    }
+
+    func listImportQueue(
+        token: String
+    ) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {
+        ([], nil)
+    }
+
+    func enqueueReplacement(
+        url: String,
+        targetLibraryEntryId: String,
+        token: String
+    ) async throws -> EnqueueImportResponse {
+        EnqueueImportResponse(id: "queue", desktopSeenSecondsAgo: nil, status: "pending")
+    }
+}
+
+private actor SupersededFailingLoadDetailAPISpy: LibraryDesktopReplacementAPI {
+    private let initial: LibraryEntryDetail
+    private let refreshed: LibraryEntryDetail
+    private var staleLoadContinuation: CheckedContinuation<Void, Never>?
+    private(set) var detailCallCount = 0
+
+    init(initial: LibraryEntryDetail, refreshed: LibraryEntryDetail) {
+        self.initial = initial
+        self.refreshed = refreshed
+    }
+
+    func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
+        detailCallCount += 1
+        switch detailCallCount {
+        case 1:
+            return initial
+        case 2:
+            await withCheckedContinuation { staleLoadContinuation = $0 }
+            throw APIError.server(500, "stale_refresh_failed")
+        default:
+            return refreshed
+        }
+    }
+
+    func listImportQueue(
+        token: String
+    ) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {
+        ([], nil)
+    }
+
+    func enqueueReplacement(
+        url: String,
+        targetLibraryEntryId: String,
+        token: String
+    ) async throws -> EnqueueImportResponse {
+        EnqueueImportResponse(id: "queue", desktopSeenSecondsAgo: nil, status: "pending")
+    }
+
+    func releaseStaleLoad() {
+        staleLoadContinuation?.resume()
+        staleLoadContinuation = nil
+    }
+}
+
 @MainActor
 final class VideoLearningGuidePresentationTests: XCTestCase {
     func testCardPresentationContainsNoScoreAndUsesApprovedSectionOrder() {
@@ -321,6 +394,96 @@ final class VideoLearningGuidePresentationTests: XCTestCase {
         let fingerprints = await patchAPI.expectedFingerprints
         XCTAssertEqual(llmCalls, 0)
         XCTAssertEqual(fingerprints, [])
+    }
+
+    func testFailedLoadAfterSupersedingGuideRestoresIdleAndAllowsRetry() async {
+        let entry = makeLearningGuideEntry(fingerprint: "f1", title: "Preserved entry")
+        let detailAPI = FailingRefreshDetailAPISpy(initial: entry)
+        let patchAPI = LearningGuideAPISpy([.accepted(makeGuideResponse(fingerprint: "f1"))])
+        let oldLLM = CancellationIgnoringGatedSummaryProviderSpy()
+        let retryLLM = SummaryProviderSpy([.summary(makeAnalysisSummary())])
+        let service = VideoLearningGuideService(
+            api: patchAPI,
+            summaryProvider: { entry, settings, token in
+                if await oldLLM.callCount == 0 {
+                    return try await oldLLM.call(entry: entry, settings: settings, token: token)
+                }
+                return try await retryLLM.call(entry: entry, settings: settings, token: token)
+            }
+        )
+        let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
+        await vm.load(id: entry.id, token: "token")
+
+        let oldGeneration = Task {
+            await vm.generateGuide(settings: LlmSettings(), token: "token")
+        }
+        while await oldLLM.callCount == 0 { await Task.yield() }
+        XCTAssertEqual(vm.guidePhase, .loading)
+
+        await vm.load(id: entry.id, token: "token")
+        await oldLLM.release()
+        await oldGeneration.value
+
+        XCTAssertEqual(vm.entry?.title, "Preserved entry")
+        XCTAssertNil(vm.entry?.analysisJson.learningGuide)
+        XCTAssertEqual(vm.guidePhase, .idle)
+        XCTAssertNotNil(vm.errorMessage)
+
+        await vm.generateGuide(settings: LlmSettings(), token: "token")
+
+        XCTAssertEqual(vm.entry?.analysisJson.learningGuide, makeLearningGuide())
+        XCTAssertEqual(vm.guidePhase, .ready)
+        XCTAssertNotNil(vm.errorMessage)
+        let fingerprints = await patchAPI.expectedFingerprints
+        XCTAssertEqual(fingerprints, ["f1"])
+    }
+
+    func testFailedCurrentLoadRestoresReadyForPreservedEntryWithGuide() async {
+        let entry = makeLearningGuideEntry(
+            fingerprint: "f1",
+            guide: makeLearningGuide(),
+            title: "Preserved guide"
+        )
+        let detailAPI = FailingRefreshDetailAPISpy(initial: entry)
+        let patchAPI = LearningGuideAPISpy([])
+        let llm = SummaryProviderSpy([])
+        let service = VideoLearningGuideService(api: patchAPI, summaryProvider: llm.call)
+        let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
+        await vm.load(id: entry.id, token: "token")
+        vm.guidePhase = .loading
+
+        await vm.load(id: entry.id, token: "token")
+
+        XCTAssertEqual(vm.entry?.title, "Preserved guide")
+        XCTAssertEqual(vm.entry?.analysisJson.learningGuide, makeLearningGuide())
+        XCTAssertEqual(vm.guidePhase, .ready)
+        XCTAssertNotNil(vm.errorMessage)
+    }
+
+    func testSupersededFailingLoadCannotRestoreOverNewerLoadPhase() async {
+        let initial = makeLearningGuideEntry(fingerprint: "f1", title: "Initial")
+        let refreshed = makeLearningGuideEntry(
+            fingerprint: "f2",
+            guide: makeLearningGuide(),
+            title: "Newer load"
+        )
+        let detailAPI = SupersededFailingLoadDetailAPISpy(initial: initial, refreshed: refreshed)
+        let patchAPI = LearningGuideAPISpy([])
+        let llm = SummaryProviderSpy([])
+        let service = VideoLearningGuideService(api: patchAPI, summaryProvider: llm.call)
+        let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
+        await vm.load(id: initial.id, token: "token")
+
+        let staleLoad = Task { await vm.load(id: initial.id, token: "token") }
+        while await detailAPI.detailCallCount < 2 { await Task.yield() }
+        await vm.load(id: refreshed.id, token: "token")
+        await detailAPI.releaseStaleLoad()
+        await staleLoad.value
+
+        XCTAssertEqual(vm.entry?.title, "Newer load")
+        XCTAssertEqual(vm.entry?.analysisJson.learningGuide, makeLearningGuide())
+        XCTAssertEqual(vm.guidePhase, .ready)
+        XCTAssertNil(vm.errorMessage)
     }
 
     func testRelay403UsesInlineSubscribeGuidanceAndCanRetry() async {
