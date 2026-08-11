@@ -143,8 +143,10 @@ private actor FailingRefreshDetailAPISpy: LibraryDesktopReplacementAPI {
 
     func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
         detailCallCount += 1
-        if detailCallCount == 1 { return initial }
-        throw APIError.server(500, "refresh_failed")
+        if detailCallCount == 2 {
+            throw APIError.server(500, "refresh_failed")
+        }
+        return initial
     }
 
     func listImportQueue(
@@ -483,6 +485,23 @@ final class VideoLearningGuidePresentationTests: XCTestCase {
         XCTAssertEqual(vm.entry?.title, "Newer load")
         XCTAssertEqual(vm.entry?.analysisJson.learningGuide, makeLearningGuide())
         XCTAssertEqual(vm.guidePhase, .ready)
+        XCTAssertNil(vm.errorMessage)
+    }
+
+    func testSuccessfulLoadClearsPriorRefreshError() async {
+        let entry = makeLearningGuideEntry(fingerprint: "f1", title: "Recovered entry")
+        let detailAPI = FailingRefreshDetailAPISpy(initial: entry)
+        let patchAPI = LearningGuideAPISpy([])
+        let llm = SummaryProviderSpy([])
+        let service = VideoLearningGuideService(api: patchAPI, summaryProvider: llm.call)
+        let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
+        await vm.load(id: entry.id, token: "token")
+        await vm.load(id: entry.id, token: "token")
+        XCTAssertNotNil(vm.errorMessage)
+
+        await vm.load(id: entry.id, token: "token")
+
+        XCTAssertEqual(vm.entry?.title, "Recovered entry")
         XCTAssertNil(vm.errorMessage)
     }
 
