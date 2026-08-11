@@ -215,6 +215,12 @@ struct LibraryDetailView: View {
             _ = beginPlaybackGeneration()
             avPlayer = makeAVPlayer(url: url)
         }
+        .onChange(of: vm.seek) { request in
+            guard let request else { return }
+            enqueuePlaybackPersistence(
+                playbackSession.markExplicitSeek(request.seconds)
+            )
+        }
         .onChange(of: scenePhase) { phase in
             pollingLifecycle.sceneChanged(isActive: phase == .active)
             if phase != .active {
@@ -358,7 +364,8 @@ struct LibraryDetailView: View {
                     onTime: { sec in handlePlayerTime(sec, generation: generation) },
                     resumeSeconds: playerRestorePosition,
                     onFailure: { handlePlayerFailure(generation: generation) },
-                    onEnded: { handlePlayerEnded(generation: generation) }
+                    onEnded: { handlePlayerEnded(generation: generation) },
+                    onPlaying: { handlePlayerPlaying(generation: generation) }
                 )
             } else if playbackPrepared,
                       entry.videoUrl == nil,
@@ -373,7 +380,8 @@ struct LibraryDetailView: View {
                     replaySnapshot: youtubeClipPlayback.consumerRebuildReplaySnapshot,
                     onClipEnded: { nonce in youtubeClipPlayback.clipEnded(nonce: nonce) },
                     onFailure: { handlePlayerFailure(generation: generation) },
-                    onEnded: { handlePlayerEnded(generation: generation) }
+                    onEnded: { handlePlayerEnded(generation: generation) },
+                    onPlaying: { handlePlayerPlaying(generation: generation) }
                 )
                 .id("youtube-\(entry.id)-\(generation)")
             } else if entry.videoUrl == nil {
@@ -886,6 +894,11 @@ struct LibraryDetailView: View {
         guard playbackSession.isCurrent(generation: generation) else { return }
         playerRestorePosition = nil
         enqueuePlaybackPersistence(playbackSession.markEnded())
+    }
+
+    private func handlePlayerPlaying(generation: Int) {
+        guard playbackSession.isCurrent(generation: generation) else { return }
+        playbackSession.markPlaying()
     }
 
     private func flushPlaybackProgress() {
