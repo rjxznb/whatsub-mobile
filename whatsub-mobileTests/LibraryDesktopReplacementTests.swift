@@ -364,6 +364,7 @@ final class LibraryDesktopReplacementTests: XCTestCase {
         let refreshed = try entry(videoUrl: "https://cdn.example.com/refreshed.mp4")
         let api = LibraryDesktopReplacementAPISpy(detail: refreshed)
         let viewModel = LibraryDetailViewModel(api: api)
+        viewModel.loading = false
 
         let result = try await viewModel.refreshPlaybackDetail(
             id: refreshed.id,
