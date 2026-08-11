@@ -588,7 +588,8 @@ final class LibraryDetailViewModel: ObservableObject {
 
         let taskID = UUID()
         let task = Task { [weak self] in
-            await self?.performGuideGeneration(settings: settings, token: token)
+            guard let self else { return }
+            await self.performGuideGeneration(settings: settings, token: token)
         }
         guideTaskID = taskID
         guideTask = task
