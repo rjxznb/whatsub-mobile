@@ -19,7 +19,39 @@ final class PlaybackResumeSessionTests: XCTestCase {
         XCTAssertEqual(session.markEnded(), .clear)
         XCTAssertEqual(session.receiveTime(100, now: date(6)), .none)
         XCTAssertEqual(session.forceFlushDecision(now: date(7)), .none)
+        session.markPlaying()
         XCTAssertEqual(session.receiveTime(0, now: date(8)), .save(0))
+    }
+
+    func testRestoringIgnoresInitialZeroUntilReady() {
+        var session = PlaybackResumeSession(restoredPosition: 120)
+        let generation = session.beginReload()
+
+        XCTAssertEqual(session.receiveTime(0, now: date(0)), .none)
+        XCTAssertEqual(session.resumePosition, 120)
+
+        session.markReady(generation: generation)
+        XCTAssertEqual(session.receiveTime(120, now: date(1)), .save(120))
+    }
+
+    func testExplicitSeekInFinalSecondReopensCompletedSession() {
+        var session = PlaybackResumeSession(restoredPosition: 100)
+        XCTAssertEqual(session.markEnded(), .clear)
+
+        XCTAssertEqual(
+            session.markExplicitSeek(99.5, now: date(1)),
+            .save(99.5)
+        )
+        XCTAssertEqual(session.resumePosition, 99.5)
+    }
+
+    func testPlayingReopensCompletionWhenNoTailWasSampled() {
+        var session = PlaybackResumeSession(restoredPosition: nil)
+        XCTAssertEqual(session.markEnded(), .clear)
+
+        session.markPlaying()
+
+        XCTAssertEqual(session.receiveTime(0, now: date(1)), .save(0))
     }
 
     func testReloadPreservesLatestPositionAndRejectsOldTimeout() {
