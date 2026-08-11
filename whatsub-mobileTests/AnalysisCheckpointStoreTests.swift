@@ -172,6 +172,50 @@ final class AnalysisCheckpointStoreTests: XCTestCase {
         XCTAssertEqual(result.contextProfile?.theme, "Closing a discussion")
     }
 
+    func testPersistedLegacyEmptyRawArraySummaryResumesWithoutProviderRequest() async throws {
+        let store = AnalysisCheckpointStore(directory: directory)
+        let source = cues(1)
+        let fingerprint = store.fingerprint(sourceID: "youtube-1", cues: source)
+        var checkpoint = store.makeCheckpoint(sourceID: "youtube-1", cues: source)
+        try checkpoint.recordBatch(
+            index: 0,
+            result: analyzed(source[0..<1]),
+            sourceCues: source
+        )
+        checkpoint.recordSummary(AnalysisSummary(
+            keyPhrases: [], learningGuide: nil, contextProfile: nil
+        ))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        var persisted = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoder.encode(checkpoint)) as? [String: Any]
+        )
+        persisted["completedSummary"] = []
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: persisted).write(
+            to: directory.appendingPathComponent("\(fingerprint).json")
+        )
+        let loaded = try XCTUnwrap(store.load(sourceID: "youtube-1", cues: source))
+        let script = StreamScript([])
+        let engine = AnalysisEngine(streamProvider: script.stream)
+
+        XCTAssertNotNil(loaded.completedSummary)
+        let result = try await engine.analyze(
+            source,
+            completedBatches: loaded.completedBatches,
+            completedSummary: loaded.completedSummary,
+            onBatchCompleted: { _, _ in XCTFail("completed cue batch must not repeat") },
+            onSummaryCompleted: { _ in XCTFail("legacy empty summary must not repeat") },
+            shouldBeginRequest: { true },
+            onProgress: { _, _ in }
+        )
+
+        XCTAssertEqual(script.requestCount, 0)
+        XCTAssertTrue(result.keyPhrases.isEmpty)
+        XCTAssertNil(result.learningGuide)
+        XCTAssertNil(result.contextProfile)
+    }
+
     func testPersistedLegacyRawArraySummaryResumesWithoutProviderRequest() async throws {
         let store = AnalysisCheckpointStore(directory: directory)
         let source = cues(1)
