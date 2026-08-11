@@ -34,7 +34,7 @@ On detail load, the view reads the saved position before constructing the playba
   - YouTube IFrame `onStateChange` with `YT.PlayerState.ENDED`.
 - Leaving, backgrounding, buffering, failing, or timing out never counts as completion.
 
-After an explicit completion event, the current player generation enters a completed state so trailing end-of-stream time callbacks cannot immediately recreate the deleted record. If the user subsequently replays or seeks back from the end, a new playing/seek signal exits that state and later partial progress is persisted normally.
+After an explicit completion event, the current player generation enters a completed state so trailing end-of-stream time callbacks cannot immediately recreate the deleted record. The completed tail is retained only in memory: a clear backward time jump from native or YouTube controls reopens persistence even while paused, while replay or an app-owned seek also exits the completed state normally.
 
 The restore action is idempotent per player generation. Later subtitle seeks and collection timestamp seeks continue to work and take precedence over the initial restore. Explicit seek commands remain parent-owned until AVPlayer completes the current operation or YouTube confirms JavaScript accepted it; interrupted/failed commands remain pending. A shared AV operation owner rejects late completions and stale coordinator teardown across rotation. Consumed commands cannot replay after rotation or retry, while a command queued before readiness survives coordinator replacement.
 
@@ -50,7 +50,9 @@ The existing loading overlay becomes an actionable error surface for both playba
 4. rebuilds the active playback surface;
 5. restores the captured position while paused after readiness.
 
-For YouTube, changing the generation changes the representable identity and constructs a fresh WKWebView/iframe instead of relying on `WKWebView.reload()`. This recovers iframe/API bootstrap failures more reliably. Rotation within one generation reuses that WKWebView inside fresh lightweight container views. A stable script-message proxy remains installed for the WebView lifetime and caches readiness/terminal events during the brief coordinator handoff, avoiding a permanently lost `ready` event. Failure is sticky for that surface generation, so rotation cannot revive stale readiness and hide the reload action. Switching to OSS or leaving the detail explicitly pauses/destroys the iframe and releases its WebView; rotation alone never does.
+For YouTube, changing the generation changes the representable identity and constructs a fresh WKWebView/iframe instead of relying on `WKWebView.reload()`. This recovers iframe/API bootstrap failures more reliably. Rotation within one generation reuses that WKWebView inside fresh lightweight container views. A stable script-message proxy remains installed for the WebView lifetime and caches readiness/terminal events during the brief coordinator handoff, avoiding a permanently lost `ready` event. Failure is sticky for that surface generation, so neither rotation nor a late restore-ready callback can hide the reload action. A temporary tab/navigation disappearance pauses but retains the iframe for a live return; switching the playback source to OSS pauses, destroys, and releases it.
+
+Parent visibility and reload transitions invalidate every pending native player operation before pausing or replacing AVPlayer. A late seek completion therefore cannot restart off-screen audio. Reappearing with an already prepared player restarts only managed-analysis polling and leaves playback readiness unchanged.
 
 For OSS, reload replaces the current `AVPlayerItem` or player with a fresh item created from the current signed video URL. It reattaches readiness, time, caption, end-of-playback, and background-audio observation through the existing `VideoPlayerView` lifecycle.
 
