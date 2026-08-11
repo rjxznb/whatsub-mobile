@@ -19,6 +19,46 @@ enum LibraryDetailRootPresentation: Equatable {
     }
 }
 
+enum LibraryPlayerSource: Equatable {
+    case youtube
+    case oss
+}
+
+enum LibraryPlayerRecoveryAction: Equatable {
+    case rebuildYouTube
+    case refreshDetailThenRebuildAVPlayer
+
+    static func forSource(_ source: LibraryPlayerSource) -> LibraryPlayerRecoveryAction {
+        switch source {
+        case .youtube: return .rebuildYouTube
+        case .oss: return .refreshDetailThenRebuildAVPlayer
+        }
+    }
+}
+
+struct LibraryPlayerErrorPresentation: Equatable {
+    let detail: String
+    let buttonTitle: String
+    let isVPNRelated: Bool
+
+    static func forSource(_ source: LibraryPlayerSource) -> LibraryPlayerErrorPresentation {
+        switch source {
+        case .youtube:
+            return LibraryPlayerErrorPresentation(
+                detail: "请确认 VPN 已开启，然后重新加载",
+                buttonTitle: "重新加载",
+                isVPNRelated: true
+            )
+        case .oss:
+            return LibraryPlayerErrorPresentation(
+                detail: "请检查网络连接，然后重新加载",
+                buttonTitle: "重新加载",
+                isVPNRelated: false
+            )
+        }
+    }
+}
+
 struct LibraryDetailView: View {
     let entryId: String
     @EnvironmentObject var appState: AppState
@@ -29,6 +69,11 @@ struct LibraryDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var playerReady = false
     @State private var playerTimedOut = false
+    @State private var playbackPrepared = false
+    @State private var playbackSession = PlaybackResumeSession(restoredPosition: nil)
+    @State private var playerRestorePosition: Double?
+    @State private var ossReloadGeneration: Int?
+    @State private var playbackPersistenceTask: Task<Void, Never>?
     @State private var showCaptions = true
     /// Owned here (not inside VideoPlayerView) so the AVPlayer survives the
     /// portrait↔landscape rebuild — playback continues across rotation instead
@@ -137,7 +182,16 @@ struct LibraryDetailView: View {
             guard let token = appState.session?.sessionToken else { return }
             await vm.load(id: entryId, token: token)
             let taskIsCancelled = Task.isCancelled
-            guard !taskIsCancelled else { return }
+            guard !taskIsCancelled, vm.entry != nil else { return }
+            let restoredPosition = await PlaybackProgressStore.shared.position(for: entryId)
+            guard !Task.isCancelled else { return }
+            var session = PlaybackResumeSession(restoredPosition: restoredPosition)
+            _ = session.beginReload()
+            playbackSession = session
+            playerRestorePosition = session.resumePosition
+            playerReady = false
+            playerTimedOut = false
+            playbackPrepared = true
             if pollingLifecycle.shouldStart(taskIsCancelled: taskIsCancelled) {
                 vm.startManagedProgress(token: token)
             }
@@ -145,33 +199,27 @@ struct LibraryDetailView: View {
             // so a portrait↔landscape rebuild reuses it (playback continues)
             // rather than spawning a new player from 0.
             if avPlayer == nil, let v = vm.entry?.videoUrl, let url = URL(string: v) {
-                let player = AVPlayer(url: url)
-                // Long OSS videos used to silently swallow the first play() tap
-                // — AVPlayer defaults to .automaticallyWaitsToMinimizeStalling
-                // = true and stays paused-but-loading until "enough" buffer is
-                // built. Users reported tapping play with no response, then
-                // pause-then-play to actually start. Flipping to false makes
-                // play() always respond immediately (may briefly stall if buffer
-                // is truly empty, but the user sees something happen).
-                player.automaticallyWaitsToMinimizeStalling = false
-                avPlayer = player
+                avPlayer = makeAVPlayer(url: url)
             }
         }
         .onChange(of: vm.entry?.videoUrl) { newValue in
             // Replacement completion is discovered by an ordinary detail
             // refresh. Swap from YouTube embed to native AVPlayer once; later
             // signed-URL refreshes must not interrupt current playback.
-            guard avPlayer == nil,
+            guard playbackPrepared,
+                  ossReloadGeneration == nil,
+                  avPlayer == nil,
                   let newValue,
                   let url = URL(string: newValue) else { return }
-            playerReady = false
-            playerTimedOut = false
-            let player = AVPlayer(url: url)
-            player.automaticallyWaitsToMinimizeStalling = false
-            avPlayer = player
+            flushPlaybackProgress()
+            _ = beginPlaybackGeneration()
+            avPlayer = makeAVPlayer(url: url)
         }
         .onChange(of: scenePhase) { phase in
             pollingLifecycle.sceneChanged(isActive: phase == .active)
+            if phase != .active {
+                flushPlaybackProgress()
+            }
             guard let token = appState.session?.sessionToken else { return }
             if phase == .active {
                 guard pollingLifecycle.shouldStart(taskIsCancelled: false) else { return }
@@ -274,6 +322,7 @@ struct LibraryDetailView: View {
         }
         .onDisappear {
             pollingLifecycle.disappear()
+            flushPlaybackProgress()
             avPlayer?.pause()
             youtubeClipPlayback.stop()
             vm.stopManagedProgress()
@@ -284,8 +333,10 @@ struct LibraryDetailView: View {
     /// The video surface + loading state + the caption / CC-toggle overlays.
     /// Sizing (16:9 box vs fullscreen fill) is applied by the caller.
     private func player(_ entry: LibraryEntryDetail, fullscreen: Bool) -> some View {
-        ZStack {
-            if let p = avPlayer {
+        let generation = playbackSession.generation
+        let source: LibraryPlayerSource = entry.videoUrl == nil ? .youtube : .oss
+        return ZStack {
+            if playbackPrepared, let p = avPlayer {
                 VideoPlayerView(
                     player: p,
                     seek: vm.seek,
@@ -303,25 +354,36 @@ struct LibraryDetailView: View {
                     // title without artwork in that case).
                     title: entry.title,
                     thumbURL: URL(string: "https://whatsub.eversay.cc/api/library/thumb/\(entry.id)"),
-                    onReady: { playerReady = true },
-                    onTime: { sec in vm.onPlayerTime(sec) }
+                    onReady: { handlePlayerReady(generation: generation) },
+                    onTime: { sec in handlePlayerTime(sec, generation: generation) },
+                    resumeSeconds: playerRestorePosition,
+                    onFailure: { handlePlayerFailure(generation: generation) },
+                    onEnded: { handlePlayerEnded(generation: generation) }
                 )
-            } else if entry.videoUrl == nil, VideoSource.isLikelyYouTubeId(entry.youtubeId) {
+            } else if playbackPrepared,
+                      entry.videoUrl == nil,
+                      VideoSource.isLikelyYouTubeId(entry.youtubeId) {
                 YouTubeEmbedView(
                     videoId: entry.youtubeId,
                     seek: vm.seek,
-                    onReady: { playerReady = true },
-                    onTime: { sec in vm.onPlayerTime(sec) },
+                    onReady: { handlePlayerReady(generation: generation) },
+                    onTime: { sec in handlePlayerTime(sec, generation: generation) },
+                    resumeSeconds: playerRestorePosition,
                     clipCommand: youtubeClipPlayback.command,
                     replaySnapshot: youtubeClipPlayback.consumerRebuildReplaySnapshot,
-                    onClipEnded: { nonce in youtubeClipPlayback.clipEnded(nonce: nonce) }
+                    onClipEnded: { nonce in youtubeClipPlayback.clipEnded(nonce: nonce) },
+                    onFailure: { handlePlayerFailure(generation: generation) },
+                    onEnded: { handlePlayerEnded(generation: generation) }
                 )
+                .id("youtube-\(entry.id)-\(generation)")
             } else if entry.videoUrl == nil {
                 desktopOnlyPlaceholder
             }
             // (videoUrl present but player not yet created → nothing here; the
             // loading overlay below covers that brief window.)
-            if !playerReady && !isDesktopOnly(entry) { playerOverlay(isYouTube: entry.videoUrl == nil) }
+            if !playerReady && !isDesktopOnly(entry) {
+                playerOverlay(source: source)
+            }
             // Inline CC toggle (top-right). In native fullscreen this SwiftUI
             // overlay isn't shown, so captions there follow the current on/off.
             if playerReady {
@@ -333,9 +395,17 @@ struct LibraryDetailView: View {
             }
         }
         .background(Color.black)
-        .task {
-            try? await Task.sleep(nanoseconds: 15_000_000_000)
-            if !playerReady { playerTimedOut = true }
+        .task(id: generation) {
+            guard playbackPrepared else { return }
+            do {
+                try await Task.sleep(nanoseconds: 15_000_000_000)
+            } catch {
+                return
+            }
+            guard playbackSession.shouldAcceptTimeout(generation: generation) else {
+                return
+            }
+            playerTimedOut = true
         }
     }
 
@@ -349,8 +419,9 @@ struct LibraryDetailView: View {
         }
     }
 
-    private func playerOverlay(isYouTube: Bool) -> some View {
-        ZStack {
+    private func playerOverlay(source: LibraryPlayerSource) -> some View {
+        let presentation = LibraryPlayerErrorPresentation.forSource(source)
+        return ZStack {
             Color.black
             VStack(spacing: 10) {
                 if playerTimedOut {
@@ -360,17 +431,21 @@ struct LibraryDetailView: View {
                     Text("视频加载失败")
                         .font(.callout)
                         .foregroundStyle(.whatsubInk)
-                    Text(isYouTube ? "YouTube 视频需挂 VPN 观看，\n确认 VPN 已开启后重进本页" : "请检查网络后重进本页")
+                    Text(presentation.detail)
                         .font(.caption)
                         .foregroundStyle(.whatsubInkMuted)
                         .multilineTextAlignment(.center)
+                    Button(presentation.buttonTitle) {
+                        reloadActivePlayer()
+                    }
+                    .buttonStyle(.borderedProminent)
                 } else {
                     ProgressView()
                         .tint(.whatsubAccent)
                     Text("视频加载中…")
                         .font(.callout)
                         .foregroundStyle(.whatsubInkSoft)
-                    if isYouTube {
+                    if presentation.isVPNRelated {
                         Text("YouTube 视频需挂 VPN 观看")
                             .font(.caption)
                             .foregroundStyle(.whatsubInkFaint)
@@ -766,6 +841,119 @@ struct LibraryDetailView: View {
             throw DeepGlossPreparationError.failed(failure)
         case .idle, .loading:
             throw DeepGlossPreparationError.profileUnavailable
+        }
+    }
+
+    private func makeAVPlayer(url: URL) -> AVPlayer {
+        let player = AVPlayer(url: url)
+        // Keep the first user play tap responsive on long OSS videos.
+        player.automaticallyWaitsToMinimizeStalling = false
+        return player
+    }
+
+    @discardableResult
+    private func beginPlaybackGeneration() -> Int {
+        let generation = playbackSession.beginReload()
+        playerRestorePosition = playbackSession.resumePosition
+        playerReady = false
+        playerTimedOut = false
+        return generation
+    }
+
+    private func handlePlayerReady(generation: Int) {
+        guard playbackSession.isCurrent(generation: generation) else { return }
+        playbackSession.markReady(generation: generation)
+        playerRestorePosition = nil
+        playerTimedOut = false
+        playerReady = true
+    }
+
+    private func handlePlayerTime(_ seconds: Double, generation: Int) {
+        guard playbackSession.isCurrent(generation: generation) else { return }
+        vm.onPlayerTime(seconds)
+        enqueuePlaybackPersistence(
+            playbackSession.receiveTime(seconds)
+        )
+    }
+
+    private func handlePlayerFailure(generation: Int) {
+        guard playbackSession.isCurrent(generation: generation) else { return }
+        playerReady = false
+        playerTimedOut = true
+    }
+
+    private func handlePlayerEnded(generation: Int) {
+        guard playbackSession.isCurrent(generation: generation) else { return }
+        playerRestorePosition = nil
+        enqueuePlaybackPersistence(playbackSession.markEnded())
+    }
+
+    private func flushPlaybackProgress() {
+        enqueuePlaybackPersistence(playbackSession.forceFlushDecision())
+    }
+
+    private func enqueuePlaybackPersistence(_ decision: PlaybackPersistenceDecision) {
+        guard decision != .none else { return }
+        let previous = playbackPersistenceTask
+        let currentEntryID = entryId
+        playbackPersistenceTask = Task {
+            if let previous {
+                await previous.value
+            }
+            switch decision {
+            case .none:
+                break
+            case .save(let seconds):
+                await PlaybackProgressStore.shared.save(
+                    position: seconds,
+                    for: currentEntryID
+                )
+            case .clear:
+                await PlaybackProgressStore.shared.clear(entryID: currentEntryID)
+            }
+        }
+    }
+
+    private func reloadActivePlayer() {
+        guard playbackPrepared, let entry = vm.entry else { return }
+        flushPlaybackProgress()
+        let source: LibraryPlayerSource = entry.videoUrl == nil ? .youtube : .oss
+        let generation = beginPlaybackGeneration()
+
+        switch LibraryPlayerRecoveryAction.forSource(source) {
+        case .rebuildYouTube:
+            youtubeClipPlayback.stop()
+        case .refreshDetailThenRebuildAVPlayer:
+            avPlayer?.pause()
+            avPlayer = nil
+            ossReloadGeneration = generation
+            let fallbackURL = entry.videoUrl
+            let token = appState.session?.sessionToken
+            Task {
+                var candidateURL = fallbackURL
+                if let token {
+                    do {
+                        let refreshed = try await vm.refreshPlaybackDetail(
+                            id: entryId,
+                            token: token
+                        )
+                        candidateURL = refreshed.videoUrl ?? fallbackURL
+                    } catch {
+                        candidateURL = fallbackURL
+                    }
+                }
+
+                guard playbackSession.isCurrent(generation: generation) else { return }
+                if ossReloadGeneration == generation {
+                    ossReloadGeneration = nil
+                }
+                guard let candidateURL,
+                      let url = URL(string: candidateURL) else {
+                    handlePlayerFailure(generation: generation)
+                    return
+                }
+                avPlayer = makeAVPlayer(url: url)
+            }
         }
     }
 

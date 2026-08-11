@@ -581,6 +581,19 @@ final class LibraryDetailViewModel: ObservableObject {
         seek = SeekRequest(seconds: seconds, nonce: UUID())
     }
 
+    /// Refreshes the signed playback URL without entering page loading,
+    /// polling the desktop queue, or restarting managed analysis work.
+    @discardableResult
+    func refreshPlaybackDetail(
+        id: String,
+        token: String
+    ) async throws -> LibraryEntryDetail {
+        let refreshed = try await replacementAPI.libraryEntry(id: id, token: token)
+        try Task.checkCancellation()
+        entry = refreshed
+        return refreshed
+    }
+
     // MARK: - Video learning guide
 
     /// Starts at most one lazy summary/PATCH task for this detail view. A

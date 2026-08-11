@@ -37,6 +37,20 @@ still seeks the player and never creates a duplicate pending collection.
 The feature has no numeric score, rating, percentage, or rank, and it adds no
 new entitlement gate; it uses only the existing managed-relay/BYOK behavior.
 
+## Library player reload and local resume
+
+Library playback stores the latest position locally by Library entry ID. Both
+the VPN-dependent YouTube iframe and VPN-free OSS `AVPlayer` restore that
+position while paused, so reopening a video never autoplays. Progress is cleared
+only when the active player explicitly reports that the video ended; leaving the
+page, backgrounding, buffering, timeout, and failure all preserve it.
+
+The loading error surface has an in-place `重新加载` action for both sources.
+YouTube retry constructs a fresh WKWebView/iframe. OSS retry reads the existing
+Library detail endpoint once to refresh a possibly expired signed URL, then
+constructs a fresh AVPlayer item. Playback progress remains local-only, is
+atomically stored under Application Support, and is bounded to 500 entries.
+
 ## Local dev (on Apple Silicon Mac with Xcode)
 
 ```bash

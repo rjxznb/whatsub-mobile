@@ -40,6 +40,10 @@ struct PlaybackResumeSession: Equatable {
         generation == self.generation && readyGeneration != generation
     }
 
+    func isCurrent(generation: Int) -> Bool {
+        generation == self.generation
+    }
+
     mutating func receiveTime(
         _ position: Double,
         now: Date = Date()
