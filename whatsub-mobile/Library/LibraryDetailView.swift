@@ -65,6 +65,7 @@ struct LibraryDetailView: View {
     @StateObject private var vm = LibraryDetailViewModel()
     @StateObject private var pollingLifecycle = LibraryDetailPollingLifecycle()
     @StateObject private var youtubeClipPlayback = YouTubeClipPlaybackController()
+    @StateObject private var youtubeSurface = YouTubeWebViewSurface()
     @Environment(\.verticalSizeClass) private var vSize
     @Environment(\.scenePhase) private var scenePhase
     @State private var playerReady = false
@@ -365,7 +366,9 @@ struct LibraryDetailView: View {
                     resumeSeconds: playerRestorePosition,
                     onFailure: { handlePlayerFailure(generation: generation) },
                     onEnded: { handlePlayerEnded(generation: generation) },
-                    onPlaying: { handlePlayerPlaying(generation: generation) }
+                    onPlaying: { handlePlayerPlaying(generation: generation) },
+                    reusableSurface: youtubeSurface,
+                    surfaceKey: "\(entry.id)-\(generation)"
                 )
             } else if playbackPrepared,
                       entry.videoUrl == nil,
