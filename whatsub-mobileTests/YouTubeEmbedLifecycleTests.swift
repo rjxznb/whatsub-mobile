@@ -91,4 +91,12 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         XCTAssertTrue(html.contains("window.whatsubRestoreRevision += 1"))
         XCTAssertTrue(html.contains("window.player.playVideo()"))
     }
+
+    func testReusableSurfaceSurvivesRotationButReloadGenerationRebuildsIt() {
+        var state = YouTubeSurfaceReuseState()
+
+        XCTAssertEqual(state.action(for: "entry-1-generation-1"), .rebuild)
+        XCTAssertEqual(state.action(for: "entry-1-generation-1"), .reuse)
+        XCTAssertEqual(state.action(for: "entry-1-generation-2"), .rebuild)
+    }
 }
