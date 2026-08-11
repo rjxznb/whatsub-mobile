@@ -36,12 +36,54 @@ struct AnalysisCheckpoint: Codable {
     private(set) var completedSummary: AnalysisSummary?
     var updatedAt: Date
 
+    private enum CodingKeys: String, CodingKey {
+        case version, fingerprint, batches, completedSummary, updatedAt
+    }
+
     init(fingerprint: String, updatedAt: Date = Date()) {
         version = Self.schemaVersion
         self.fingerprint = fingerprint
         batches = []
         completedSummary = nil
         self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        fingerprint = try container.decode(String.self, forKey: .fingerprint)
+        batches = try container.decode([CompletedBatch].self, forKey: .batches)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+
+        guard container.contains(.completedSummary),
+              !(try container.decodeNil(forKey: .completedSummary)) else {
+            completedSummary = nil
+            return
+        }
+        // Version-1 raw arrays, including [], represented a completed request.
+        if let legacy = try? container.decode([KeyPhrase].self, forKey: .completedSummary) {
+            completedSummary = AnalysisSummary(
+                keyPhrases: legacy,
+                learningGuide: nil,
+                contextProfile: nil
+            )
+        } else {
+            let summary = try container.decode(AnalysisSummary.self, forKey: .completedSummary)
+            completedSummary = summary.keyPhrases.isEmpty
+                && summary.learningGuide == nil
+                && summary.contextProfile == nil
+                ? nil
+                : summary
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(fingerprint, forKey: .fingerprint)
+        try container.encode(batches, forKey: .batches)
+        try container.encodeIfPresent(completedSummary, forKey: .completedSummary)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     var completedBatches: [Int: [Cue]] {
@@ -84,13 +126,6 @@ struct AnalysisCheckpoint: Codable {
 
     func validated(sourceCues: [Cue]) throws -> AnalysisCheckpoint {
         guard version == Self.schemaVersion else { throw AnalysisCheckpointError.corruptCheckpoint }
-        var normalized = self
-        if let summary = normalized.completedSummary,
-           summary.keyPhrases.isEmpty,
-           summary.learningGuide == nil,
-           summary.contextProfile == nil {
-            normalized.completedSummary = nil
-        }
         var seen = Set<Int>()
         for batch in batches {
             guard seen.insert(batch.index).inserted else {
@@ -99,11 +134,11 @@ struct AnalysisCheckpoint: Codable {
             var validator = AnalysisCheckpoint(fingerprint: fingerprint)
             try validator.recordBatch(index: batch.index, result: batch.cues, sourceCues: sourceCues)
         }
-        if normalized.completedSummary != nil {
+        if completedSummary != nil {
             let expected = Set(AnalysisEngine.batches(sourceCues).indices)
             guard seen == expected else { throw AnalysisCheckpointError.corruptCheckpoint }
         }
-        return normalized
+        return self
     }
 
     private static func sameSource(_ lhs: Cue, _ rhs: Cue) -> Bool {
