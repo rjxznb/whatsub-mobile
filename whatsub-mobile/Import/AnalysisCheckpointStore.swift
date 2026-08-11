@@ -84,6 +84,13 @@ struct AnalysisCheckpoint: Codable {
 
     func validated(sourceCues: [Cue]) throws -> AnalysisCheckpoint {
         guard version == Self.schemaVersion else { throw AnalysisCheckpointError.corruptCheckpoint }
+        var normalized = self
+        if let summary = normalized.completedSummary,
+           summary.keyPhrases.isEmpty,
+           summary.learningGuide == nil,
+           summary.contextProfile == nil {
+            normalized.completedSummary = nil
+        }
         var seen = Set<Int>()
         for batch in batches {
             guard seen.insert(batch.index).inserted else {
@@ -92,11 +99,11 @@ struct AnalysisCheckpoint: Codable {
             var validator = AnalysisCheckpoint(fingerprint: fingerprint)
             try validator.recordBatch(index: batch.index, result: batch.cues, sourceCues: sourceCues)
         }
-        if completedSummary != nil {
+        if normalized.completedSummary != nil {
             let expected = Set(AnalysisEngine.batches(sourceCues).indices)
             guard seen == expected else { throw AnalysisCheckpointError.corruptCheckpoint }
         }
-        return self
+        return normalized
     }
 
     private static func sameSource(_ lhs: Cue, _ rhs: Cue) -> Bool {
