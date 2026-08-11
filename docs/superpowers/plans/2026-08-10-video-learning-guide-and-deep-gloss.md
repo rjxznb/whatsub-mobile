@@ -99,8 +99,41 @@ describe('video learning guide contract', () => {
     expect(parsed).not.toHaveProperty('score');
   });
 
-  it('rejects extra score keys and out-of-range segments', () => {
-    expect(() => parseLearningGuideDraft({ score: 8.4 }, 20, [])).toThrow();
+  it('rejects a numeric score added to an otherwise valid guide', () => {
+    const valid = {
+      verdict: 'select_segments',
+      overview: '这段访谈通过自然对话展示人物如何先认可对方观点，再用缓和语气委婉表达不同意见，并维持轻松友好的交流氛围。',
+      contentOutline: ['先说明讨论背景和人物之间的关系', '再展示缓和分歧时常用的自然表达'],
+      cefrLevel: 'B2',
+      cefrReason: '语速自然，并包含需要结合上下文和说话语气理解的委婉表达。',
+      recommendedFor: ['希望提升真实会话理解的学习者'],
+      learningReasons: ['包含可直接迁移到讨论场景的表达'],
+      cultureNotes: [],
+      studyTips: ['先盲听，再跟读推荐片段'],
+      topSegments: [{
+        startTime: 10, endTime: 14, title: '委婉认同',
+        reason: '展示先认可再表达分歧的方式', focusExpressions: ['see your point'],
+      }],
+    };
+    expect(() => parseLearningGuideDraft({ ...valid, score: 8.4 }, 20, [{ start: 10, end: 14 }])).toThrow();
+  });
+
+  it('rejects an otherwise valid guide whose segment exceeds the video duration', () => {
+    expect(() => parseLearningGuideDraft({
+      verdict: 'select_segments',
+      overview: '这段访谈通过自然对话展示人物如何先认可对方观点，再用缓和语气委婉表达不同意见，并维持轻松友好的交流氛围。',
+      contentOutline: ['先说明讨论背景和人物之间的关系', '再展示缓和分歧时常用的自然表达'],
+      cefrLevel: 'B2',
+      cefrReason: '语速自然，并包含需要结合上下文和说话语气理解的委婉表达。',
+      recommendedFor: ['希望提升真实会话理解的学习者'],
+      learningReasons: ['包含可直接迁移到讨论场景的表达'],
+      cultureNotes: [],
+      studyTips: ['先盲听，再跟读推荐片段'],
+      topSegments: [{
+        startTime: 10, endTime: 21, title: '委婉认同',
+        reason: '展示先认可再表达分歧的方式', focusExpressions: ['see your point'],
+      }],
+    }, 20, [{ start: 10, end: 14 }])).toThrow();
   });
 
   it('allows empty unsupported cultural context', () => {
