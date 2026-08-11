@@ -7,11 +7,16 @@ struct WordGloss: Identifiable {
     let word: String
     let translation: String?
     let note: String?
-    /// Optional save context. When non-nil, the GlossSheet shows a 加入暂存
-    /// button that builds a `PendingPhrase` with this metadata. When nil
-    /// (import preview, where the entry doesn't exist yet), the button is
-    /// hidden so users don't see a non-functional CTA.
-    let saveContext: SaveContext?
+    let sourceContext: SourceContext?
+    let collectionState: CollectionState
+
+    struct SourceContext {
+        let title: String
+        let analysisFingerprint: String
+        let profile: VideoContextProfile?
+        let cues: [Cue]
+        let currentCueIndex: Int
+    }
 
     struct SaveContext {
         let entryId: String
@@ -20,19 +25,40 @@ struct WordGloss: Identifiable {
         let contextSentence: String
         let timestampSec: Double
     }
+
+    enum CollectionState {
+        case collectable(SaveContext)
+        case alreadyCollected
+        case unavailable
+    }
 }
 
 /// A quick, read-only 释义 box for ONE tapped highlight phrase — shown when the
 /// user single-taps a highlighted word (which intercepts the seek). Compact
 /// bottom sheet with pronunciation and one-tap pending collection.
 struct GlossSheet: View {
+    typealias EnsureProfile = DeepGlossViewModel.EnsureProfile
+
     let gloss: WordGloss
+    let ensureProfile: EnsureProfile?
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: HighlightWordCardModel
+    @StateObject private var deepGlossModel: DeepGlossViewModel
+    @State private var selectedDetent: PresentationDetent = .large
 
-    init(gloss: WordGloss) {
+    init(
+        gloss: WordGloss,
+        settings: LlmSettings = LlmSettingsStore.load(),
+        token: String = KeychainStore.load()?.sessionToken ?? "",
+        ensureProfile: EnsureProfile? = nil
+    ) {
         self.gloss = gloss
+        self.ensureProfile = ensureProfile
         _model = StateObject(wrappedValue: HighlightWordCardModel(gloss: gloss))
+        _deepGlossModel = StateObject(wrappedValue: DeepGlossViewModel(
+            settings: settings,
+            token: token
+        ))
     }
 
     var body: some View {
@@ -70,10 +96,12 @@ struct GlossSheet: View {
                     if (gloss.translation?.isEmpty ?? true) && (gloss.note?.isEmpty ?? true) {
                         Text("（暂无释义）").font(.footnote).foregroundStyle(.whatsubInkMuted)
                     }
-                    if gloss.saveContext != nil {
+                    if showsCollectionControl {
                         saveButton
                             .padding(.top, 8)
                     }
+                    deepGlossContent
+                        .padding(.top, 8)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
@@ -90,9 +118,19 @@ struct GlossSheet: View {
         }
         .onDisappear {
             model.disappear()
+            deepGlossModel.cancel()
         }
-        .presentationDetents([.height(340)])
+        .presentationDetents([.height(340), .large], selection: $selectedDetent)
         .presentationDragIndicator(.visible)
+    }
+
+    private var showsCollectionControl: Bool {
+        switch gloss.collectionState {
+        case .collectable, .alreadyCollected:
+            return true
+        case .unavailable:
+            return false
+        }
     }
 
     /// 收藏 — one-tap pending collection. Builds a PendingPhrase from
@@ -116,7 +154,79 @@ struct GlossSheet: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(model.saved ? Color.green : Color.whatsubAccent)
-        .disabled(model.saved)
+        .disabled(!model.canCollect)
+    }
+
+    @ViewBuilder
+    private var deepGlossContent: some View {
+        switch deepGlossModel.phase {
+        case .idle:
+            deepGlossButton(title: "深度解读", systemImage: "sparkles")
+        case .preparingContext:
+            loadingRow("正在准备视频语境…")
+        case .loading:
+            loadingRow("正在深度解读…")
+        case .loaded:
+            if let result = deepGlossModel.result {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(
+                        Array(DeepGlossPresentation.visibleSections(for: result).enumerated()),
+                        id: \.offset
+                    ) { _, section in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(section.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.whatsubInk)
+                            Text(section.content)
+                                .font(.body)
+                                .foregroundStyle(.whatsubInkSoft)
+                        }
+                    }
+                }
+            }
+        case .analysisChanged:
+            retryBlock("字幕解析已更新，请基于最新字幕重试。")
+        case .fingerprintUnavailable:
+            retryBlock("视频解析版本还没准备好，请刷新后重试。")
+        case .failed(let failure):
+            retryBlock(failure.message)
+        }
+    }
+
+    private func deepGlossButton(title: String, systemImage: String) -> some View {
+        Button {
+            selectedDetent = .large
+            Task {
+                await deepGlossModel.load(gloss: gloss, ensureProfile: ensureProfile)
+            }
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+        }
+        .buttonStyle(.bordered)
+        .tint(.whatsubAccent)
+    }
+
+    private func loadingRow(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkSoft)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+    }
+
+    private func retryBlock(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.red)
+            deepGlossButton(title: "重试深度解读", systemImage: "arrow.clockwise")
+        }
     }
 
     private func performSave() {

@@ -13,6 +13,11 @@ final class HighlightWordCardModel: ObservableObject {
     private let stop: () -> Void
     private var didAutoSpeak = false
 
+    var canCollect: Bool {
+        guard case .collectable = gloss.collectionState else { return false }
+        return !saved
+    }
+
     init(
         gloss: WordGloss,
         store: PendingPhraseStore = .shared,
@@ -25,9 +30,12 @@ final class HighlightWordCardModel: ObservableObject {
         self.speak = speak
         self.stop = stop
         self.ipa = ipaLookup(gloss.word)
-        if let context = gloss.saveContext {
+        switch gloss.collectionState {
+        case .collectable(let context):
             self.saved = store.contains(entryId: context.entryId, phraseRaw: gloss.word)
-        } else {
+        case .alreadyCollected:
+            self.saved = true
+        case .unavailable:
             self.saved = false
         }
     }
@@ -52,7 +60,8 @@ final class HighlightWordCardModel: ObservableObject {
     /// this to avoid duplicate success haptics when a phrase was already saved.
     @discardableResult
     func collect() -> Bool {
-        guard let context = gloss.saveContext, !saved else { return false }
+        guard case .collectable(let context) = gloss.collectionState,
+              !saved else { return false }
         let trimmedNote = (gloss.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedMeaning = (gloss.translation ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let pending = PendingPhrase(

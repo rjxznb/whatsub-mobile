@@ -218,7 +218,14 @@ struct LibraryDetailView: View {
             )
         }
         .sheet(item: $glossWord) { g in
-            GlossSheet(gloss: g)
+            GlossSheet(
+                gloss: g,
+                settings: LlmSettingsStore.load(),
+                token: appState.session?.sessionToken ?? "",
+                ensureProfile: {
+                    try await ensureDeepGlossProfile(for: g)
+                }
+            )
         }
         .sheet(item: $shadowCue) { cue in
             // Pass the small audio sidecar URL when available (preferred since
@@ -719,6 +726,55 @@ struct LibraryDetailView: View {
         Task { await vm.generateGuide(settings: settings, token: token) }
     }
 
+    /// Reuses Task 6's single-flight guide generator. The accepted profile is
+    /// already written back to `vm.entry` before this returns; a 409 refresh
+    /// deliberately throws so DeepGloss stops and waits for an explicit retry.
+    @MainActor
+    private func ensureDeepGlossProfile(
+        for gloss: WordGloss
+    ) async throws -> WordGloss.SourceContext {
+        guard let token = appState.session?.sessionToken else {
+            throw DeepGlossPreparationError.failed(RemoteFailure(
+                message: "登录信息过期了，重新登录一下就好。"
+            ))
+        }
+        await vm.generateGuide(settings: LlmSettingsStore.load(), token: token)
+        switch vm.guidePhase {
+        case .ready:
+            guard let entry = vm.entry,
+                  entry.analysisJson.contextProfile != nil else {
+                throw DeepGlossPreparationError.profileUnavailable
+            }
+            let anchorTime = gloss.sourceContext.flatMap { source -> Double? in
+                guard source.cues.indices.contains(source.currentCueIndex) else { return nil }
+                return source.cues[source.currentCueIndex].time
+            }
+            let currentIndex = nearestCueIndex(to: anchorTime, in: vm.displayedCues)
+            return WordGloss.SourceContext(
+                title: entry.title,
+                analysisFingerprint: entry.analysisFingerprint,
+                profile: entry.analysisJson.contextProfile,
+                cues: vm.displayedCues,
+                currentCueIndex: currentIndex
+            )
+        case .analysisChanged:
+            throw DeepGlossPreparationError.analysisChanged
+        case .fingerprintUnavailable:
+            throw DeepGlossPreparationError.fingerprintUnavailable
+        case .failed(let failure):
+            throw DeepGlossPreparationError.failed(failure)
+        case .idle, .loading:
+            throw DeepGlossPreparationError.profileUnavailable
+        }
+    }
+
+    private func nearestCueIndex(to anchorTime: Double?, in cues: [Cue]) -> Int {
+        guard let anchorTime, !cues.isEmpty else { return 0 }
+        return cues.indices.min(by: {
+            abs(cues[$0].time - anchorTime) < abs(cues[$1].time - anchorTime)
+        }) ?? 0
+    }
+
     // Landscape = fullscreen: the player fills the screen (video letterboxed on
     // black); the on-video caption overlay is the reading surface here (no list).
     private func landscape(
@@ -790,20 +846,30 @@ struct LibraryDetailView: View {
                                 // shortcut for users who like the highlight
                                 // gloss and want to collect it without going
                                 // through the long-press CollectSheet flow.
-                                glossWord = WordGloss(
-                                    word: w,
-                                    translation: t,
-                                    note: n,
-                                    saveContext: vm.entry.map { e in
-                                        WordGloss.SaveContext(
-                                            entryId: e.id,
-                                            videoTitle: e.title,
-                                            youtubeId: e.youtubeId,
+                                if let entry = vm.entry {
+                                    let currentCueIndex = vm.displayedCues.firstIndex(where: {
+                                        $0.index == cue.index
+                                    }) ?? 0
+                                    glossWord = WordGloss(
+                                        word: w,
+                                        translation: t,
+                                        note: n,
+                                        sourceContext: WordGloss.SourceContext(
+                                            title: entry.title,
+                                            analysisFingerprint: entry.analysisFingerprint,
+                                            profile: entry.analysisJson.contextProfile,
+                                            cues: vm.displayedCues,
+                                            currentCueIndex: currentCueIndex
+                                        ),
+                                        collectionState: .collectable(WordGloss.SaveContext(
+                                            entryId: entry.id,
+                                            videoTitle: entry.title,
+                                            youtubeId: entry.youtubeId,
                                             contextSentence: cue.text,
                                             timestampSec: cue.time
-                                        )
-                                    }
-                                )
+                                        ))
+                                    )
+                                }
                             },
                             onCollect: { collectCue = cue },
                             onShadow: {
