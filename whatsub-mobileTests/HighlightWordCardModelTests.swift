@@ -43,9 +43,11 @@ final class HighlightWordCardModelTests: XCTestCase {
     func testCollectWritesOnceAndReportsSaved() {
         let model = makeModel()
 
+        XCTAssertTrue(model.canCollect)
         XCTAssertFalse(model.saved)
         XCTAssertTrue(model.collect())
         XCTAssertTrue(model.saved)
+        XCTAssertFalse(model.canCollect)
         XCTAssertFalse(model.collect())
         XCTAssertEqual(store.total, 1)
 
@@ -53,6 +55,24 @@ final class HighlightWordCardModelTests: XCTestCase {
         XCTAssertTrue(reopened.saved)
         XCTAssertFalse(reopened.collect())
         XCTAssertEqual(store.total, 1)
+    }
+
+    func testAlreadyCollectedStateIsSavedAndCannotCreatePendingDuplicate() {
+        let model = makeModel(collectionState: .alreadyCollected)
+
+        XCTAssertTrue(model.saved)
+        XCTAssertFalse(model.canCollect)
+        XCTAssertFalse(model.collect())
+        XCTAssertEqual(store.total, 0)
+    }
+
+    func testUnavailableStateIsNotSavedAndCannotCollect() {
+        let model = makeModel(collectionState: .unavailable)
+
+        XCTAssertFalse(model.saved)
+        XCTAssertFalse(model.canCollect)
+        XCTAssertFalse(model.collect())
+        XCTAssertEqual(store.total, 0)
     }
 
     func testInitializationLooksUpIPAForTheHighlightedPhrase() {
@@ -68,22 +88,25 @@ final class HighlightWordCardModelTests: XCTestCase {
     }
 
     private func makeModel(
+        collectionState: WordGloss.CollectionState? = nil,
         speak: @escaping (String) -> Void = { _ in },
         stop: @escaping () -> Void = {},
         ipaLookup: @escaping (String) -> String? = { _ in nil }
     ) -> HighlightWordCardModel {
+        let saveContext = WordGloss.SaveContext(
+            entryId: "video-a",
+            videoTitle: "Test video",
+            youtubeId: "test-id",
+            contextSentence: "They said welcome back.",
+            timestampSec: 12.5
+        )
         HighlightWordCardModel(
             gloss: WordGloss(
                 word: "welcome back",
                 translation: "欢迎回来",
                 note: "用于欢迎某人回来。",
-                saveContext: WordGloss.SaveContext(
-                    entryId: "video-a",
-                    videoTitle: "Test video",
-                    youtubeId: "test-id",
-                    contextSentence: "They said welcome back.",
-                    timestampSec: 12.5
-                )
+                sourceContext: nil,
+                collectionState: collectionState ?? .collectable(saveContext)
             ),
             store: store,
             speak: speak,
