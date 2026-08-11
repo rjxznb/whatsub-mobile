@@ -24,6 +24,15 @@ enum LibraryPlayerSource: Equatable {
     case oss
 }
 
+enum LibraryPlaybackPreparationAction: Equatable {
+    case prepare
+    case resumeExisting
+
+    static func forPrepared(_ isPrepared: Bool) -> LibraryPlaybackPreparationAction {
+        isPrepared ? .resumeExisting : .prepare
+    }
+}
+
 struct LibraryPlaybackReloadState: Equatable {
     private(set) var activeGeneration: Int?
 
@@ -204,6 +213,12 @@ struct LibraryDetailView: View {
         .statusBarHidden(isLandscape)
         .task {
             guard let token = appState.session?.sessionToken else { return }
+            if LibraryPlaybackPreparationAction.forPrepared(playbackPrepared) == .resumeExisting {
+                if pollingLifecycle.shouldStart(taskIsCancelled: Task.isCancelled) {
+                    vm.startManagedProgress(token: token)
+                }
+                return
+            }
             await vm.load(id: entryId, token: token)
             let taskIsCancelled = Task.isCancelled
             guard !taskIsCancelled, vm.entry != nil else { return }
@@ -364,9 +379,11 @@ struct LibraryDetailView: View {
             if let generation = ossReloadState.activeGeneration {
                 ossReloadState.cancel(generation: generation)
             }
+            avOperationOwner.cancelAll()
+            playerSeekState.cancelPending()
             avPlayer?.pause()
             youtubeClipPlayback.stop()
-            youtubeSurface.deactivate()
+            youtubeSurface.pause()
             vm.stopManagedProgress()
             vm.cancelGuideGeneration()
         }
@@ -906,6 +923,8 @@ struct LibraryDetailView: View {
 
     @discardableResult
     private func beginPlaybackGeneration() -> Int {
+        avOperationOwner.cancelAll()
+        playerSeekState.cancelPending()
         let generation = playbackSession.beginReload()
         playerRestorePosition = playbackSession.resumePosition
         playerReady = false
@@ -931,6 +950,7 @@ struct LibraryDetailView: View {
 
     private func handlePlayerFailure(generation: Int) {
         guard playbackSession.isCurrent(generation: generation) else { return }
+        avOperationOwner.cancelAll()
         playerReady = false
         playerTimedOut = true
     }

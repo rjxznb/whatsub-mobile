@@ -99,6 +99,10 @@ struct PlayerSeekCommandState: Equatable {
         pending = nil
         return true
     }
+
+    mutating func cancelPending() {
+        pending = nil
+    }
 }
 
 struct PlayerOperationRevision: Equatable {
@@ -140,6 +144,12 @@ final class PlayerOperationOwner {
         guard revision == token else { return false }
         revision += 1
         return true
+    }
+
+    func cancelAll() {
+        lock.lock()
+        revision += 1
+        lock.unlock()
     }
 }
 

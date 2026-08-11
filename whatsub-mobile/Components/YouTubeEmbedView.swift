@@ -63,6 +63,10 @@ struct YouTubeSurfaceReuseState: Equatable {
         return .reuse
     }
 
+    func pause() -> Bool {
+        isActive
+    }
+
     @discardableResult
     mutating func deactivate() -> Bool {
         guard isActive else { return false }
@@ -105,6 +109,14 @@ struct YouTubeBridgeHandoffState: Equatable {
         _ event: YouTubeBridgeEvent,
         hasConsumer: Bool
     ) -> [YouTubeBridgeEvent] {
+        if failed {
+            switch event {
+            case .surfaceReady, .ready:
+                return []
+            default:
+                break
+            }
+        }
         switch event {
         case .surfaceReady:
             surfaceReady = true
@@ -631,6 +643,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
                   }
                 },
                 onError: function() {
+                  window.whatsubRestoreRevision += 1;
                   try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'failure' }); } catch (e) {}
                 }
               }
@@ -680,6 +693,17 @@ final class YouTubeWebViewSurface: ObservableObject {
 
     func release(coordinator: YouTubeEmbedView.Coordinator) {
         bridgeProxy?.unbind(coordinator)
+    }
+
+    /// Temporary visibility loss (tab switch/navigation cover) should stop
+    /// audio without destroying the iframe needed when the view returns.
+    func pause() {
+        guard reuseState.pause(), let webView else { return }
+        webView.evaluateJavaScript("""
+        (function() {
+          if (window.player && window.player.pauseVideo) { window.player.pauseVideo(); }
+        })()
+        """)
     }
 
     /// Permanently leaves the current playback path. Rotation deliberately
