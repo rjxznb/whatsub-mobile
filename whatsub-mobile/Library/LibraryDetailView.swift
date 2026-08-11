@@ -92,6 +92,7 @@ struct LibraryDetailView: View {
     @State private var playbackPrepared = false
     @State private var playbackSession = PlaybackResumeSession(restoredPosition: nil)
     @State private var playerRestorePosition: Double?
+    @State private var playerSeekState = PlayerSeekCommandState()
     @State private var activePlayerSource: LibraryPlayerSource?
     @State private var ossReloadState = LibraryPlaybackReloadState()
     @State private var ossReloadTask: Task<Void, Never>?
@@ -241,6 +242,10 @@ struct LibraryDetailView: View {
         }
         .onChange(of: vm.seek) { request in
             guard let request else { return }
+            playerSeekState.submit(request)
+            // Explicit user intent supersedes passive restoration for any
+            // coordinator that SwiftUI may create before consumption.
+            playerRestorePosition = nil
             enqueuePlaybackPersistence(
                 playbackSession.markExplicitSeek(request.seconds)
             )
@@ -373,7 +378,7 @@ struct LibraryDetailView: View {
             if playbackPrepared, source == .oss, let p = avPlayer {
                 VideoPlayerView(
                     player: p,
-                    seek: vm.seek,
+                    seek: playerSeekState.pending,
                     currentCue: vm.currentCue,
                     showCaptions: showCaptions,
                     // Feed Now Playing center metadata for the lock-screen
@@ -393,14 +398,17 @@ struct LibraryDetailView: View {
                     resumeSeconds: playerRestorePosition,
                     onFailure: { handlePlayerFailure(generation: generation) },
                     onEnded: { handlePlayerEnded(generation: generation) },
-                    onPlaying: { handlePlayerPlaying(generation: generation) }
+                    onPlaying: { handlePlayerPlaying(generation: generation) },
+                    onSeekConsumed: { nonce in
+                        handlePlayerSeekConsumed(nonce, generation: generation)
+                    }
                 )
             } else if playbackPrepared,
                       source == .youtube,
                       VideoSource.isLikelyYouTubeId(entry.youtubeId) {
                 YouTubeEmbedView(
                     videoId: entry.youtubeId,
-                    seek: vm.seek,
+                    seek: playerSeekState.pending,
                     onReady: { handlePlayerReady(generation: generation) },
                     onTime: { sec in handlePlayerTime(sec, generation: generation) },
                     resumeSeconds: playerRestorePosition,
@@ -410,6 +418,9 @@ struct LibraryDetailView: View {
                     onFailure: { handlePlayerFailure(generation: generation) },
                     onEnded: { handlePlayerEnded(generation: generation) },
                     onPlaying: { handlePlayerPlaying(generation: generation) },
+                    onSeekConsumed: { nonce in
+                        handlePlayerSeekConsumed(nonce, generation: generation)
+                    },
                     reusableSurface: youtubeSurface,
                     surfaceKey: "\(entry.id)-\(generation)"
                 )
@@ -929,6 +940,11 @@ struct LibraryDetailView: View {
     private func handlePlayerPlaying(generation: Int) {
         guard playbackSession.isCurrent(generation: generation) else { return }
         playbackSession.markPlaying()
+    }
+
+    private func handlePlayerSeekConsumed(_ nonce: UUID, generation: Int) {
+        guard playbackSession.isCurrent(generation: generation) else { return }
+        _ = playerSeekState.consume(nonce: nonce)
     }
 
     private func flushPlaybackProgress() {

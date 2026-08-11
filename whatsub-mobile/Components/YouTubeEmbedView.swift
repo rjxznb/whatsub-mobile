@@ -62,6 +62,137 @@ struct YouTubeSurfaceReuseState: Equatable {
     }
 }
 
+enum YouTubeRestorePolicy {
+    /// Defensive ceiling for corrupt legacy values before they cross the
+    /// Swift/JavaScript boundary. Real Library videos are capped far below it.
+    static let maximumSeconds: Double = 7 * 24 * 60 * 60
+
+    static func target(savedSeconds: Double, durationSeconds: Double?) -> Double {
+        guard savedSeconds.isFinite, savedSeconds >= 0 else { return 0 }
+        let saved = min(savedSeconds, maximumSeconds)
+        guard let durationSeconds,
+              durationSeconds.isFinite,
+              durationSeconds > 0 else { return saved }
+        return min(saved, max(0, durationSeconds - 0.25))
+    }
+}
+
+struct YouTubeBridgeHandoffSnapshot: Equatable {
+    let surfaceReady: Bool
+    let playerReady: Bool
+    let queuedEvents: [YouTubeBridgeEvent]
+}
+
+/// Keeps readiness and non-idempotent events alive during the tiny interval
+/// between dismantling one SwiftUI container and binding the next one.
+struct YouTubeBridgeHandoffState: Equatable {
+    private var surfaceReady = false
+    private var playerReady = false
+    private var queuedEvents: [YouTubeBridgeEvent] = []
+
+    mutating func record(
+        _ event: YouTubeBridgeEvent,
+        hasConsumer: Bool
+    ) -> [YouTubeBridgeEvent] {
+        switch event {
+        case .surfaceReady:
+            surfaceReady = true
+        case .ready:
+            surfaceReady = true
+            playerReady = true
+        default:
+            break
+        }
+
+        guard !hasConsumer else { return [event] }
+        switch event {
+        case .playing, .clipEnded, .failure, .ended:
+            queuedEvents.append(event)
+            if queuedEvents.count > 8 {
+                queuedEvents.removeFirst(queuedEvents.count - 8)
+            }
+        case .surfaceReady, .ready, .time:
+            break
+        }
+        return []
+    }
+
+    mutating func bind() -> YouTubeBridgeHandoffSnapshot {
+        let snapshot = YouTubeBridgeHandoffSnapshot(
+            surfaceReady: surfaceReady,
+            playerReady: playerReady,
+            queuedEvents: queuedEvents
+        )
+        queuedEvents.removeAll(keepingCapacity: true)
+        return snapshot
+    }
+}
+
+/// Installed once for the lifetime of a WKWebView. The active SwiftUI
+/// coordinator may change across rotation, but JavaScript never loses its
+/// `iosBridge` message target.
+final class YouTubeBridgeProxy: NSObject, WKScriptMessageHandler {
+    private weak var coordinator: YouTubeEmbedView.Coordinator?
+    private var handoffState = YouTubeBridgeHandoffState()
+
+    func bind(_ coordinator: YouTubeEmbedView.Coordinator) {
+        self.coordinator = coordinator
+        let snapshot = handoffState.bind()
+        coordinator.adoptReusableSurface(
+            surfaceReady: snapshot.surfaceReady,
+            playerReady: snapshot.playerReady
+        )
+        snapshot.queuedEvents.forEach { coordinator.receive($0) }
+    }
+
+    func unbind(_ coordinator: YouTubeEmbedView.Coordinator) {
+        guard self.coordinator === coordinator else { return }
+        self.coordinator = nil
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard message.name == "iosBridge",
+              let event = YouTubeBridgeEvent.decode(message.body) else { return }
+        for eventToDeliver in handoffState.record(
+            event,
+            hasConsumer: coordinator != nil
+        ) {
+            coordinator?.receive(eventToDeliver)
+        }
+    }
+}
+
+/// SwiftUI owns a fresh lightweight container per representable lifecycle;
+/// the reusable WKWebView is moved between containers without being destroyed.
+final class YouTubeWebViewContainer: UIView {
+    private(set) weak var webView: WKWebView?
+
+    func attach(_ webView: WKWebView) {
+        guard self.webView !== webView || webView.superview !== self else { return }
+        self.webView?.removeFromSuperview()
+        webView.removeFromSuperview()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            webView.topAnchor.constraint(equalTo: topAnchor),
+            webView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        self.webView = webView
+    }
+
+    func detach() {
+        if webView?.superview === self {
+            webView?.removeFromSuperview()
+        }
+        webView = nil
+    }
+}
+
 /// Embeds a YouTube video via the official IFrame Player API in a WKWebView.
 /// Bridge: Swift→JS `player.seekTo`; JS→Swift current time every 250ms via
 /// `window.webkit.messageHandlers.iosBridge.postMessage`.
@@ -91,6 +222,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
     var onEnded: () -> Void = {}
     /// Called whenever playback actually enters the playing state.
     var onPlaying: () -> Void = {}
+    /// Clears the parent-owned command only after JavaScript received it.
+    var onSeekConsumed: (UUID) -> Void = { _ in }
     /// Library detail supplies one shared surface so portrait/landscape layout
     /// changes reattach the existing WKWebView instead of restarting YouTube.
     var reusableSurface: YouTubeWebViewSurface? = nil
@@ -104,38 +237,46 @@ struct YouTubeEmbedView: UIViewRepresentable {
             onClipEnded: onClipEnded,
             onFailure: onFailure,
             onEnded: onEnded,
-            onPlaying: onPlaying
+            onPlaying: onPlaying,
+            onSeekConsumed: onSeekConsumed
         )
     }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> YouTubeWebViewContainer {
+        let container = YouTubeWebViewContainer()
         let html = Self.html(
             videoId: videoId,
             startSeconds: startSeconds,
             resumeSeconds: resumeSeconds
         )
         if let reusableSurface, let surfaceKey {
-            return reusableSurface.acquire(
+            let webView = reusableSurface.acquire(
                 key: surfaceKey,
                 coordinator: context.coordinator,
                 html: html
             )
+            container.attach(webView)
+            return container
         }
 
-        let webView = Self.makeWebView()
-        Self.bind(context.coordinator, to: webView)
+        let bridgeProxy = YouTubeBridgeProxy()
+        context.coordinator.bridgeProxy = bridgeProxy
+        bridgeProxy.bind(context.coordinator)
+        let webView = Self.makeWebView(bridgeProxy: bridgeProxy)
+        context.coordinator.webView = webView
         webView.loadHTMLString(
             html,
             baseURL: URL(string: "https://www.youtube-nocookie.com")
         )
-        context.coordinator.webView = webView
-        return webView
+        container.attach(webView)
+        return container
     }
 
-    fileprivate static func makeWebView() -> WKWebView {
+    fileprivate static func makeWebView(bridgeProxy: YouTubeBridgeProxy) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
+        config.userContentController.add(bridgeProxy, name: "iosBridge")
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.scrollView.isScrollEnabled = false
         webView.isOpaque = false
@@ -143,14 +284,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
         return webView
     }
 
-    fileprivate static func bind(_ coordinator: Coordinator, to webView: WKWebView) {
-        let controller = webView.configuration.userContentController
-        controller.removeScriptMessageHandler(forName: "iosBridge")
-        controller.add(coordinator, name: "iosBridge")
-        coordinator.webView = webView
-    }
-
-    func updateUIView(_ webView: WKWebView, context: Context) {
+    func updateUIView(_ container: YouTubeWebViewContainer, context: Context) {
         if let seek {
             context.coordinator.requestExplicitSeek(seek)
         }
@@ -172,26 +306,34 @@ struct YouTubeEmbedView: UIViewRepresentable {
         }
     }
 
-    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+    static func dismantleUIView(
+        _ container: YouTubeWebViewContainer,
+        coordinator: Coordinator
+    ) {
         if let reusableSurface = coordinator.reusableSurface {
-            reusableSurface.release(coordinator: coordinator, webView: webView)
+            reusableSurface.release(coordinator: coordinator)
         } else {
-            webView.configuration.userContentController.removeScriptMessageHandler(
+            coordinator.webView?.configuration.userContentController.removeScriptMessageHandler(
                 forName: "iosBridge"
             )
+            coordinator.bridgeProxy?.unbind(coordinator)
         }
+        container.detach()
         coordinator.webView = nil
+        coordinator.bridgeProxy = nil
     }
 
-    final class Coordinator: NSObject, WKScriptMessageHandler {
+    final class Coordinator: NSObject {
         let onReady: () -> Void
         let onTime: (Double) -> Void
         let onClipEnded: (UUID) -> Void
         let onFailure: () -> Void
         let onEnded: () -> Void
         let onPlaying: () -> Void
+        let onSeekConsumed: (UUID) -> Void
         weak var webView: WKWebView?
         weak var reusableSurface: YouTubeWebViewSurface?
+        var bridgeProxy: YouTubeBridgeProxy?
         private var lastSeek: SeekRequest?
         private var seekDeliveryState = PlayerSeekDeliveryState()
         var lastClipCommand: YouTubeClipPlaybackCommand?
@@ -205,7 +347,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
             onClipEnded: @escaping (UUID) -> Void,
             onFailure: @escaping () -> Void,
             onEnded: @escaping () -> Void,
-            onPlaying: @escaping () -> Void
+            onPlaying: @escaping () -> Void,
+            onSeekConsumed: @escaping (UUID) -> Void
         ) {
             self.onReady = onReady
             self.onTime = onTime
@@ -213,21 +356,18 @@ struct YouTubeEmbedView: UIViewRepresentable {
             self.onFailure = onFailure
             self.onEnded = onEnded
             self.onPlaying = onPlaying
+            self.onSeekConsumed = onSeekConsumed
         }
 
-        func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "iosBridge",
-                  let event = YouTubeBridgeEvent.decode(message.body) else { return }
+        func receive(_ event: YouTubeBridgeEvent) {
             switch event {
             case .surfaceReady:
-                reusableSurface?.markSurfaceReady(coordinator: self)
                 if let request = seekDeliveryState.markReady() {
                     deliverExplicitSeek(request)
                 }
             case .ready:
                 if !didSignalReady {
                     didSignalReady = true
-                    reusableSurface?.markPlayerReady(coordinator: self)
                     for commandToDeliver in clipDeliveryState.markReady() {
                         deliverClipCommand(commandToDeliver)
                     }
@@ -256,6 +396,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
                 for commandToDeliver in clipDeliveryState.markReady() {
                     deliverClipCommand(commandToDeliver)
                 }
+                onReady()
             }
         }
 
@@ -268,8 +409,11 @@ struct YouTubeEmbedView: UIViewRepresentable {
 
         private func deliverExplicitSeek(_ request: SeekRequest) {
             let seconds = max(0, request.seconds)
-            guard seconds.isFinite else { return }
-            webView?.evaluateJavaScript("window.whatsubExplicitSeek(\(seconds));")
+            guard seconds.isFinite, let webView else { return }
+            webView.evaluateJavaScript("window.whatsubExplicitSeek(\(seconds));")
+            DispatchQueue.main.async { [weak self] in
+                self?.onSeekConsumed(request.nonce)
+            }
         }
 
         func deliverClipCommand(_ command: YouTubeClipPlaybackCommand) {
@@ -351,18 +495,33 @@ struct YouTubeEmbedView: UIViewRepresentable {
         // to empty so the player just no-ops instead of executing it. The
         // backend independently sanitizes `source.youtubeId` on /contribute.
         let videoId = VideoSource.isLikelyYouTubeId(rawVideoId) ? rawVideoId : ""
-        let startVar = startSeconds.map { ", start: \(Int($0))" } ?? ""
+        let startVar: String
+        if let startSeconds, startSeconds.isFinite, startSeconds >= 0 {
+            startVar = ", start: \(YouTubeRestorePolicy.target(savedSeconds: startSeconds, durationSeconds: nil))"
+        } else {
+            startVar = ""
+        }
         let resumeScript: String
         if let resumeSeconds, resumeSeconds.isFinite, resumeSeconds >= 0 {
+            let requestedTarget = YouTubeRestorePolicy.target(
+                savedSeconds: resumeSeconds,
+                durationSeconds: nil
+            )
             resumeScript = """
-                  var restoreTarget = \(Int(resumeSeconds));
+                  var requestedRestoreTarget = \(requestedTarget);
+                  var duration = window.player.getDuration ? window.player.getDuration() : NaN;
+                  var restoreTarget = (Number.isFinite(duration) && duration > 0)
+                    ? Math.min(requestedRestoreTarget, Math.max(0, duration - 0.25))
+                    : requestedRestoreTarget;
                   var restoreRevision = ++window.whatsubRestoreRevision;
-                  window.player.seekTo(\(Int(resumeSeconds)), false);
+                  var restoreAttempts = 0;
+                  window.player.seekTo(restoreTarget, true);
                   if (window.player.pauseVideo) { window.player.pauseVideo(); }
                   function confirmRestore() {
                     if (restoreRevision !== window.whatsubRestoreRevision) { return; }
+                    restoreAttempts += 1;
                     var currentTime = window.player.getCurrentTime();
-                    if (Math.abs(currentTime - restoreTarget) <= 1) {
+                    if (Math.abs(currentTime - restoreTarget) <= 2 || restoreAttempts >= 40) {
                       if (window.player.pauseVideo) { window.player.pauseVideo(); }
                       window.whatsubSignalReady();
                     } else {
@@ -458,9 +617,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
 final class YouTubeWebViewSurface: ObservableObject {
     private var reuseState = YouTubeSurfaceReuseState()
     private var webView: WKWebView?
-    private weak var coordinator: YouTubeEmbedView.Coordinator?
-    private var surfaceReady = false
-    private var playerReady = false
+    private var bridgeProxy: YouTubeBridgeProxy?
 
     func acquire(
         key: String,
@@ -476,56 +633,33 @@ final class YouTubeWebViewSurface: ObservableObject {
                     .removeScriptMessageHandler(forName: "iosBridge")
                 oldWebView.stopLoading()
             }
-            surfaceReady = false
-            playerReady = false
-            target = YouTubeEmbedView.makeWebView()
+            let proxy = YouTubeBridgeProxy()
+            bridgeProxy = proxy
+            target = YouTubeEmbedView.makeWebView(bridgeProxy: proxy)
             webView = target
-            bind(coordinator, to: target)
+            bind(coordinator, webView: target)
             target.loadHTMLString(
                 html,
                 baseURL: URL(string: "https://www.youtube-nocookie.com")
             )
         } else {
             target = webView!
-            bind(coordinator, to: target)
+            bind(coordinator, webView: target)
         }
-
-        coordinator.adoptReusableSurface(
-            surfaceReady: surfaceReady,
-            playerReady: playerReady
-        )
         return target
     }
 
-    func markSurfaceReady(coordinator: YouTubeEmbedView.Coordinator) {
-        guard self.coordinator === coordinator else { return }
-        surfaceReady = true
-    }
-
-    func markPlayerReady(coordinator: YouTubeEmbedView.Coordinator) {
-        guard self.coordinator === coordinator else { return }
-        surfaceReady = true
-        playerReady = true
-    }
-
-    func release(
-        coordinator: YouTubeEmbedView.Coordinator,
-        webView: WKWebView
-    ) {
-        guard self.coordinator === coordinator,
-              self.webView === webView else { return }
-        webView.configuration.userContentController.removeScriptMessageHandler(
-            forName: "iosBridge"
-        )
-        self.coordinator = nil
+    func release(coordinator: YouTubeEmbedView.Coordinator) {
+        bridgeProxy?.unbind(coordinator)
     }
 
     private func bind(
         _ coordinator: YouTubeEmbedView.Coordinator,
-        to webView: WKWebView
+        webView: WKWebView
     ) {
-        YouTubeEmbedView.bind(coordinator, to: webView)
         coordinator.reusableSurface = self
-        self.coordinator = coordinator
+        coordinator.bridgeProxy = bridgeProxy
+        coordinator.webView = webView
+        bridgeProxy?.bind(coordinator)
     }
 }

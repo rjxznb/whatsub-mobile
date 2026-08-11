@@ -54,6 +54,24 @@ struct PlayerSeekDeliveryState: Equatable {
     }
 }
 
+/// Parent-owned explicit seek command. A player consumes the nonce only when
+/// it has actually handed the seek to its playback engine, so a SwiftUI
+/// coordinator rebuild cannot replay an old command or lose a queued one.
+struct PlayerSeekCommandState: Equatable {
+    private(set) var pending: SeekRequest?
+
+    mutating func submit(_ request: SeekRequest) {
+        pending = request
+    }
+
+    @discardableResult
+    mutating func consume(nonce: UUID) -> Bool {
+        guard pending?.nonce == nonce else { return false }
+        pending = nil
+        return true
+    }
+}
+
 struct PlayerOperationRevision: Equatable {
     private var value = 0
 
@@ -102,6 +120,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     var onFailure: () -> Void = {}
     var onEnded: () -> Void = {}
     var onPlaying: () -> Void = {}
+    var onSeekConsumed: (UUID) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -110,7 +129,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             onTime: onTime,
             onFailure: onFailure,
             onEnded: onEnded,
-            onPlaying: onPlaying
+            onPlaying: onPlaying,
+            onSeekConsumed: onSeekConsumed
         )
     }
 
@@ -186,6 +206,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         let onFailure: () -> Void
         let onEnded: () -> Void
         let onPlaying: () -> Void
+        let onSeekConsumed: (UUID) -> Void
         private let resumeSeconds: Double?
         private var lastSeek: SeekRequest?
         private weak var player: AVPlayer?
@@ -210,7 +231,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             onTime: @escaping (Double) -> Void,
             onFailure: @escaping () -> Void,
             onEnded: @escaping () -> Void,
-            onPlaying: @escaping () -> Void
+            onPlaying: @escaping () -> Void,
+            onSeekConsumed: @escaping (UUID) -> Void
         ) {
             self.resumeSeconds = resumeSeconds
             self.onReady = onReady
@@ -218,6 +240,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             self.onFailure = onFailure
             self.onEnded = onEnded
             self.onPlaying = onPlaying
+            self.onSeekConsumed = onSeekConsumed
         }
         func attach(player: AVPlayer) {
             self.player = player
@@ -318,6 +341,9 @@ struct VideoPlayerView: UIViewControllerRepresentable {
                       self.operationRevision.isCurrent(revision) else { return }
                 player?.play()
                 self.signalReadyOnce()
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.onSeekConsumed(request.nonce)
             }
         }
 
