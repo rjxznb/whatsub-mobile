@@ -200,7 +200,8 @@ func makeGuideResponse(fingerprint: String) -> LearningGuideUpdateResponse {
 
 func makeLearningGuideEntry(
     fingerprint: String,
-    guide: LearningGuide? = nil
+    guide: LearningGuide? = nil,
+    title: String = "Test video"
 ) -> LibraryEntryDetail {
     let cue = Cue(
         index: 0,
@@ -213,7 +214,7 @@ func makeLearningGuideEntry(
         id: "entry",
         youtubeId: "dQw4w9WgXcQ",
         sourceUrl: "https://youtu.be/dQw4w9WgXcQ",
-        title: "Test video",
+        title: title,
         durationSec: 20,
         transcriptSrt: nil,
         analysisJson: .assembled(

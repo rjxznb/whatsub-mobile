@@ -56,6 +56,83 @@ private actor GatedSummaryProviderSpy {
     }
 }
 
+/// Deliberately ignores task cancellation so VM revision checks, rather than
+/// cooperative dependency behavior, must protect refreshed detail state.
+private actor CancellationIgnoringGatedSummaryProviderSpy {
+    private let summary: AnalysisSummary
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var callCount = 0
+
+    init(summary: AnalysisSummary = makeAnalysisSummary()) {
+        self.summary = summary
+    }
+
+    func call(
+        entry: LibraryEntryDetail,
+        settings: LlmSettings,
+        token: String
+    ) async throws -> AnalysisSummary {
+        callCount += 1
+        await withCheckedContinuation { continuation = $0 }
+        return summary
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor GatedGuideReloadDetailAPISpy: LibraryDesktopReplacementAPI {
+    private let initial: LibraryEntryDetail
+    private let staleGuideReload: LibraryEntryDetail
+    private let refreshedByUser: LibraryEntryDetail
+    private var reloadContinuation: CheckedContinuation<Void, Never>?
+    private(set) var detailCallCount = 0
+
+    init(
+        initial: LibraryEntryDetail,
+        staleGuideReload: LibraryEntryDetail,
+        refreshedByUser: LibraryEntryDetail
+    ) {
+        self.initial = initial
+        self.staleGuideReload = staleGuideReload
+        self.refreshedByUser = refreshedByUser
+    }
+
+    func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
+        detailCallCount += 1
+        switch detailCallCount {
+        case 1:
+            return initial
+        case 2:
+            await withCheckedContinuation { reloadContinuation = $0 }
+            return staleGuideReload
+        default:
+            return refreshedByUser
+        }
+    }
+
+    func listImportQueue(
+        token: String
+    ) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {
+        ([], nil)
+    }
+
+    func enqueueReplacement(
+        url: String,
+        targetLibraryEntryId: String,
+        token: String
+    ) async throws -> EnqueueImportResponse {
+        EnqueueImportResponse(id: "queue", desktopSeenSecondsAgo: nil, status: "pending")
+    }
+
+    func releaseGuideReload() {
+        reloadContinuation?.resume()
+        reloadContinuation = nil
+    }
+}
+
 @MainActor
 final class VideoLearningGuidePresentationTests: XCTestCase {
     func testCardPresentationContainsNoScoreAndUsesApprovedSectionOrder() {
@@ -131,6 +208,118 @@ final class VideoLearningGuidePresentationTests: XCTestCase {
         XCTAssertNil(vm.entry?.analysisJson.learningGuide)
         XCTAssertEqual(vm.guidePhase, .idle)
         let fingerprints = await patchAPI.expectedFingerprints
+        XCTAssertEqual(fingerprints, [])
+    }
+
+    func testLoadSupersedesInFlightGuideGenerationAndPreservesRefreshedPhase() async {
+        let before = makeLearningGuideEntry(fingerprint: "f1", title: "Before refresh")
+        let refreshed = makeLearningGuideEntry(fingerprint: "f2", title: "After refresh")
+        let detailAPI = LearningGuideDetailAPISpy([before, refreshed])
+        let patchAPI = LearningGuideAPISpy([.accepted(makeGuideResponse(fingerprint: "f1"))])
+        let llm = CancellationIgnoringGatedSummaryProviderSpy()
+        let service = VideoLearningGuideService(api: patchAPI, summaryProvider: llm.call)
+        let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
+        await vm.load(id: before.id, token: "token")
+
+        let oldGeneration = Task {
+            await vm.generateGuide(settings: LlmSettings(), token: "token")
+        }
+        while await llm.callCount == 0 { await Task.yield() }
+
+        await vm.load(id: refreshed.id, token: "token")
+        await llm.release()
+        await oldGeneration.value
+
+        XCTAssertEqual(vm.entry?.title, "After refresh")
+        XCTAssertEqual(vm.entry?.analysisFingerprint, "f2")
+        XCTAssertNil(vm.entry?.analysisJson.learningGuide)
+        XCTAssertEqual(vm.guidePhase, .idle)
+        let fingerprints = await patchAPI.expectedFingerprints
+        XCTAssertEqual(fingerprints, [])
+    }
+
+    func testSupersededGuideTaskCannotClearNewTaskOrOverrideItsLoadingPhase() async {
+        let before = makeLearningGuideEntry(fingerprint: "f1", title: "Before refresh")
+        let refreshed = makeLearningGuideEntry(fingerprint: "f2", title: "After refresh")
+        let detailAPI = LearningGuideDetailAPISpy([before, refreshed])
+        let patchAPI = LearningGuideAPISpy([.accepted(makeGuideResponse(fingerprint: "f2"))])
+        let oldLLM = CancellationIgnoringGatedSummaryProviderSpy()
+        let newLLM = CancellationIgnoringGatedSummaryProviderSpy()
+        let service = VideoLearningGuideService(
+            api: patchAPI,
+            summaryProvider: { entry, settings, token in
+                if entry.analysisFingerprint == "f1" {
+                    return try await oldLLM.call(entry: entry, settings: settings, token: token)
+                }
+                return try await newLLM.call(entry: entry, settings: settings, token: token)
+            }
+        )
+        let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
+        await vm.load(id: before.id, token: "token")
+
+        let oldGeneration = Task {
+            await vm.generateGuide(settings: LlmSettings(), token: "token")
+        }
+        while await oldLLM.callCount == 0 { await Task.yield() }
+        await vm.load(id: refreshed.id, token: "token")
+
+        let newGeneration = Task {
+            await vm.generateGuide(settings: LlmSettings(), token: "token")
+        }
+        for _ in 0..<1_000 {
+            if await newLLM.callCount > 0 { break }
+            await Task.yield()
+        }
+        let newCallStarted = await newLLM.callCount == 1
+        XCTAssertTrue(newCallStarted)
+
+        await oldLLM.release()
+        await oldGeneration.value
+
+        XCTAssertEqual(vm.entry?.title, "After refresh")
+        XCTAssertNil(vm.entry?.analysisJson.learningGuide)
+        XCTAssertEqual(vm.guidePhase, .loading)
+
+        await newLLM.release()
+        await newGeneration.value
+        XCTAssertEqual(vm.entry?.title, "After refresh")
+        XCTAssertEqual(vm.entry?.analysisJson.learningGuide, makeLearningGuide())
+        XCTAssertEqual(vm.guidePhase, .ready)
+        let fingerprints = await patchAPI.expectedFingerprints
+        XCTAssertEqual(fingerprints, ["f2"])
+    }
+
+    func testStaleGuideReloadCannotPublishAfterNewerUserLoad() async {
+        let initial = makeLearningGuideEntry(fingerprint: "", title: "Initial")
+        let staleReload = makeLearningGuideEntry(fingerprint: "f1", title: "Stale guide reload")
+        let refreshed = makeLearningGuideEntry(fingerprint: "f2", title: "User refresh")
+        let detailAPI = GatedGuideReloadDetailAPISpy(
+            initial: initial,
+            staleGuideReload: staleReload,
+            refreshedByUser: refreshed
+        )
+        let patchAPI = LearningGuideAPISpy([.accepted(makeGuideResponse(fingerprint: "f1"))])
+        let llm = SummaryProviderSpy([.summary(makeAnalysisSummary())])
+        let service = VideoLearningGuideService(api: patchAPI, summaryProvider: llm.call)
+        let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
+        await vm.load(id: initial.id, token: "token")
+
+        let oldGeneration = Task {
+            await vm.generateGuide(settings: LlmSettings(), token: "token")
+        }
+        while await detailAPI.detailCallCount < 2 { await Task.yield() }
+
+        await vm.load(id: refreshed.id, token: "token")
+        await detailAPI.releaseGuideReload()
+        await oldGeneration.value
+
+        XCTAssertEqual(vm.entry?.title, "User refresh")
+        XCTAssertEqual(vm.entry?.analysisFingerprint, "f2")
+        XCTAssertNil(vm.entry?.analysisJson.learningGuide)
+        XCTAssertEqual(vm.guidePhase, .idle)
+        let llmCalls = await llm.callCount
+        let fingerprints = await patchAPI.expectedFingerprints
+        XCTAssertEqual(llmCalls, 0)
         XCTAssertEqual(fingerprints, [])
     }
 
