@@ -79,4 +79,30 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
         XCTAssertTrue(source.contains("ossReloadTask?.cancel()"))
         XCTAssertTrue(source.contains("vm.publishPlaybackDetail(refreshed)"))
     }
+
+    func testDetailOwnsPendingSeekUntilPlayerConsumesIt() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = tests.deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Library/LibraryDetailView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("@State private var playerSeekState"))
+        XCTAssertTrue(source.contains("seek: playerSeekState.pending"))
+        XCTAssertEqual(source.components(separatedBy: "onSeekConsumed:").count - 1, 2)
+        XCTAssertTrue(source.contains("playerSeekState.consume(nonce:"))
+    }
+
+    func testYouTubeUsesStableBridgeProxyInsideFreshContainers() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = tests.deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Components/YouTubeEmbedView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("final class YouTubeBridgeProxy"))
+        XCTAssertTrue(source.contains("final class YouTubeWebViewContainer"))
+        XCTAssertTrue(source.contains("func makeUIView(context: Context) -> YouTubeWebViewContainer"))
+        XCTAssertTrue(source.contains("private var bridgeProxy"))
+    }
 }

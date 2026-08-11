@@ -2,20 +2,23 @@ import XCTest
 @testable import whatsub_mobile
 
 final class YouTubeEmbedLifecycleTests: XCTestCase {
-    func testResumeHTMLSeeksThenPausesWithoutAutoplay() throws {
+    func testResumeHTMLSeeksAheadThenConfirmsPausedWithABound() throws {
         let html = YouTubeEmbedView.html(
             videoId: "dQw4w9WgXcQ",
             startSeconds: nil,
             resumeSeconds: 42
         )
 
-        let seek = try XCTUnwrap(html.range(of: "window.player.seekTo(42, false)"))
+        let seek = try XCTUnwrap(html.range(of: "window.player.seekTo(restoreTarget, true)"))
         let pause = try XCTUnwrap(html.range(
             of: "window.player.pauseVideo()",
             options: [],
             range: seek.upperBound..<html.endIndex
         ))
         XCTAssertLessThan(seek.lowerBound, pause.lowerBound)
+        XCTAssertTrue(html.contains("restoreAttempts >= 40"))
+        XCTAssertTrue(html.contains("Math.abs(currentTime - restoreTarget) <= 2"))
+        XCTAssertFalse(html.contains("seekTo(42, false)"))
         XCTAssertFalse(html.contains("autoplay: 1"))
     }
 
@@ -68,8 +71,8 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         )
 
         let surfaceReady = try XCTUnwrap(html.range(of: "{ type: 'surfaceReady' }"))
-        let seek = try XCTUnwrap(html.range(of: "window.player.seekTo(42"))
-        let confirmed = try XCTUnwrap(html.range(of: "Math.abs(currentTime - restoreTarget) <= 1"))
+        let seek = try XCTUnwrap(html.range(of: "window.player.seekTo(restoreTarget, true)"))
+        let confirmed = try XCTUnwrap(html.range(of: "Math.abs(currentTime - restoreTarget) <= 2"))
         let restoredReady = try XCTUnwrap(html.range(
             of: "window.whatsubSignalReady();",
             options: [],
@@ -78,6 +81,21 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
 
         XCTAssertLessThan(surfaceReady.lowerBound, seek.lowerBound)
         XCTAssertLessThan(confirmed.lowerBound, restoredReady.lowerBound)
+    }
+
+    func testRestorePolicyClampsHugeAndPastDurationPositions() {
+        XCTAssertEqual(
+            YouTubeRestorePolicy.target(
+                savedSeconds: .greatestFiniteMagnitude,
+                durationSeconds: nil
+            ),
+            YouTubeRestorePolicy.maximumSeconds
+        )
+        XCTAssertEqual(
+            YouTubeRestorePolicy.target(savedSeconds: 150, durationSeconds: 100),
+            99.75,
+            accuracy: 0.001
+        )
     }
 
     func testExplicitSeekCancelsPassiveRestoreAndStartsPlayback() {
@@ -98,5 +116,20 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         XCTAssertEqual(state.action(for: "entry-1-generation-1"), .rebuild)
         XCTAssertEqual(state.action(for: "entry-1-generation-1"), .reuse)
         XCTAssertEqual(state.action(for: "entry-1-generation-2"), .rebuild)
+    }
+
+    func testBridgeCachesReadinessAndTerminalEventsDuringHandoffGap() {
+        var state = YouTubeBridgeHandoffState()
+
+        XCTAssertEqual(state.record(.surfaceReady, hasConsumer: false), [])
+        XCTAssertEqual(state.record(.ready, hasConsumer: false), [])
+        XCTAssertEqual(state.record(.time(12), hasConsumer: false), [])
+        XCTAssertEqual(state.record(.failure, hasConsumer: false), [])
+
+        let handoff = state.bind()
+        XCTAssertTrue(handoff.surfaceReady)
+        XCTAssertTrue(handoff.playerReady)
+        XCTAssertEqual(handoff.queuedEvents, [.failure])
+        XCTAssertTrue(state.bind().queuedEvents.isEmpty)
     }
 }

@@ -63,4 +63,21 @@ final class VideoPlayerLifecycleTests: XCTestCase {
         XCTAssertFalse(revision.isCurrent(passiveRestore))
         XCTAssertTrue(revision.isCurrent(explicitSeek))
     }
+
+    func testConsumedSeekDoesNotReplayAfterSurfaceRebuild() {
+        var state = PlayerSeekCommandState()
+        let old = SeekRequest(seconds: 30, nonce: UUID())
+        let fresh = SeekRequest(seconds: 80, nonce: UUID())
+
+        state.submit(old)
+        XCTAssertEqual(state.pending, old)
+        XCTAssertTrue(state.consume(nonce: old.nonce))
+        XCTAssertNil(state.pending)
+
+        // A new coordinator reads the parent-owned state and sees no command.
+        XCTAssertNil(state.pending)
+        state.submit(fresh)
+        XCTAssertFalse(state.consume(nonce: old.nonce))
+        XCTAssertEqual(state.pending, fresh)
+    }
 }
