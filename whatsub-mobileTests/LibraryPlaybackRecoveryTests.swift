@@ -27,4 +27,20 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
         XCTAssertFalse(oss.isVPNRelated)
         XCTAssertFalse(oss.detail.contains("VPN"))
     }
+
+    func testDetailWiresExplicitSeekAndPlayingIntoResumeSession() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = tests.deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Library/LibraryDetailView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertTrue(source.contains(".onChange(of: vm.seek)"))
+        XCTAssertTrue(source.contains("playbackSession.markExplicitSeek"))
+        XCTAssertEqual(
+            source.components(separatedBy: "onPlaying: { handlePlayerPlaying").count - 1,
+            2
+        )
+        XCTAssertTrue(source.contains("playbackSession.markPlaying()"))
+    }
 }
