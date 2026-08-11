@@ -60,6 +60,7 @@ final class ImportViewModel: ObservableObject {
     ) async throws -> CaptionExtractionResult
     typealias LocalAnalyzer = (
         _ cues: [Cue],
+        _ durationSec: Double?,
         _ settings: LlmSettings,
         _ resume: AnalysisResumeContext,
         _ onProgress: @escaping (Int, Int) -> Void,
@@ -111,10 +112,11 @@ final class ImportViewModel: ObservableObject {
         noProgressWait: @escaping () async throws -> Void = {
             try await Task.sleep(nanoseconds: 90_000_000_000)
         },
-        localAnalyzer: @escaping LocalAnalyzer = { cues, settings, resume, onProgress, onDiagnostic in
+        localAnalyzer: @escaping LocalAnalyzer = { cues, durationSec, settings, resume, onProgress, onDiagnostic in
             let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
             return try await engine.analyze(
                 cues,
+                durationSec: durationSec,
                 completedBatches: resume.completedBatches,
                 completedSummary: resume.completedSummary,
                 onBatchCompleted: resume.onBatchCompleted,
@@ -531,6 +533,7 @@ final class ImportViewModel: ObservableObject {
             return
         }
         let cueCount = cues.count
+        let durationSec = videoDurationSec.map(Double.init)
         state = .analyzing(done: 0, total: 1, cueCount: cueCount)
         let progressSnapshot = AnalysisProgressSnapshot()
         let diagnosticTracker = AnalysisStreamDiagnosticTracker()
@@ -568,6 +571,7 @@ final class ImportViewModel: ObservableObject {
                 group.addTask { [localAnalyzer] in
                     let value = try await localAnalyzer(
                         cues,
+                        durationSec,
                         settings,
                         resume,
                         { [weak self] done, total in

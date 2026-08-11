@@ -88,7 +88,7 @@ final class ImportBYOKResumeTests: XCTestCase {
             titleFetcher: { _ in "Title" },
             thumbnailFetcher: { _ in nil },
             checkpointStore: store,
-            localAnalyzer: { _, _, resume, _, _ in
+            localAnalyzer: { _, _, _, resume, _, _ in
                 XCTAssertEqual(
                     resume.completedSummary?.keyPhrases.first?.expression,
                     "save up"
@@ -119,7 +119,7 @@ final class ImportBYOKResumeTests: XCTestCase {
             titleFetcher: { _ in "Title" },
             thumbnailFetcher: { _ in nil },
             checkpointStore: store,
-            localAnalyzer: { _, _, resume, _, _ in
+            localAnalyzer: { _, _, _, resume, _, _ in
                 try resume.onBatchCompleted(0, [analyzed])
                 throw StubError.stop
             }
@@ -143,7 +143,7 @@ final class ImportBYOKResumeTests: XCTestCase {
             titleFetcher: { _ in "SECRET-TITLE" },
             thumbnailFetcher: { _ in nil },
             noProgressWait: { },
-            localAnalyzer: { _, _, _, _, diagnostic in
+            localAnalyzer: { _, _, _, _, _, diagnostic in
                 diagnostic(AnalysisStreamEvent(stage: .responseOpen, batch: 0, parsedCues: 0))
                 try await Task.sleep(nanoseconds: 60_000_000_000)
                 throw StubError.stop
@@ -175,7 +175,7 @@ final class ImportBYOKResumeTests: XCTestCase {
             titleFetcher: { _ in "Title" },
             thumbnailFetcher: { _ in nil },
             noProgressWait: { await Task.yield() },
-            localAnalyzer: { _, _, _, progress, diagnostic in
+            localAnalyzer: { _, _, _, _, progress, diagnostic in
                 diagnostic(AnalysisStreamEvent(stage: .parsing, batch: 0, parsedCues: 1))
                 progress(1, 2)
                 completed.fulfill()

@@ -66,11 +66,13 @@ struct AnalysisEngine {
 
     func analyze(
         _ cues: [Cue],
+        durationSec: Double? = nil,
         onProgress: @escaping (Int, Int) -> Void,
         onDiagnostic: @escaping (AnalysisStreamEvent) -> Void = { _ in }
     ) async throws -> AnalysisJson {
         try await analyze(
             cues,
+            durationSec: durationSec,
             completedBatches: [:],
             completedSummary: nil,
             onBatchCompleted: { _, _ in },
@@ -86,6 +88,7 @@ struct AnalysisEngine {
     /// request boundary; an already-open stream is allowed to finish and persist.
     func analyze(
         _ cues: [Cue],
+        durationSec: Double? = nil,
         completedBatches: [Int: [Cue]],
         completedSummary: AnalysisSummary?,
         onBatchCompleted: @escaping (Int, [Cue]) throws -> Void,
@@ -162,9 +165,7 @@ struct AnalysisEngine {
         var subtitles = batched.indices.flatMap { resultsByBatch[$0] ?? [] }
         for index in subtitles.indices { subtitles[index].index = index }
 
-        var summary = completedSummary ?? AnalysisSummary(
-            keyPhrases: [], learningGuide: nil, contextProfile: nil
-        )
+        var parsedSummary = completedSummary
         if completedSummary == nil, !subtitles.isEmpty {
             try Task.checkCancellation()
             guard shouldBeginRequest() else { throw AnalysisPausedError() }
@@ -184,35 +185,37 @@ struct AnalysisEngine {
                     parser.feed(chunk) { object in
                         if let parsed = Self.parseSummary(
                             object,
-                            durationSec: nil,
+                            durationSec: durationSec,
                             cues: subtitles
                         ) {
-                            summary = parsed
+                            parsedSummary = parsed
                         }
                     }
                 }
                 parser.flush { object in
                     if let parsed = Self.parseSummary(
                         object,
-                        durationSec: nil,
+                        durationSec: durationSec,
                         cues: subtitles
                     ) {
-                        summary = parsed
+                        parsedSummary = parsed
                     }
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 // Cue analysis remains useful even if the optional summary fails.
-                summary = AnalysisSummary(
-                    keyPhrases: [], learningGuide: nil, contextProfile: nil
-                )
             }
-            try onSummaryCompleted(summary)
+            if let parsedSummary {
+                try onSummaryCompleted(parsedSummary)
+            }
         }
 
         onProgress(totalCues + 1, totalCues + 1)
         let generatedAt = Int64((Date().timeIntervalSince1970 * 1_000).rounded())
+        let summary = parsedSummary ?? AnalysisSummary(
+            keyPhrases: [], learningGuide: nil, contextProfile: nil
+        )
         return AnalysisJson.assembled(
             subtitles: subtitles,
             keyPhrases: summary.keyPhrases,
