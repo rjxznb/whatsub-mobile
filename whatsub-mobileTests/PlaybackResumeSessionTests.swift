@@ -31,7 +31,7 @@ final class PlaybackResumeSessionTests: XCTestCase {
         XCTAssertEqual(session.resumePosition, 120)
 
         session.markReady(generation: generation)
-        XCTAssertEqual(session.receiveTime(120, now: date(1)), .save(120))
+        XCTAssertEqual(session.receiveTime(120, now: date(1)), .none)
     }
 
     func testExplicitSeekInFinalSecondReopensCompletedSession() {
@@ -81,7 +81,21 @@ final class PlaybackResumeSessionTests: XCTestCase {
 
         XCTAssertEqual(session.receiveTime(12.2, now: date(0)), .save(12.2))
         XCTAssertEqual(session.receiveTime(12.8, now: date(5)), .none)
+        XCTAssertEqual(session.forceFlushDecision(now: date(6)), .none)
         XCTAssertEqual(session.receiveTime(13.1, now: date(10)), .save(13.1))
+    }
+
+    func testPausedScrubBackAfterCompletionStartsNewResumableSession() {
+        var session = PlaybackResumeSession(restoredPosition: 90)
+        XCTAssertEqual(session.receiveTime(100, now: date(0)), .save(100))
+        XCTAssertEqual(session.markEnded(), .clear)
+
+        // Trailing end callbacks remain suppressed.
+        XCTAssertEqual(session.receiveTime(100, now: date(1)), .none)
+        // A clear backward jump can come from native/YouTube player controls
+        // without a playing event and must become resumable again.
+        XCTAssertEqual(session.receiveTime(80, now: date(2)), .save(80))
+        XCTAssertEqual(session.resumePosition, 80)
     }
 
     func testOnlyCurrentGenerationAcceptsFailureEvenAfterReady() {

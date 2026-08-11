@@ -106,17 +106,19 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
         XCTAssertTrue(source.contains("private var bridgeProxy"))
     }
 
-    func testDetailDeactivatesYouTubeWhenSwitchingSourceOrLeaving() throws {
+    func testDetailDeactivatesOnSourceSwitchButOnlyPausesOnTemporaryExit() throws {
         let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let root = tests.deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent(
             "whatsub-mobile/Library/LibraryDetailView.swift"
         ), encoding: .utf8)
 
-        XCTAssertGreaterThanOrEqual(
+        XCTAssertEqual(
             source.components(separatedBy: "youtubeSurface.deactivate()").count - 1,
-            2
+            1
         )
+        XCTAssertTrue(source.contains("youtubeSurface.pause()"))
+        XCTAssertTrue(source.contains("avOperationOwner.cancelAll()"))
     }
 
     func testPlayerWrappersUseCompletionBasedSeekAcceptance() throws {
@@ -131,5 +133,17 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
 
         XCTAssertTrue(nativeSource.contains("PlayerSeekAcceptance.av"))
         XCTAssertTrue(youtubeSource.contains("PlayerSeekAcceptance.javascript"))
+    }
+
+
+    func testReappearanceReusesPreparedPlayerWithoutResettingReadiness() {
+        XCTAssertEqual(
+            LibraryPlaybackPreparationAction.forPrepared(false),
+            .prepare
+        )
+        XCTAssertEqual(
+            LibraryPlaybackPreparationAction.forPrepared(true),
+            .resumeExisting
+        )
     }
 }

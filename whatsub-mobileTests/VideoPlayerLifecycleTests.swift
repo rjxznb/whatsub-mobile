@@ -76,6 +76,17 @@ final class VideoPlayerLifecycleTests: XCTestCase {
         XCTAssertFalse(owner.isCurrent(replacementSeek))
     }
 
+    func testParentCancellationInvalidatesPendingOperationBeforePauseOrReload() {
+        let owner = PlayerOperationOwner()
+        let pending = owner.begin()
+
+        owner.cancelAll()
+
+        XCTAssertFalse(owner.isCurrent(pending))
+        let replacement = owner.begin()
+        XCTAssertTrue(owner.isCurrent(replacement))
+    }
+
     func testSeekAcknowledgementRequiresSuccessfulCurrentExecution() {
         XCTAssertFalse(PlayerSeekAcceptance.av(finished: false, operationIsCurrent: true))
         XCTAssertFalse(PlayerSeekAcceptance.av(finished: true, operationIsCurrent: false))
@@ -118,5 +129,8 @@ final class VideoPlayerLifecycleTests: XCTestCase {
         state.submit(fresh)
         XCTAssertFalse(state.consume(nonce: old.nonce))
         XCTAssertEqual(state.pending, fresh)
+
+        state.cancelPending()
+        XCTAssertNil(state.pending)
     }
 }

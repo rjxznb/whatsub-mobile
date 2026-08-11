@@ -33,6 +33,13 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         XCTAssertTrue(html.contains("{ type: 'ended' }"))
         XCTAssertTrue(html.contains("onError:"))
         XCTAssertTrue(html.contains("{ type: 'failure' }"))
+        let onError = html.range(of: "onError: function()")!
+        let failure = html.range(of: "{ type: 'failure' }", range: onError.lowerBound..<html.endIndex)!
+        let invalidation = html.range(
+            of: "window.whatsubRestoreRevision += 1",
+            range: onError.lowerBound..<failure.lowerBound
+        )
+        XCTAssertNotNil(invalidation)
     }
 
     func testBridgeDecoderMapsEverySupportedEvent() {
@@ -114,6 +121,7 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         var state = YouTubeSurfaceReuseState()
 
         XCTAssertEqual(state.action(for: "entry-1-generation-1"), .rebuild)
+        XCTAssertTrue(state.pause())
         XCTAssertEqual(state.action(for: "entry-1-generation-1"), .reuse)
         XCTAssertTrue(state.deactivate())
         XCTAssertFalse(state.deactivate())
@@ -145,6 +153,18 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
 
         let handoff = state.bind()
         XCTAssertTrue(handoff.surfaceReady)
+        XCTAssertFalse(handoff.playerReady)
+        XCTAssertEqual(handoff.queuedEvents, [.failure])
+    }
+
+    func testFailureSuppressesLateReadinessForCurrentCoordinator() {
+        var state = YouTubeBridgeHandoffState()
+
+        XCTAssertEqual(state.record(.surfaceReady, hasConsumer: true), [.surfaceReady])
+        XCTAssertEqual(state.record(.failure, hasConsumer: true), [.failure])
+        XCTAssertEqual(state.record(.ready, hasConsumer: true), [])
+
+        let handoff = state.bind()
         XCTAssertFalse(handoff.playerReady)
         XCTAssertEqual(handoff.queuedEvents, [.failure])
     }
