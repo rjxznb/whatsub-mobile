@@ -60,6 +60,46 @@ final class ImportBYOKResumeTests: XCTestCase {
         XCTAssertEqual(callCount, 2)
     }
 
+    func testPersistedCompletedSummaryIsForwardedForResume() async throws {
+        let directory = makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AnalysisCheckpointStore(directory: directory)
+        let cue = Cue(index: 0, time: 0, endTime: 1, text: "Hello")
+        let analyzed = Cue(
+            index: 0, time: 0, endTime: 1, text: "Hello", translation: "你好"
+        )
+        var checkpoint = store.makeCheckpoint(sourceID: "abcdefghijk", cues: [cue])
+        try checkpoint.recordBatch(index: 0, result: [analyzed], sourceCues: [cue])
+        checkpoint.recordSummary(AnalysisSummary(
+            keyPhrases: [KeyPhrase(expression: "save up", meaningZh: "攒钱", usage: "存钱")],
+            learningGuide: nil,
+            contextProfile: nil
+        ))
+        try store.save(checkpoint)
+        let resumed = expectation(description: "completed summary forwarded")
+        let vm = ImportViewModel(
+            settingsProvider: { self.settings() },
+            captionExtractor: { _, _ in
+                CaptionExtractionResult(cues: [cue], durationSec: 60)
+            },
+            titleFetcher: { _ in "Title" },
+            thumbnailFetcher: { _ in nil },
+            checkpointStore: store,
+            localAnalyzer: { _, _, resume, _, _ in
+                XCTAssertEqual(
+                    resume.completedSummary?.keyPhrases.first?.expression,
+                    "save up"
+                )
+                resumed.fulfill()
+                throw StubError.stop
+            }
+        )
+
+        await vm.run(urlOrId: "abcdefghijk", token: "token")
+
+        await fulfillment(of: [resumed], timeout: 1)
+    }
+
     func testExplicitCancelDeletesCheckpointAfterFailedRun() async throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

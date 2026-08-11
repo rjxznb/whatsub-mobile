@@ -36,15 +36,19 @@ final class AnalysisCheckpointStoreTests: XCTestCase {
         let source = cues(50)
         var checkpoint = store.makeCheckpoint(sourceID: "youtube-1", cues: source)
         try checkpoint.recordBatch(index: 0, result: analyzed(source[0..<50]), sourceCues: source)
-        checkpoint.recordSummary([
-            KeyPhrase(expression: "save up", meaningZh: "攒钱", usage: "Save up for it.")
-        ])
+        checkpoint.recordSummary(AnalysisSummary(
+            keyPhrases: [
+                KeyPhrase(expression: "save up", meaningZh: "攒钱", usage: "Save up for it.")
+            ],
+            learningGuide: nil,
+            contextProfile: nil
+        ))
 
         try store.save(checkpoint)
         let loaded = try XCTUnwrap(store.load(sourceID: "youtube-1", cues: source))
 
         XCTAssertEqual(loaded.completedBatches[0]?.count, 50)
-        XCTAssertEqual(loaded.completedSummary?.first?.expression, "save up")
+        XCTAssertEqual(loaded.completedSummary?.keyPhrases.first?.expression, "save up")
     }
 
     func testFingerprintUsesSourceAndNormalizedCueContent() {
@@ -99,10 +103,27 @@ final class AnalysisCheckpointStoreTests: XCTestCase {
         let source = cues(60)
         var checkpoint = store.makeCheckpoint(sourceID: "youtube-1", cues: source)
         try checkpoint.recordBatch(index: 0, result: analyzed(source[0..<50]), sourceCues: source)
-        checkpoint.recordSummary([])
+        checkpoint.recordSummary(AnalysisSummary(
+            keyPhrases: [], learningGuide: nil, contextProfile: nil
+        ))
         try store.save(checkpoint)
 
         XCTAssertNil(try store.load(sourceID: "youtube-1", cues: source))
+    }
+
+    func testLegacyCheckpointSummaryArrayStillResumes() throws {
+        let legacyVersionOneJSON = Data(#"""
+        {"version":1,"fingerprint":"legacy","batches":[],"completedSummary":[{"expression":"save up","meaningZh":"攒钱","usage":"存钱以备将来"}],"updatedAt":0}
+        """#.utf8)
+
+        let checkpoint = try JSONDecoder().decode(
+            AnalysisCheckpoint.self,
+            from: legacyVersionOneJSON
+        )
+
+        XCTAssertEqual(checkpoint.completedSummary?.keyPhrases.first?.expression, "save up")
+        XCTAssertNil(checkpoint.completedSummary?.learningGuide)
+        XCTAssertNil(checkpoint.completedSummary?.contextProfile)
     }
 
     func testPruneDeletesOnlyCheckpointsOlderThanSevenDays() throws {

@@ -2,6 +2,24 @@ import XCTest
 @testable import whatsub_mobile
 
 final class AnalysisDecodeTests: XCTestCase {
+    private let oldAnalysisJSON = #"{"subtitles":[],"keyPhrases":[]}"#.data(using: .utf8)!
+
+    func testOldAnalysisDecodesWithoutGuide() throws {
+        let result = try JSONDecoder().decode(AnalysisJson.self, from: oldAnalysisJSON)
+
+        XCTAssertNil(result.learningGuide)
+        XCTAssertNil(result.contextProfile)
+        XCTAssertNil(result.learningGuideSourceFingerprint)
+    }
+
+    func testDetailWithoutServerFingerprintDefaultsToEmpty() throws {
+        let json = #"{"id":"entry","youtubeId":"abcdefghijk","sourceUrl":"https://www.youtube.com/watch?v=abcdefghijk","title":"Title","durationSec":20,"transcriptSrt":null,"analysisJson":{"subtitles":[],"keyPhrases":[]},"videoUrl":null,"audioUrl":null}"#.data(using: .utf8)!
+
+        let detail = try JSONDecoder().decode(LibraryEntryDetail.self, from: json)
+
+        XCTAssertEqual(detail.analysisFingerprint, "")
+    }
+
     func testDecodeAnalysisWithCues() throws {
         let json = #"""
         {"subtitles":[

@@ -13,7 +13,7 @@ final class AnalysisEngineTests: XCTestCase {
         func stream(_: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
             lock.lock()
             requestCount += 1
-            let response = responses.removeFirst()
+            let response = responses.isEmpty ? "" : responses.removeFirst()
             lock.unlock()
             return AsyncThrowingStream { continuation in
                 continuation.yield(response)
@@ -34,6 +34,10 @@ final class AnalysisEngineTests: XCTestCase {
         return cue
     }
 
+    private func validSummaryJSON(keyPhrases: String = "[]") -> String {
+        #"{"type":"summary","keyPhrases":\#(keyPhrases),"learningGuide":{"verdict":"select_segments","overview":"这段访谈通过自然对话展示人物如何先认可对方观点，再用缓和语气委婉表达不同意见，并维持轻松友好的交流氛围。","contentOutline":["先说明讨论背景和人物之间的关系","再展示缓和分歧时常用的自然表达"],"cefrLevel":"B2","cefrReason":"语速自然，并包含需要结合上下文和说话语气理解的委婉表达。","recommendedFor":["希望提升真实会话理解的学习者"],"learningReasons":["包含可直接迁移到讨论场景的表达"],"cultureNotes":[],"studyTips":["先盲听，再跟读推荐片段"],"topSegments":[]},"contextProfile":{"theme":"委婉沟通与分歧处理","participants":"采访者与演员","setting":"轻松访谈","tone":"自然、友好并带有幽默感","culturalContext":"","recurringConcepts":["先认可对方观点"]}}"#
+    }
+
     // MARK: - parseCue / parseSummary (streaming path)
     //
     // Post 2026-06-21 streaming refactor — AnalysisEngine no longer offers
@@ -42,22 +46,26 @@ final class AnalysisEngineTests: XCTestCase {
     // `parseSummary(obj:)`. The tests below drive the same JSONL inputs
     // through that pipe and assert the same end-state.
 
-    private func driveLines(_ raw: String) -> (cues: [Cue], keyPhrases: [KeyPhrase]) {
+    private func driveLines(_ raw: String) -> (cues: [Cue], summary: AnalysisSummary?) {
         let parser = JsonLineParser()
         var cues: [Cue] = []
-        var keyPhrases: [KeyPhrase] = []
+        var summary: AnalysisSummary?
         // Append trailing newline so the parser sees a clean line boundary
         // even when the test fixture's last line omits it.
         let input = raw.hasSuffix("\n") ? raw : raw + "\n"
         parser.feed(input) { obj in
             if let cue = AnalysisEngine.parseCue(obj) { cues.append(cue) }
-            if let kp = AnalysisEngine.parseSummary(obj) { keyPhrases = kp }
+            if let parsed = AnalysisEngine.parseSummary(obj, durationSec: 20, cues: []) {
+                summary = parsed
+            }
         }
         parser.flush { obj in
             if let cue = AnalysisEngine.parseCue(obj) { cues.append(cue) }
-            if let kp = AnalysisEngine.parseSummary(obj) { keyPhrases = kp }
+            if let parsed = AnalysisEngine.parseSummary(obj, durationSec: 20, cues: []) {
+                summary = parsed
+            }
         }
-        return (cues, keyPhrases)
+        return (cues, summary)
     }
 
     func testParseCueLinesSkipsNonJSONAndSummary() {
@@ -75,7 +83,7 @@ final class AnalysisEngineTests: XCTestCase {
     func testParseCueLinesSkipsSummaryLine() {
         let raw = """
         {"type":"cue","index":0,"time":0,"endTime":1.0,"text":"Hello","translation":"你好","isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}
-        {"type":"summary","keyPhrases":[{"expression":"save up","meaningZh":"攒钱","usage":"存钱"}]}
+        \(validSummaryJSON(keyPhrases: #"[{"expression":"save up","meaningZh":"攒钱","usage":"存钱"}]"#))
         """
         let cues = driveLines(raw).cues
         XCTAssertEqual(cues.count, 1)
@@ -88,8 +96,10 @@ final class AnalysisEngineTests: XCTestCase {
     }
 
     func testParseSummaryLine() {
-        let raw = #"{"type":"summary","keyPhrases":[{"expression":"save up","meaningZh":"攒钱","usage":"存钱"}]}"#
-        let kp = driveLines(raw).keyPhrases
+        let raw = validSummaryJSON(
+            keyPhrases: #"[{"expression":"save up","meaningZh":"攒钱","usage":"存钱"}]"#
+        )
+        let kp = driveLines(raw).summary?.keyPhrases ?? []
         XCTAssertEqual(kp.first?.expression, "save up")
         XCTAssertEqual(kp.first?.meaningZh, "攒钱")
         XCTAssertEqual(kp.first?.usage, "存钱")
@@ -97,13 +107,15 @@ final class AnalysisEngineTests: XCTestCase {
 
     func testParseSummaryLineReturnsEmptyWhenNoSummaryLine() {
         let raw = #"{"type":"cue","index":0,"time":0,"endTime":1,"text":"hi","translation":"嗨","isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}"#
-        let kp = driveLines(raw).keyPhrases
+        let kp = driveLines(raw).summary?.keyPhrases ?? []
         XCTAssertTrue(kp.isEmpty)
     }
 
     func testParseSummaryLineMultipleKeyPhrases() {
-        let raw = #"{"type":"summary","keyPhrases":[{"expression":"catch up","meaningZh":"赶上","usage":"用于表示追赶进度"},{"expression":"save up","meaningZh":"攒钱","usage":"存钱备用"}]}"#
-        let kp = driveLines(raw).keyPhrases
+        let raw = validSummaryJSON(
+            keyPhrases: #"[{"expression":"catch up","meaningZh":"赶上","usage":"用于表示追赶进度"},{"expression":"save up","meaningZh":"攒钱","usage":"存钱备用"}]"#
+        )
+        let kp = driveLines(raw).summary?.keyPhrases ?? []
         XCTAssertEqual(kp.count, 2)
         XCTAssertEqual(kp[0].expression, "catch up")
         XCTAssertEqual(kp[1].expression, "save up")
@@ -131,6 +143,33 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertEqual(batched.count, 2)
         XCTAssertEqual(batched[0].count, 50)
         XCTAssertEqual(batched[1].count, 23)
+    }
+
+    func testBoundedSummaryPreservesFirstAndLastCompleteCueDeterministically() throws {
+        let manyCues = (0..<30).map { index in
+            Cue(
+                index: index,
+                time: Double(index) * 1.5,
+                endTime: Double(index) * 1.5 + 1.25,
+                text: "cue-\(index)-" + String(repeating: "x", count: 2_000),
+                translation: "译文 \(index)"
+            )
+        }
+
+        let first = try AnalysisPrompts.boundedSummaryMessages(manyCues, maxCharacters: 20_000)
+        let second = try AnalysisPrompts.boundedSummaryMessages(manyCues, maxCharacters: 20_000)
+        let serialized = try JSONSerialization.data(withJSONObject: first.map {
+            ["role": $0.role, "content": $0.content]
+        })
+        let text = String(decoding: serialized, as: UTF8.self)
+
+        XCTAssertEqual(first.map(\.content), second.map(\.content))
+        XCTAssertTrue(text.contains(manyCues.first!.text))
+        XCTAssertTrue(text.contains(manyCues.last!.text))
+        XCTAssertTrue(text.contains(#""index":0"#))
+        XCTAssertTrue(text.contains(#""time":0"#))
+        XCTAssertTrue(text.contains(#""endTime":1.25"#))
+        XCTAssertLessThanOrEqual(text.count, 20_000)
     }
 
     // MARK: - AnalysisJson.assembled
@@ -184,7 +223,7 @@ final class AnalysisEngineTests: XCTestCase {
         let secondJSON = source[50..<60].map { cue in
             "{\"index\":\(cue.index),\"time\":\(cue.time),\"endTime\":\(cue.endTime),\"text\":\"\(cue.text)\",\"translation\":\"译\",\"isKeyPoint\":false,\"highlightWords\":[],\"keyNotes\":{},\"highlightTranslations\":{}}"
         }.joined(separator: "\n")
-        let summaryJSON = #"{"type":"summary","keyPhrases":[]}"#
+        let summaryJSON = validSummaryJSON()
         let script = StreamScript([secondJSON, summaryJSON])
         let engine = AnalysisEngine(streamProvider: script.stream)
         var completed: [Int] = []
@@ -202,6 +241,45 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertEqual(script.requestCount, 2)
         XCTAssertEqual(completed, [1, 99])
         XCTAssertEqual(result.subtitles.count, 60)
+    }
+
+    func testCompletedSummaryResumeDoesNotOpenAnotherProviderRequest() async throws {
+        let source = [cueFixture(index: 0)]
+        let draft = try XCTUnwrap(
+            try VideoLearningParser.parseSummary(
+                Data(validSummaryJSON().utf8),
+                durationSec: 20,
+                cues: source
+            ).learningGuide
+        )
+        let profile = try XCTUnwrap(
+            try VideoLearningParser.parseSummary(
+                Data(validSummaryJSON().utf8),
+                durationSec: 20,
+                cues: source
+            ).contextProfile
+        )
+        let completed = AnalysisSummary(
+            keyPhrases: [],
+            learningGuide: draft,
+            contextProfile: profile
+        )
+        let script = StreamScript([])
+        let engine = AnalysisEngine(streamProvider: script.stream)
+
+        let result = try await engine.analyze(
+            source,
+            completedBatches: [0: source],
+            completedSummary: completed,
+            onBatchCompleted: { _, _ in XCTFail("completed batch must not repeat") },
+            onSummaryCompleted: { _ in XCTFail("completed summary must not repeat") },
+            shouldBeginRequest: { true },
+            onProgress: { _, _ in }
+        )
+
+        XCTAssertEqual(script.requestCount, 0)
+        XCTAssertEqual(result.learningGuide?.verdict, .selectSegments)
+        XCTAssertEqual(result.contextProfile?.theme, profile.theme)
     }
 
     func testAnalyzeRejectsPartialBatchBeforeCheckpointCallback() async {
@@ -262,7 +340,7 @@ final class AnalysisEngineTests: XCTestCase {
         {"index":0,"time":0,"endTime":1.5,"text":"word 0","translation":"译",\
         "isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}
         """
-        let summaryJSON = #"{"type":"summary","keyPhrases":[]}"#
+        let summaryJSON = validSummaryJSON()
         var requestIndex = 0
         let engine = AnalysisEngine(diagnosticStreamProvider: { _, lifecycle in
             lifecycle(.connecting)
