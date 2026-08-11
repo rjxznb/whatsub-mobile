@@ -3,6 +3,40 @@ import AVKit
 import AVFoundation
 import UIKit
 
+enum AVPlayerLifecycleEvent: Equatable {
+    case itemReady
+    case itemFailed
+    case didPlayToEnd
+}
+
+enum AVPlayerLifecycleDecision: Equatable {
+    case ready
+    case seekPaused(Double)
+    case seekAndPlay(Double)
+    case failure
+    case ended
+
+    static func ready(resumeSeconds: Double?) -> AVPlayerLifecycleDecision {
+        guard let resumeSeconds,
+              resumeSeconds.isFinite,
+              resumeSeconds >= 0 else { return .ready }
+        return .seekPaused(resumeSeconds)
+    }
+
+    static func forEvent(_ event: AVPlayerLifecycleEvent) -> AVPlayerLifecycleDecision {
+        switch event {
+        case .itemReady: return .ready
+        case .itemFailed: return .failure
+        case .didPlayToEnd: return .ended
+        }
+    }
+
+    static func explicitSeek(seconds: Double) -> AVPlayerLifecycleDecision {
+        guard seconds.isFinite, seconds >= 0 else { return .ready }
+        return .seekAndPlay(seconds)
+    }
+}
+
 /// Native AVPlayer-backed video view. Input surface mirrors YouTubeEmbedView
 /// (player, seek, onReady, onTime) so LibraryDetailView can swap between them
 /// without changing the view model.
@@ -33,8 +67,20 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     var thumbURL: URL? = nil
     var onReady: () -> Void
     var onTime: (Double) -> Void
+    /// Library resume position. Restoration seeks while paused exactly once.
+    var resumeSeconds: Double? = nil
+    var onFailure: () -> Void = {}
+    var onEnded: () -> Void = {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onReady: onReady, onTime: onTime) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            resumeSeconds: resumeSeconds,
+            onReady: onReady,
+            onTime: onTime,
+            onFailure: onFailure,
+            onEnded: onEnded
+        )
+    }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         // Play audio even when the hardware ring/silent switch is on silent.
@@ -93,9 +139,13 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         context.coordinator.updateCaption(cue: currentCue, show: showCaptions)
         guard let seek, seek != context.coordinator.lastSeek else { return }
         context.coordinator.lastSeek = seek
-        let t = CMTime(seconds: seek.seconds, preferredTimescale: 600)
-        vc.player?.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
-        vc.player?.play()
+        if case .seekAndPlay(let seconds) = AVPlayerLifecycleDecision.explicitSeek(
+            seconds: seek.seconds
+        ) {
+            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+            vc.player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+            vc.player?.play()
+        }
     }
 
     static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
@@ -108,35 +158,112 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     final class Coordinator {
         let onReady: () -> Void
         let onTime: (Double) -> Void
+        let onFailure: () -> Void
+        let onEnded: () -> Void
+        private let resumeSeconds: Double?
         var lastSeek: SeekRequest?
         private weak var player: AVPlayer?
         private var timeObserver: Any?
         private var statusObs: NSKeyValueObservation?
+        private var endObserver: NSObjectProtocol?
         private var didReady = false
+        private var didFail = false
         // Caption UI lives in the player's contentOverlayView so it shows in
         // native fullscreen too.
         private var captionContainer: UIView?
         private var captionLabel: UILabel?
         private var lastCaptionKey: String?
 
-        init(onReady: @escaping () -> Void, onTime: @escaping (Double) -> Void) {
-            self.onReady = onReady; self.onTime = onTime
+        init(
+            resumeSeconds: Double?,
+            onReady: @escaping () -> Void,
+            onTime: @escaping (Double) -> Void,
+            onFailure: @escaping () -> Void,
+            onEnded: @escaping () -> Void
+        ) {
+            self.resumeSeconds = resumeSeconds
+            self.onReady = onReady
+            self.onTime = onTime
+            self.onFailure = onFailure
+            self.onEnded = onEnded
         }
         func attach(player: AVPlayer) {
             self.player = player
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
             ) { [weak self] t in self?.onTime(t.seconds) }
-            statusObs = player.observe(\.status, options: [.new]) { [weak self] p, _ in
-                guard let self, !self.didReady, p.status == .readyToPlay else { return }
-                self.didReady = true; self.onReady()
+            guard let item = player.currentItem else {
+                signalFailureOnce()
+                return
+            }
+            statusObs = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+                switch item.status {
+                case .readyToPlay:
+                    self?.handleReady()
+                case .failed:
+                    self?.handleLifecycleEvent(.itemFailed)
+                case .unknown:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                self?.handleLifecycleEvent(.didPlayToEnd)
             }
         }
         func detach() {
             if let o = timeObserver { player?.removeTimeObserver(o); timeObserver = nil }
             statusObs?.invalidate(); statusObs = nil
+            if let endObserver {
+                NotificationCenter.default.removeObserver(endObserver)
+                self.endObserver = nil
+            }
         }
         deinit { detach() }
+
+        private func handleReady() {
+            guard !didReady, let player else { return }
+            didReady = true
+            switch AVPlayerLifecycleDecision.ready(resumeSeconds: resumeSeconds) {
+            case .seekPaused(let seconds):
+                player.pause()
+                let time = CMTime(seconds: seconds, preferredTimescale: 600)
+                player.seek(
+                    to: time,
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                ) { [weak self, weak player] _ in
+                    player?.pause()
+                    self?.onReady()
+                }
+            case .ready:
+                onReady()
+            default:
+                break
+            }
+        }
+
+        private func signalFailureOnce() {
+            guard !didFail else { return }
+            didFail = true
+            onFailure()
+        }
+
+        private func handleLifecycleEvent(_ event: AVPlayerLifecycleEvent) {
+            switch AVPlayerLifecycleDecision.forEvent(event) {
+            case .failure:
+                signalFailureOnce()
+            case .ended:
+                onEnded()
+            default:
+                break
+            }
+        }
 
         /// Build the caption container inside the player's contentOverlayView once
         /// (idempotent). contentOverlayView is non-nil once the VC's view is loaded,
