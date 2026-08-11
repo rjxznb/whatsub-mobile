@@ -10,7 +10,11 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         )
 
         let seek = try XCTUnwrap(html.range(of: "window.player.seekTo(42, false)"))
-        let pause = try XCTUnwrap(html.range(of: "window.player.pauseVideo()"))
+        let pause = try XCTUnwrap(html.range(
+            of: "window.player.pauseVideo()",
+            options: [],
+            range: seek.upperBound..<html.endIndex
+        ))
         XCTAssertLessThan(seek.lowerBound, pause.lowerBound)
         XCTAssertFalse(html.contains("autoplay: 1"))
     }
