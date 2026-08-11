@@ -17,6 +17,26 @@ Managed jobs appear under `我的 -> 导入队列 -> 手机后台解析`, includ
 
 Backend capacity is bounded independently of HTTP traffic: workers default to disabled for deployment, then roll out from one worker to two; defaults reserve at most two background LLM connections within four global LLM connections, allow at most three unfinished jobs per account, and cap the global unfinished queue at 100. See the implementation plan and design under `docs/superpowers/` before changing these limits or enabling workers in production.
 
+## Video learning guide and contextual deep gloss
+
+Library detail presents a collapsible video learning guide: its compact state
+shows verdict, CEFR level, and overview, while expansion adds the supported
+learning sections and timestamped recommended segments. Recent managed analyses
+arrive with this guide; older entries generate it lazily with the active managed
+relay or the learner's BYOK provider, then persist only the server-fingerprint
+checked guide/profile pair. Failure remains inline and retryable, so subtitles,
+playback, collections, and quick word notes continue to work.
+
+Deep gloss explains a highlighted expression with exactly the current cue plus
+up to four cues on either side. A fingerprinted, normalized-expression LRU
+cache holds at most 200 successful explanations, so a changed subtitle analysis
+cannot reuse stale context. In Collections, tapping phrase content opens the
+same explanation as an already-collected phrase; the dedicated timestamp action
+still seeks the player and never creates a duplicate pending collection.
+
+The feature has no numeric score, rating, percentage, or rank, and it adds no
+new entitlement gate; it uses only the existing managed-relay/BYOK behavior.
+
 ## Local dev (on Apple Silicon Mac with Xcode)
 
 ```bash
