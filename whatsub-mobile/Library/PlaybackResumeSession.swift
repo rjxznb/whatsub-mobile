@@ -7,6 +7,8 @@ enum PlaybackPersistenceDecision: Equatable {
 }
 
 struct PlaybackResumeSession: Equatable {
+    private static let completedTailTolerance: Double = 0.01
+
     private(set) var generation = 0
     private(set) var resumePosition: Double?
 
@@ -56,7 +58,9 @@ struct PlaybackResumeSession: Equatable {
 
         if isCompletionSuppressed {
             guard let completedTailPosition,
-                  position <= completedTailPosition - 1 else { return .none }
+                  position < completedTailPosition - Self.completedTailTolerance else {
+                return .none
+            }
             isCompletionSuppressed = false
             self.completedTailPosition = nil
             lastPersistedAt = nil
@@ -101,8 +105,8 @@ struct PlaybackResumeSession: Equatable {
         lastPersistedPosition = nil
     }
 
-    mutating func markEnded() -> PlaybackPersistenceDecision {
-        completedTailPosition = latestPosition ?? resumePosition
+    mutating func markEnded(at position: Double? = nil) -> PlaybackPersistenceDecision {
+        completedTailPosition = Self.validPosition(position) ?? latestPosition ?? resumePosition
         isCompletionSuppressed = true
         isRestoring = false
         latestPosition = nil

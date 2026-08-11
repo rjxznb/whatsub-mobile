@@ -7,7 +7,7 @@ import UIKit
 enum AVPlayerLifecycleEvent: Equatable {
     case itemReady
     case itemFailed
-    case didPlayToEnd
+    case didPlayToEnd(Double?)
 }
 
 enum AVPlayerLifecycleDecision: Equatable {
@@ -33,7 +33,7 @@ enum AVPlayerLifecycleDecision: Equatable {
         switch event {
         case .itemReady: return .ready
         case .itemFailed: return .failure
-        case .didPlayToEnd: return .ended
+        case .didPlayToEnd(_): return .ended
         }
     }
 
@@ -66,19 +66,38 @@ enum PlayerSeekAcceptance {
     }
 }
 
+struct PlayerSeekDelivery: Equatable {
+    let request: SeekRequest
+    let operationToken: Int
+}
+
 struct PlayerSeekDeliveryState: Equatable {
     private var isReady = false
-    private var pending: SeekRequest?
+    private var pending: PlayerSeekDelivery?
 
-    mutating func queue(_ request: SeekRequest) -> SeekRequest? {
-        guard !isReady else { return request }
-        pending = request
+    mutating func queue(
+        _ request: SeekRequest,
+        operationToken: Int,
+        operationOwner: PlayerOperationOwner
+    ) -> PlayerSeekDelivery? {
+        let delivery = PlayerSeekDelivery(
+            request: request,
+            operationToken: operationToken
+        )
+        guard !isReady else {
+            return operationOwner.isCurrent(operationToken) ? delivery : nil
+        }
+        pending = delivery
         return nil
     }
 
-    mutating func markReady() -> SeekRequest? {
+    mutating func markReady(
+        operationOwner: PlayerOperationOwner
+    ) -> PlayerSeekDelivery? {
         isReady = true
         defer { pending = nil }
+        guard let pending,
+              operationOwner.isCurrent(pending.operationToken) else { return nil }
         return pending
     }
 }
@@ -186,7 +205,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     /// Library resume position. Restoration seeks while paused exactly once.
     var resumeSeconds: Double? = nil
     var onFailure: () -> Void = {}
-    var onEnded: () -> Void = {}
+    var onEnded: (Double?) -> Void = { _ in }
     var onPlaying: () -> Void = {}
     var onSeekConsumed: (UUID) -> Void = { _ in }
     var operationOwner: PlayerOperationOwner = PlayerOperationOwner()
@@ -274,7 +293,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         let onReady: () -> Void
         let onTime: (Double) -> Void
         let onFailure: () -> Void
-        let onEnded: () -> Void
+        let onEnded: (Double?) -> Void
         let onPlaying: () -> Void
         let onSeekConsumed: (UUID) -> Void
         let operationOwner: PlayerOperationOwner
@@ -301,7 +320,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             onReady: @escaping () -> Void,
             onTime: @escaping (Double) -> Void,
             onFailure: @escaping () -> Void,
-            onEnded: @escaping () -> Void,
+            onEnded: @escaping (Double?) -> Void,
             onPlaying: @escaping () -> Void,
             onSeekConsumed: @escaping (UUID) -> Void,
             operationOwner: PlayerOperationOwner
@@ -345,8 +364,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
                 queue: .main
-            ) { [weak self] _ in
-                self?.handleLifecycleEvent(.didPlayToEnd)
+            ) { [weak self, weak player] _ in
+                self?.handleLifecycleEvent(.didPlayToEnd(player?.currentTime().seconds))
             }
         }
         func detach() {
@@ -367,7 +386,9 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         private func handleReady() {
             guard !didHandleItemReady, let player else { return }
             didHandleItemReady = true
-            if let pendingSeek = seekDeliveryState.markReady() {
+            if let pendingSeek = seekDeliveryState.markReady(
+                operationOwner: operationOwner
+            ) {
                 performExplicitSeek(pendingSeek)
                 return
             }
@@ -413,16 +434,23 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         func requestExplicitSeek(_ request: SeekRequest) {
             guard request != lastSeek else { return }
             lastSeek = request
-            guard let request = seekDeliveryState.queue(request) else { return }
-            performExplicitSeek(request)
+            let token = operationOwner.begin()
+            guard let delivery = seekDeliveryState.queue(
+                request,
+                operationToken: token,
+                operationOwner: operationOwner
+            ) else { return }
+            performExplicitSeek(delivery)
         }
 
-        private func performExplicitSeek(_ request: SeekRequest) {
+        private func performExplicitSeek(_ delivery: PlayerSeekDelivery) {
+            let request = delivery.request
+            let token = delivery.operationToken
             guard let player,
+                  operationOwner.isCurrent(token),
                   case .seekAndPlay(let seconds) = AVPlayerLifecycleDecision.explicitSeek(
                     seconds: request.seconds
                   ) else { return }
-            let token = operationOwner.begin()
             activeOperationToken = token
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
             guard time.isValid, time.isNumeric else {
@@ -471,7 +499,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             case .failure:
                 signalFailureOnce()
             case .ended:
-                onEnded()
+                guard case .didPlayToEnd(let position) = event else { return }
+                onEnded(position)
             default:
                 break
             }

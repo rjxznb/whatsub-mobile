@@ -30,7 +30,8 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         )
 
         XCTAssertTrue(html.contains("YT.PlayerState.ENDED"))
-        XCTAssertTrue(html.contains("{ type: 'ended' }"))
+        XCTAssertTrue(html.contains("window.player.getCurrentTime()"))
+        XCTAssertTrue(html.contains("{ type: 'ended', sec: endedTime }"))
         XCTAssertTrue(html.contains("onError:"))
         XCTAssertTrue(html.contains("{ type: 'failure' }"))
         let onError = html.range(of: "onError: function()")!

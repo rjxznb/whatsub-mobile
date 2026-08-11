@@ -27,9 +27,18 @@ enum LibraryPlayerSource: Equatable {
 enum LibraryPlaybackPreparationAction: Equatable {
     case prepare
     case resumeExisting
+    case recoverMissingOSSPlayer
 
-    static func forPrepared(_ isPrepared: Bool) -> LibraryPlaybackPreparationAction {
-        isPrepared ? .resumeExisting : .prepare
+    static func resolve(
+        isPrepared: Bool,
+        source: LibraryPlayerSource?,
+        hasAVPlayer: Bool
+    ) -> LibraryPlaybackPreparationAction {
+        guard isPrepared else { return .prepare }
+        if source == .oss, !hasAVPlayer {
+            return .recoverMissingOSSPlayer
+        }
+        return .resumeExisting
     }
 }
 
@@ -213,9 +222,17 @@ struct LibraryDetailView: View {
         .statusBarHidden(isLandscape)
         .task {
             guard let token = appState.session?.sessionToken else { return }
-            if LibraryPlaybackPreparationAction.forPrepared(playbackPrepared) == .resumeExisting {
+            let preparationAction = LibraryPlaybackPreparationAction.resolve(
+                isPrepared: playbackPrepared,
+                source: activePlayerSource,
+                hasAVPlayer: avPlayer != nil
+            )
+            if preparationAction != .prepare {
                 if pollingLifecycle.shouldStart(taskIsCancelled: Task.isCancelled) {
                     vm.startManagedProgress(token: token)
+                }
+                if preparationAction == .recoverMissingOSSPlayer {
+                    reloadActivePlayer()
                 }
                 return
             }
@@ -376,6 +393,7 @@ struct LibraryDetailView: View {
             pollingLifecycle.disappear()
             flushPlaybackProgress()
             ossReloadTask?.cancel()
+            ossReloadTask = nil
             if let generation = ossReloadState.activeGeneration {
                 ossReloadState.cancel(generation: generation)
             }
@@ -417,7 +435,9 @@ struct LibraryDetailView: View {
                     onTime: { sec in handlePlayerTime(sec, generation: generation) },
                     resumeSeconds: playerRestorePosition,
                     onFailure: { handlePlayerFailure(generation: generation) },
-                    onEnded: { handlePlayerEnded(generation: generation) },
+                    onEnded: { position in
+                        handlePlayerEnded(position: position, generation: generation)
+                    },
                     onPlaying: { handlePlayerPlaying(generation: generation) },
                     onSeekConsumed: { nonce in
                         handlePlayerSeekConsumed(nonce, generation: generation)
@@ -437,11 +457,14 @@ struct LibraryDetailView: View {
                     replaySnapshot: youtubeClipPlayback.consumerRebuildReplaySnapshot,
                     onClipEnded: { nonce in youtubeClipPlayback.clipEnded(nonce: nonce) },
                     onFailure: { handlePlayerFailure(generation: generation) },
-                    onEnded: { handlePlayerEnded(generation: generation) },
+                    onEnded: { position in
+                        handlePlayerEnded(position: position, generation: generation)
+                    },
                     onPlaying: { handlePlayerPlaying(generation: generation) },
                     onSeekConsumed: { nonce in
                         handlePlayerSeekConsumed(nonce, generation: generation)
                     },
+                    operationOwner: avOperationOwner,
                     reusableSurface: youtubeSurface,
                     surfaceKey: "\(entry.id)-\(generation)"
                 )
@@ -955,10 +978,10 @@ struct LibraryDetailView: View {
         playerTimedOut = true
     }
 
-    private func handlePlayerEnded(generation: Int) {
+    private func handlePlayerEnded(position: Double?, generation: Int) {
         guard playbackSession.isCurrent(generation: generation) else { return }
         playerRestorePosition = nil
-        enqueuePlaybackPersistence(playbackSession.markEnded())
+        enqueuePlaybackPersistence(playbackSession.markEnded(at: position))
     }
 
     private func handlePlayerPlaying(generation: Int) {

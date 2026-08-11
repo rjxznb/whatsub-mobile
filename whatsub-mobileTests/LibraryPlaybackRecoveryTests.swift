@@ -119,6 +119,10 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
         )
         XCTAssertTrue(source.contains("youtubeSurface.pause()"))
         XCTAssertTrue(source.contains("avOperationOwner.cancelAll()"))
+        XCTAssertEqual(
+            source.components(separatedBy: "operationOwner: avOperationOwner").count - 1,
+            2
+        )
     }
 
     func testPlayerWrappersUseCompletionBasedSeekAcceptance() throws {

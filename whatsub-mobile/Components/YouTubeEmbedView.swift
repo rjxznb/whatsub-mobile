@@ -8,7 +8,7 @@ enum YouTubeBridgeEvent: Equatable {
     case time(Double)
     case clipEnded(UUID)
     case failure
-    case ended
+    case ended(Double?)
 
     static func decode(_ body: Any) -> YouTubeBridgeEvent? {
         guard let dict = body as? [String: Any],
@@ -31,7 +31,11 @@ enum YouTubeBridgeEvent: Equatable {
         case "failure":
             return .failure
         case "ended":
-            return .ended
+            if let seconds = (dict["sec"] as? NSNumber)?.doubleValue,
+               seconds.isFinite {
+                return .ended(seconds)
+            }
+            return .ended(nil)
         default:
             return nil
         }
@@ -131,7 +135,7 @@ struct YouTubeBridgeHandoffState: Equatable {
 
         guard !hasConsumer else { return [event] }
         switch event {
-        case .playing, .clipEnded, .ended:
+        case .playing, .clipEnded(_), .ended(_):
             queuedEvents.append(event)
             if queuedEvents.count > 8 {
                 queuedEvents.removeFirst(queuedEvents.count - 8)
@@ -252,11 +256,14 @@ struct YouTubeEmbedView: UIViewRepresentable {
     /// Called when the IFrame player reports a playback error.
     var onFailure: () -> Void = {}
     /// Called only when the IFrame player explicitly reaches its ended state.
-    var onEnded: () -> Void = {}
+    var onEnded: (Double?) -> Void = { _ in }
     /// Called whenever playback actually enters the playing state.
     var onPlaying: () -> Void = {}
     /// Clears the parent-owned command only after JavaScript received it.
     var onSeekConsumed: (UUID) -> Void = { _ in }
+    /// Shared with the parent so a visibility/source-generation change can
+    /// invalidate explicit seeks that are still waiting for iframe readiness.
+    var operationOwner: PlayerOperationOwner = PlayerOperationOwner()
     /// Library detail supplies one shared surface so portrait/landscape layout
     /// changes reattach the existing WKWebView instead of restarting YouTube.
     var reusableSurface: YouTubeWebViewSurface? = nil
@@ -271,7 +278,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
             onFailure: onFailure,
             onEnded: onEnded,
             onPlaying: onPlaying,
-            onSeekConsumed: onSeekConsumed
+            onSeekConsumed: onSeekConsumed,
+            operationOwner: operationOwner
         )
     }
 
@@ -361,9 +369,10 @@ struct YouTubeEmbedView: UIViewRepresentable {
         let onTime: (Double) -> Void
         let onClipEnded: (UUID) -> Void
         let onFailure: () -> Void
-        let onEnded: () -> Void
+        let onEnded: (Double?) -> Void
         let onPlaying: () -> Void
         let onSeekConsumed: (UUID) -> Void
+        let operationOwner: PlayerOperationOwner
         weak var webView: WKWebView?
         weak var reusableSurface: YouTubeWebViewSurface?
         var bridgeProxy: YouTubeBridgeProxy?
@@ -379,9 +388,10 @@ struct YouTubeEmbedView: UIViewRepresentable {
             onTime: @escaping (Double) -> Void,
             onClipEnded: @escaping (UUID) -> Void,
             onFailure: @escaping () -> Void,
-            onEnded: @escaping () -> Void,
+            onEnded: @escaping (Double?) -> Void,
             onPlaying: @escaping () -> Void,
-            onSeekConsumed: @escaping (UUID) -> Void
+            onSeekConsumed: @escaping (UUID) -> Void,
+            operationOwner: PlayerOperationOwner
         ) {
             self.onReady = onReady
             self.onTime = onTime
@@ -390,13 +400,16 @@ struct YouTubeEmbedView: UIViewRepresentable {
             self.onEnded = onEnded
             self.onPlaying = onPlaying
             self.onSeekConsumed = onSeekConsumed
+            self.operationOwner = operationOwner
         }
 
         func receive(_ event: YouTubeBridgeEvent) {
             switch event {
             case .surfaceReady:
-                if let request = seekDeliveryState.markReady() {
-                    deliverExplicitSeek(request)
+                if let delivery = seekDeliveryState.markReady(
+                    operationOwner: operationOwner
+                ) {
+                    deliverExplicitSeek(delivery)
                 }
             case .ready:
                 if !didSignalReady {
@@ -412,8 +425,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
                 onClipEnded(nonce)
             case .failure:
                 onFailure()
-            case .ended:
-                onEnded()
+            case .ended(let position):
+                onEnded(position)
             case .playing:
                 onPlaying()
             }
@@ -421,8 +434,10 @@ struct YouTubeEmbedView: UIViewRepresentable {
 
         func adoptReusableSurface(surfaceReady: Bool, playerReady: Bool) {
             if surfaceReady,
-               let request = seekDeliveryState.markReady() {
-                deliverExplicitSeek(request)
+               let delivery = seekDeliveryState.markReady(
+                operationOwner: operationOwner
+               ) {
+                deliverExplicitSeek(delivery)
             }
             if playerReady, !didSignalReady {
                 didSignalReady = true
@@ -436,21 +451,31 @@ struct YouTubeEmbedView: UIViewRepresentable {
         func requestExplicitSeek(_ request: SeekRequest) {
             guard request != lastSeek else { return }
             lastSeek = request
-            guard let request = seekDeliveryState.queue(request) else { return }
-            deliverExplicitSeek(request)
+            let token = operationOwner.begin()
+            guard let delivery = seekDeliveryState.queue(
+                request,
+                operationToken: token,
+                operationOwner: operationOwner
+            ) else { return }
+            deliverExplicitSeek(delivery)
         }
 
-        private func deliverExplicitSeek(_ request: SeekRequest) {
+        private func deliverExplicitSeek(_ delivery: PlayerSeekDelivery) {
+            let request = delivery.request
+            let operationToken = delivery.operationToken
             let seconds = max(0, request.seconds)
-            guard seconds.isFinite, let webView else { return }
+            guard seconds.isFinite,
+                  operationOwner.isCurrent(operationToken),
+                  let webView else { return }
             let acknowledge = onSeekConsumed
             let nonce = request.nonce
+            let operationOwner = operationOwner
             webView.evaluateJavaScript("window.whatsubExplicitSeek(\(seconds))") { result, error in
                 let resultWasTrue = (result as? NSNumber)?.boolValue == true
                 guard PlayerSeekAcceptance.javascript(
                     resultWasTrue: resultWasTrue,
                     errorWasNil: error == nil
-                ) else { return }
+                ), operationOwner.isCurrent(operationToken) else { return }
                 DispatchQueue.main.async {
                     acknowledge(nonce)
                 }
@@ -639,7 +664,10 @@ struct YouTubeEmbedView: UIViewRepresentable {
                     window.whatsubSignalReady();
                   }
                   if (event.data === YT.PlayerState.ENDED) {
-                    try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'ended' }); } catch (e) {}
+                    var endedTime = null;
+                    try { endedTime = window.player.getCurrentTime(); } catch (e) {}
+                    try { window.webkit.messageHandlers.iosBridge.postMessage(
+                      { type: 'ended', sec: endedTime }); } catch (e) {}
                   }
                 },
                 onError: function() {
