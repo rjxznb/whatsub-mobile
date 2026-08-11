@@ -1,6 +1,37 @@
 import SwiftUI
 import WebKit
 
+enum YouTubeBridgeEvent: Equatable {
+    case ready
+    case time(Double)
+    case clipEnded(UUID)
+    case failure
+    case ended
+
+    static func decode(_ body: Any) -> YouTubeBridgeEvent? {
+        guard let dict = body as? [String: Any],
+              let type = dict["type"] as? String else { return nil }
+        switch type {
+        case "ready":
+            return .ready
+        case "time":
+            guard let seconds = (dict["sec"] as? NSNumber)?.doubleValue,
+                  seconds.isFinite else { return nil }
+            return .time(seconds)
+        case "clipEnded":
+            guard let rawNonce = dict["nonce"] as? String,
+                  let nonce = UUID(uuidString: rawNonce) else { return nil }
+            return .clipEnded(nonce)
+        case "failure":
+            return .failure
+        case "ended":
+            return .ended
+        default:
+            return nil
+        }
+    }
+}
+
 /// A seek request from SwiftUI → the embedded player. `nonce` forces SwiftUI
 /// to treat repeated seeks to the same second as distinct (so updateUIView fires).
 struct SeekRequest: Equatable {
@@ -23,15 +54,27 @@ struct YouTubeEmbedView: UIViewRepresentable {
     /// If set, the player starts at this timestamp (seconds). Default nil = no start offset.
     /// Pass this for corpus phrase instances that have a `timestampSec`; omit for Library callers.
     var startSeconds: Double? = nil
+    /// Library resume position. Unlike an explicit seek, restoration never starts playback.
+    var resumeSeconds: Double? = nil
     /// Optional bounded-playback command shared by cue-driven consumers.
     var clipCommand: YouTubeClipPlaybackCommand? = nil
     /// Full active clip state to replay when this representable gets a new coordinator.
     var replaySnapshot: YouTubeClipPlaybackCommand? = nil
     /// Called when the IFrame player reaches the active clip boundary.
     var onClipEnded: (UUID) -> Void = { _ in }
+    /// Called when the IFrame player reports a playback error.
+    var onFailure: () -> Void = {}
+    /// Called only when the IFrame player explicitly reaches its ended state.
+    var onEnded: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onReady: onReady, onTime: onTime, onClipEnded: onClipEnded)
+        Coordinator(
+            onReady: onReady,
+            onTime: onTime,
+            onClipEnded: onClipEnded,
+            onFailure: onFailure,
+            onEnded: onEnded
+        )
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -43,7 +86,14 @@ struct YouTubeEmbedView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         webView.isOpaque = false
         webView.backgroundColor = .black
-        webView.loadHTMLString(Self.html(videoId: videoId, startSeconds: startSeconds), baseURL: URL(string: "https://www.youtube-nocookie.com"))
+        webView.loadHTMLString(
+            Self.html(
+                videoId: videoId,
+                startSeconds: startSeconds,
+                resumeSeconds: resumeSeconds
+            ),
+            baseURL: URL(string: "https://www.youtube-nocookie.com")
+        )
         context.coordinator.webView = webView
         return webView
     }
@@ -76,6 +126,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
         let onReady: () -> Void
         let onTime: (Double) -> Void
         let onClipEnded: (UUID) -> Void
+        let onFailure: () -> Void
+        let onEnded: () -> Void
         weak var webView: WKWebView?
         var lastSeek: SeekRequest?
         var lastClipCommand: YouTubeClipPlaybackCommand?
@@ -86,19 +138,22 @@ struct YouTubeEmbedView: UIViewRepresentable {
         init(
             onReady: @escaping () -> Void,
             onTime: @escaping (Double) -> Void,
-            onClipEnded: @escaping (UUID) -> Void
+            onClipEnded: @escaping (UUID) -> Void,
+            onFailure: @escaping () -> Void,
+            onEnded: @escaping () -> Void
         ) {
             self.onReady = onReady
             self.onTime = onTime
             self.onClipEnded = onClipEnded
+            self.onFailure = onFailure
+            self.onEnded = onEnded
         }
 
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "iosBridge",
-                  let dict = message.body as? [String: Any],
-                  let type = dict["type"] as? String else { return }
-            switch type {
-            case "ready":
+                  let event = YouTubeBridgeEvent.decode(message.body) else { return }
+            switch event {
+            case .ready:
                 if !didSignalReady {
                     didSignalReady = true
                     for commandToDeliver in clipDeliveryState.markReady() {
@@ -106,14 +161,14 @@ struct YouTubeEmbedView: UIViewRepresentable {
                     }
                     onReady()
                 }
-            case "time":
-                if let sec = dict["sec"] as? Double { onTime(sec) }
-            case "clipEnded":
-                guard let rawNonce = dict["nonce"] as? String,
-                      let nonce = UUID(uuidString: rawNonce) else { return }
+            case .time(let seconds):
+                onTime(seconds)
+            case .clipEnded(let nonce):
                 onClipEnded(nonce)
-            default:
-                break
+            case .failure:
+                onFailure()
+            case .ended:
+                onEnded()
             }
         }
 
@@ -182,7 +237,11 @@ struct YouTubeEmbedView: UIViewRepresentable {
         }
     }
 
-    static func html(videoId rawVideoId: String, startSeconds: Double?) -> String {
+    static func html(
+        videoId rawVideoId: String,
+        startSeconds: Double?,
+        resumeSeconds: Double? = nil
+    ) -> String {
         // Defense-in-depth: only a real YouTube id shape ([A-Za-z0-9_-]{11})
         // may be interpolated into the inline <script>. A hostile/malformed id
         // (e.g. one containing a quote or `</script>`) would otherwise break
@@ -193,6 +252,17 @@ struct YouTubeEmbedView: UIViewRepresentable {
         // backend independently sanitizes `source.youtubeId` on /contribute.
         let videoId = VideoSource.isLikelyYouTubeId(rawVideoId) ? rawVideoId : ""
         let startVar = startSeconds.map { ", start: \(Int($0))" } ?? ""
+        let resumeScript: String
+        if let resumeSeconds, resumeSeconds.isFinite, resumeSeconds >= 0 {
+            resumeScript = """
+                  if (window.player && window.player.seekTo) {
+                    window.player.seekTo(\(Int(resumeSeconds)), false);
+                    if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                  }
+            """
+        } else {
+            resumeScript = ""
+        }
         return """
         <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
         <style>html,body{margin:0;background:#000;height:100%;overflow:hidden}#player{width:100%;height:100%}</style></head>
@@ -209,6 +279,7 @@ struct YouTubeEmbedView: UIViewRepresentable {
               playerVars: { playsinline: 1, modestbranding: 1, rel: 0\(startVar) },
               events: {
                 onReady: function() {
+        \(resumeScript)
                   try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'ready' }); } catch (e) {}
                   setInterval(function() {
                     if (window.player && window.player.getCurrentTime) {
@@ -229,6 +300,14 @@ struct YouTubeEmbedView: UIViewRepresentable {
                       } catch (e) {}
                     }
                   }, 250);
+                },
+                onStateChange: function(event) {
+                  if (event.data === YT.PlayerState.ENDED) {
+                    try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'ended' }); } catch (e) {}
+                  }
+                },
+                onError: function() {
+                  try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'failure' }); } catch (e) {}
                 }
               }
             });
