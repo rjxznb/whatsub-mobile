@@ -26,7 +26,7 @@ The existing player callbacks report time about four times per second. `LibraryD
 On detail load, the view reads the saved position before constructing the playback surface.
 
 - Native AVPlayer seeks after the current item becomes ready.
-- YouTube receives the saved offset when constructing the iframe and issues a pause after readiness to guarantee that restoration never autoplays.
+- YouTube receives a defensively clamped saved offset when constructing the iframe, permits a network seek to unbuffered positions, and confirms it with a bounded keyframe-tolerant loop before reporting ready. It pauses both before and after confirmation so restoration never autoplays or leaves the loading surface stuck indefinitely.
 - With no saved record, playback starts at zero.
 - A saved position near the end is still restored. There is no percentage or remaining-time heuristic.
 - Progress is removed only after an explicit completion event:
@@ -36,7 +36,7 @@ On detail load, the view reads the saved position before constructing the playba
 
 After an explicit completion event, the current player generation enters a completed state so trailing end-of-stream time callbacks cannot immediately recreate the deleted record. If the user subsequently replays or seeks back from the end, a new playing/seek signal exits that state and later partial progress is persisted normally.
 
-The restore action is idempotent per player generation. Later subtitle seeks and collection timestamp seeks continue to work and take precedence over the initial restore.
+The restore action is idempotent per player generation. Later subtitle seeks and collection timestamp seeks continue to work and take precedence over the initial restore. Explicit seek commands remain parent-owned until a player actually consumes their nonce; consumed commands cannot replay after rotation or retry, while a command queued before readiness survives coordinator replacement.
 
 ## In-place reload
 
@@ -50,7 +50,7 @@ The existing loading overlay becomes an actionable error surface for both playba
 4. rebuilds the active playback surface;
 5. restores the captured position while paused after readiness.
 
-For YouTube, changing the generation changes the representable identity and constructs a fresh WKWebView/iframe instead of relying on `WKWebView.reload()`. This recovers iframe/API bootstrap failures more reliably.
+For YouTube, changing the generation changes the representable identity and constructs a fresh WKWebView/iframe instead of relying on `WKWebView.reload()`. This recovers iframe/API bootstrap failures more reliably. Rotation within one generation reuses that WKWebView inside fresh lightweight container views. A stable script-message proxy remains installed for the WebView lifetime and caches readiness/terminal events during the brief coordinator handoff, avoiding a permanently lost `ready` event.
 
 For OSS, reload replaces the current `AVPlayerItem` or player with a fresh item created from the current signed video URL. It reattaches readiness, time, caption, end-of-playback, and background-audio observation through the existing `VideoPlayerView` lifecycle.
 

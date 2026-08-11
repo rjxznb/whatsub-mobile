@@ -190,7 +190,7 @@ Expected: compilation fails on the new `resumeSeconds` HTML signature and lifecy
 
 - [ ] **Step 3: Implement the bridge without changing existing consumers**
 
-Keep `startSeconds` as the existing corpus/phrase start option. Add a separate finite, non-negative `resumeSeconds`. In `onReady`, when resume exists, execute `seekTo(resume, false)` and `pauseVideo()` before posting `ready`. Add IFrame `onStateChange` and `onError` handlers that post `ended` and `failure`. Map those messages in the coordinator. Do not call `playVideo()` during restore.
+Keep `startSeconds` as the existing corpus/phrase start option. Add a separate finite, non-negative `resumeSeconds`. In `onReady`, clamp the saved value defensively (and to the reported duration when available), execute `seekTo(resume, true)` so an unbuffered deep position can load, and `pauseVideo()` before posting `ready`. Confirm within a bounded retry loop with keyframe tolerance, then remain paused even if YouTube cannot report the exact requested second. Add IFrame `onStateChange` and `onError` handlers that post `ended` and `failure`. Map those messages in the coordinator. Do not call `playVideo()` during restore.
 
 - [ ] **Step 4: Commit GREEN after full CI**
 
