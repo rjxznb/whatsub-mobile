@@ -37,6 +37,36 @@ enum AVPlayerLifecycleDecision: Equatable {
     }
 }
 
+struct PlayerSeekDeliveryState: Equatable {
+    private var isReady = false
+    private var pending: SeekRequest?
+
+    mutating func queue(_ request: SeekRequest) -> SeekRequest? {
+        guard !isReady else { return request }
+        pending = request
+        return nil
+    }
+
+    mutating func markReady() -> SeekRequest? {
+        isReady = true
+        defer { pending = nil }
+        return pending
+    }
+}
+
+struct PlayerOperationRevision: Equatable {
+    private var value = 0
+
+    mutating func begin() -> Int {
+        value += 1
+        return value
+    }
+
+    func isCurrent(_ candidate: Int) -> Bool {
+        candidate == value
+    }
+}
+
 /// Native AVPlayer-backed video view. Input surface mirrors YouTubeEmbedView
 /// (player, seek, onReady, onTime) so LibraryDetailView can swap between them
 /// without changing the view model.
@@ -71,6 +101,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     var resumeSeconds: Double? = nil
     var onFailure: () -> Void = {}
     var onEnded: () -> Void = {}
+    var onPlaying: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -78,7 +109,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             onReady: onReady,
             onTime: onTime,
             onFailure: onFailure,
-            onEnded: onEnded
+            onEnded: onEnded,
+            onPlaying: onPlaying
         )
     }
 
@@ -137,15 +169,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         // Caption first (always), then the seek (which can early-return).
         context.coordinator.ensureCaptionView(in: vc)
         context.coordinator.updateCaption(cue: currentCue, show: showCaptions)
-        guard let seek, seek != context.coordinator.lastSeek else { return }
-        context.coordinator.lastSeek = seek
-        if case .seekAndPlay(let seconds) = AVPlayerLifecycleDecision.explicitSeek(
-            seconds: seek.seconds
-        ) {
-            let time = CMTime(seconds: seconds, preferredTimescale: 600)
-            vc.player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-            vc.player?.play()
-        }
+        guard let seek else { return }
+        context.coordinator.requestExplicitSeek(seek)
     }
 
     static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
@@ -160,14 +185,19 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         let onTime: (Double) -> Void
         let onFailure: () -> Void
         let onEnded: () -> Void
+        let onPlaying: () -> Void
         private let resumeSeconds: Double?
-        var lastSeek: SeekRequest?
+        private var lastSeek: SeekRequest?
         private weak var player: AVPlayer?
         private var timeObserver: Any?
         private var statusObs: NSKeyValueObservation?
+        private var timeControlObs: NSKeyValueObservation?
         private var endObserver: NSObjectProtocol?
-        private var didReady = false
+        private var didHandleItemReady = false
+        private var didSignalReady = false
         private var didFail = false
+        private var seekDeliveryState = PlayerSeekDeliveryState()
+        private var operationRevision = PlayerOperationRevision()
         // Caption UI lives in the player's contentOverlayView so it shows in
         // native fullscreen too.
         private var captionContainer: UIView?
@@ -179,19 +209,26 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             onReady: @escaping () -> Void,
             onTime: @escaping (Double) -> Void,
             onFailure: @escaping () -> Void,
-            onEnded: @escaping () -> Void
+            onEnded: @escaping () -> Void,
+            onPlaying: @escaping () -> Void
         ) {
             self.resumeSeconds = resumeSeconds
             self.onReady = onReady
             self.onTime = onTime
             self.onFailure = onFailure
             self.onEnded = onEnded
+            self.onPlaying = onPlaying
         }
         func attach(player: AVPlayer) {
             self.player = player
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
             ) { [weak self] t in self?.onTime(t.seconds) }
+            timeControlObs = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+                if player.timeControlStatus == .playing {
+                    self?.onPlaying()
+                }
+            }
             guard let item = player.currentItem else {
                 signalFailureOnce()
                 return
@@ -219,6 +256,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         func detach() {
             if let o = timeObserver { player?.removeTimeObserver(o); timeObserver = nil }
             statusObs?.invalidate(); statusObs = nil
+            timeControlObs?.invalidate(); timeControlObs = nil
             if let endObserver {
                 NotificationCenter.default.removeObserver(endObserver)
                 self.endObserver = nil
@@ -227,25 +265,66 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         deinit { detach() }
 
         private func handleReady() {
-            guard !didReady, let player else { return }
-            didReady = true
+            guard !didHandleItemReady, let player else { return }
+            didHandleItemReady = true
+            if let pendingSeek = seekDeliveryState.markReady() {
+                performExplicitSeek(pendingSeek)
+                return
+            }
             switch AVPlayerLifecycleDecision.ready(resumeSeconds: resumeSeconds) {
             case .seekPaused(let seconds):
+                let revision = operationRevision.begin()
                 player.pause()
                 let time = CMTime(seconds: seconds, preferredTimescale: 600)
                 player.seek(
                     to: time,
                     toleranceBefore: .zero,
                     toleranceAfter: .zero
-                ) { [weak self, weak player] _ in
+                ) { [weak self, weak player] finished in
+                    guard let self,
+                          finished,
+                          self.operationRevision.isCurrent(revision) else { return }
                     player?.pause()
-                    self?.onReady()
+                    self.signalReadyOnce()
                 }
             case .ready:
-                onReady()
+                signalReadyOnce()
             default:
                 break
             }
+        }
+
+        func requestExplicitSeek(_ request: SeekRequest) {
+            guard request != lastSeek else { return }
+            lastSeek = request
+            guard let request = seekDeliveryState.queue(request) else { return }
+            performExplicitSeek(request)
+        }
+
+        private func performExplicitSeek(_ request: SeekRequest) {
+            guard let player,
+                  case .seekAndPlay(let seconds) = AVPlayerLifecycleDecision.explicitSeek(
+                    seconds: request.seconds
+                  ) else { return }
+            let revision = operationRevision.begin()
+            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+            player.seek(
+                to: time,
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            ) { [weak self, weak player] finished in
+                guard let self,
+                      finished,
+                      self.operationRevision.isCurrent(revision) else { return }
+                player?.play()
+                self.signalReadyOnce()
+            }
+        }
+
+        private func signalReadyOnce() {
+            guard !didSignalReady else { return }
+            didSignalReady = true
+            onReady()
         }
 
         private func signalFailureOnce() {

@@ -2,7 +2,9 @@ import SwiftUI
 import WebKit
 
 enum YouTubeBridgeEvent: Equatable {
+    case surfaceReady
     case ready
+    case playing
     case time(Double)
     case clipEnded(UUID)
     case failure
@@ -12,8 +14,12 @@ enum YouTubeBridgeEvent: Equatable {
         guard let dict = body as? [String: Any],
               let type = dict["type"] as? String else { return nil }
         switch type {
+        case "surfaceReady":
+            return .surfaceReady
         case "ready":
             return .ready
+        case "playing":
+            return .playing
         case "time":
             guard let seconds = (dict["sec"] as? NSNumber)?.doubleValue,
                   seconds.isFinite else { return nil }
@@ -66,6 +72,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
     var onFailure: () -> Void = {}
     /// Called only when the IFrame player explicitly reaches its ended state.
     var onEnded: () -> Void = {}
+    /// Called whenever playback actually enters the playing state.
+    var onPlaying: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -73,7 +81,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
             onTime: onTime,
             onClipEnded: onClipEnded,
             onFailure: onFailure,
-            onEnded: onEnded
+            onEnded: onEnded,
+            onPlaying: onPlaying
         )
     }
 
@@ -99,10 +108,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if let seek, seek != context.coordinator.lastSeek {
-            context.coordinator.lastSeek = seek
-            let js = "if (window.player && window.player.seekTo) { window.player.seekTo(\(seek.seconds), true); window.player.playVideo(); }"
-            webView.evaluateJavaScript(js)
+        if let seek {
+            context.coordinator.requestExplicitSeek(seek)
         }
 
         if context.coordinator.isFirstClipUpdate {
@@ -128,8 +135,10 @@ struct YouTubeEmbedView: UIViewRepresentable {
         let onClipEnded: (UUID) -> Void
         let onFailure: () -> Void
         let onEnded: () -> Void
+        let onPlaying: () -> Void
         weak var webView: WKWebView?
-        var lastSeek: SeekRequest?
+        private var lastSeek: SeekRequest?
+        private var seekDeliveryState = PlayerSeekDeliveryState()
         var lastClipCommand: YouTubeClipPlaybackCommand?
         var clipDeliveryState = YouTubeClipCommandDeliveryState()
         var isFirstClipUpdate = true
@@ -140,19 +149,25 @@ struct YouTubeEmbedView: UIViewRepresentable {
             onTime: @escaping (Double) -> Void,
             onClipEnded: @escaping (UUID) -> Void,
             onFailure: @escaping () -> Void,
-            onEnded: @escaping () -> Void
+            onEnded: @escaping () -> Void,
+            onPlaying: @escaping () -> Void
         ) {
             self.onReady = onReady
             self.onTime = onTime
             self.onClipEnded = onClipEnded
             self.onFailure = onFailure
             self.onEnded = onEnded
+            self.onPlaying = onPlaying
         }
 
         func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "iosBridge",
                   let event = YouTubeBridgeEvent.decode(message.body) else { return }
             switch event {
+            case .surfaceReady:
+                if let request = seekDeliveryState.markReady() {
+                    deliverExplicitSeek(request)
+                }
             case .ready:
                 if !didSignalReady {
                     didSignalReady = true
@@ -169,7 +184,22 @@ struct YouTubeEmbedView: UIViewRepresentable {
                 onFailure()
             case .ended:
                 onEnded()
+            case .playing:
+                onPlaying()
             }
+        }
+
+        func requestExplicitSeek(_ request: SeekRequest) {
+            guard request != lastSeek else { return }
+            lastSeek = request
+            guard let request = seekDeliveryState.queue(request) else { return }
+            deliverExplicitSeek(request)
+        }
+
+        private func deliverExplicitSeek(_ request: SeekRequest) {
+            let seconds = max(0, request.seconds)
+            guard seconds.isFinite else { return }
+            webView?.evaluateJavaScript("window.whatsubExplicitSeek(\(seconds));")
         }
 
         func deliverClipCommand(_ command: YouTubeClipPlaybackCommand) {
@@ -255,13 +285,24 @@ struct YouTubeEmbedView: UIViewRepresentable {
         let resumeScript: String
         if let resumeSeconds, resumeSeconds.isFinite, resumeSeconds >= 0 {
             resumeScript = """
-                  if (window.player && window.player.seekTo) {
-                    window.player.seekTo(\(Int(resumeSeconds)), false);
-                    if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                  var restoreTarget = \(Int(resumeSeconds));
+                  var restoreRevision = ++window.whatsubRestoreRevision;
+                  window.player.seekTo(\(Int(resumeSeconds)), false);
+                  if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                  function confirmRestore() {
+                    if (restoreRevision !== window.whatsubRestoreRevision) { return; }
+                    var currentTime = window.player.getCurrentTime();
+                    if (Math.abs(currentTime - restoreTarget) <= 1) {
+                      if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                      window.whatsubSignalReady();
+                    } else {
+                      setTimeout(confirmRestore, 100);
+                    }
                   }
+                  setTimeout(confirmRestore, 100);
             """
         } else {
-            resumeScript = ""
+            resumeScript = "                  window.whatsubSignalReady();"
         }
         return """
         <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
@@ -272,6 +313,44 @@ struct YouTubeEmbedView: UIViewRepresentable {
           window.player = null;
           window.whatsubClipEnd = null;
           window.whatsubClipNonce = null;
+          window.whatsubRestoreRevision = 0;
+          window.whatsubDidSignalReady = false;
+          window.whatsubTimeInterval = null;
+          window.whatsubStartTimeUpdates = function() {
+            if (window.whatsubTimeInterval !== null) { return; }
+            window.whatsubTimeInterval = setInterval(function() {
+              if (window.player && window.player.getCurrentTime) {
+                try {
+                  var currentTime = window.player.getCurrentTime();
+                  if (window.whatsubClipEnd !== null && currentTime >= window.whatsubClipEnd) {
+                    if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                    var clipNonce = window.whatsubClipNonce;
+                    window.whatsubClipEnd = null;
+                    window.whatsubClipNonce = null;
+                    if (clipNonce !== null) {
+                      window.webkit.messageHandlers.iosBridge.postMessage(
+                        { type: 'clipEnded', nonce: clipNonce });
+                    }
+                  }
+                  window.webkit.messageHandlers.iosBridge.postMessage(
+                    { type: 'time', sec: currentTime });
+                } catch (e) {}
+              }
+            }, 250);
+          };
+          window.whatsubSignalReady = function() {
+            if (window.whatsubDidSignalReady) { return; }
+            window.whatsubDidSignalReady = true;
+            try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'ready' }); } catch (e) {}
+            window.whatsubStartTimeUpdates();
+          };
+          window.whatsubExplicitSeek = function(seconds) {
+            window.whatsubRestoreRevision += 1;
+            if (!window.player || !window.player.seekTo || !Number.isFinite(seconds)) { return; }
+            window.player.seekTo(Math.max(0, seconds), true);
+            if (window.player.playVideo) { window.player.playVideo(); }
+            window.whatsubSignalReady();
+          };
           function onYouTubeIframeAPIReady() {
             window.player = new YT.Player('player', {
               videoId: '\(videoId)',
@@ -279,29 +358,15 @@ struct YouTubeEmbedView: UIViewRepresentable {
               playerVars: { playsinline: 1, modestbranding: 1, rel: 0\(startVar) },
               events: {
                 onReady: function() {
+                  try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'surfaceReady' }); } catch (e) {}
         \(resumeScript)
-                  try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'ready' }); } catch (e) {}
-                  setInterval(function() {
-                    if (window.player && window.player.getCurrentTime) {
-                      try {
-                        var currentTime = window.player.getCurrentTime();
-                        if (window.whatsubClipEnd !== null && currentTime >= window.whatsubClipEnd) {
-                          if (window.player.pauseVideo) { window.player.pauseVideo(); }
-                          var clipNonce = window.whatsubClipNonce;
-                          window.whatsubClipEnd = null;
-                          window.whatsubClipNonce = null;
-                          if (clipNonce !== null) {
-                            window.webkit.messageHandlers.iosBridge.postMessage(
-                              { type: 'clipEnded', nonce: clipNonce });
-                          }
-                        }
-                        window.webkit.messageHandlers.iosBridge.postMessage(
-                          { type: 'time', sec: currentTime });
-                      } catch (e) {}
-                    }
-                  }, 250);
                 },
                 onStateChange: function(event) {
+                  if (event.data === YT.PlayerState.PLAYING) {
+                    window.whatsubRestoreRevision += 1;
+                    try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'playing' }); } catch (e) {}
+                    window.whatsubSignalReady();
+                  }
                   if (event.data === YT.PlayerState.ENDED) {
                     try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'ended' }); } catch (e) {}
                   }

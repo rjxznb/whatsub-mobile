@@ -66,7 +66,11 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         let surfaceReady = try XCTUnwrap(html.range(of: "{ type: 'surfaceReady' }"))
         let seek = try XCTUnwrap(html.range(of: "window.player.seekTo(42"))
         let confirmed = try XCTUnwrap(html.range(of: "Math.abs(currentTime - restoreTarget) <= 1"))
-        let restoredReady = try XCTUnwrap(html.range(of: "{ type: 'ready' }", options: [], range: confirmed.lowerBound..<html.endIndex))
+        let restoredReady = try XCTUnwrap(html.range(
+            of: "window.whatsubSignalReady();",
+            options: [],
+            range: confirmed.lowerBound..<html.endIndex
+        ))
 
         XCTAssertLessThan(surfaceReady.lowerBound, seek.lowerBound)
         XCTAssertLessThan(confirmed.lowerBound, restoredReady.lowerBound)
