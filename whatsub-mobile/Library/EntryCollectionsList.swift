@@ -12,6 +12,10 @@ struct CollectionGlossSelection {
     let collectionState: WordGloss.CollectionState
 }
 
+enum EntryCollectionTimestampTargetLayout {
+    static let minimumHitSize = CGSize(width: 44, height: 44)
+}
+
 /// Keeps the two Collection-row hit targets explicit and independently testable.
 enum EntryCollectionRowInteraction {
     enum Target {
@@ -171,6 +175,12 @@ struct EntryCollectionsList: View {
                         Text(mmss(ts))
                             .font(.caption.monospaced())
                             .foregroundStyle(.whatsubAccent)
+                            .frame(
+                                minWidth: EntryCollectionTimestampTargetLayout.minimumHitSize.width,
+                                minHeight: EntryCollectionTimestampTargetLayout.minimumHitSize.height,
+                                alignment: .leading
+                            )
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
