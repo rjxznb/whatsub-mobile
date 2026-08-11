@@ -31,6 +31,30 @@ enum DesktopReplacementToolbarPresentation {
     }
 }
 
+enum LibraryDetailContentTab: String, Hashable, CaseIterable {
+    case subtitles
+    case collections
+    case roleplay
+}
+
+enum VideoLearningGuidePhase: Equatable {
+    case idle
+    case loading
+    case ready
+    case failed(RemoteFailure)
+    case analysisChanged
+    case fingerprintUnavailable
+
+    var showsInlineRetry: Bool {
+        switch self {
+        case .failed, .analysisChanged, .fingerprintUnavailable:
+            return true
+        case .idle, .loading, .ready:
+            return false
+        }
+    }
+}
+
 enum LibraryDetailPollingStartPolicy {
     static func shouldStart(
         taskIsCancelled: Bool,
@@ -83,6 +107,9 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published var managedResuming = false
     @Published var managedCancelling = false
     @Published private(set) var managedFinalSyncPending = false
+    @Published var guidePhase: VideoLearningGuidePhase = .idle
+    @Published var guideExpanded = false
+    @Published var contentTab: LibraryDetailContentTab = .subtitles
     private(set) var managedHydrationPending = false
     private(set) var managedDiscoveryPending = false
 
@@ -118,14 +145,20 @@ final class LibraryDetailViewModel: ObservableObject {
     private var managedBatchCursor = -1
     private var managedPollFailures = 0
     private var loadRevision = 0
+    private let guideService: VideoLearningGuideService
+    private var guideTask: Task<Void, Never>?
+    private var guideTaskID: UUID?
+    private var guideMustReloadBeforeGeneration = false
     private var cues: [Cue] { displayedCues }
 
     init(
         api: any LibraryDesktopReplacementAPI = WhatsubAPI.shared,
-        managedAPI: any ManagedAnalysisClientProtocol = WhatsubAPI.shared
+        managedAPI: any ManagedAnalysisClientProtocol = WhatsubAPI.shared,
+        guideService: VideoLearningGuideService = VideoLearningGuideService()
     ) {
         replacementAPI = api
         self.managedAPI = managedAPI
+        self.guideService = guideService
     }
 
     /// The cue at the current playhead (for the on-video caption overlay).
@@ -162,6 +195,9 @@ final class LibraryDetailViewModel: ObservableObject {
             // first-paint loading before starting its best-effort queue read.
             entry = fetchedEntry
             displayedCues = fetchedEntry.analysisJson.subtitles
+            guidePhase = fetchedEntry.analysisJson.learningGuide == nil ? .idle : .ready
+            guideExpanded = false
+            guideMustReloadBeforeGeneration = false
             progressiveOverlay = ProgressiveAnalysisOverlay(baseline: displayedCues)
             managedBatchCursor = -1
             managedProgress = nil
@@ -533,6 +569,122 @@ final class LibraryDetailViewModel: ObservableObject {
     /// store timestampSec, not full Cue references).
     func seekTo(seconds: Double) {
         seek = SeekRequest(seconds: seconds, nonce: UUID())
+    }
+
+    // MARK: - Video learning guide
+
+    /// Starts at most one lazy summary/PATCH task for this detail view. A
+    /// second tap awaits the same task; leaving the view cancels it through
+    /// `cancelGuideGeneration()`.
+    func generateGuide(settings: LlmSettings, token: String) async {
+        if let guideTask {
+            await guideTask.value
+            return
+        }
+        guard entry?.analysisJson.learningGuide == nil else {
+            guidePhase = .ready
+            return
+        }
+
+        let taskID = UUID()
+        let task = Task { [weak self] in
+            await self?.performGuideGeneration(settings: settings, token: token)
+        }
+        guideTaskID = taskID
+        guideTask = task
+        await task.value
+        if guideTaskID == taskID {
+            guideTask = nil
+            guideTaskID = nil
+        }
+    }
+
+    func cancelGuideGeneration() {
+        guideTask?.cancel()
+    }
+
+    func selectRecommendedSegment(_ segment: RecommendedSegment) {
+        contentTab = .subtitles
+        guideExpanded = false
+        seekTo(seconds: segment.startTime)
+    }
+
+    private func performGuideGeneration(settings: LlmSettings, token: String) async {
+        guard var target = entry else { return }
+        guidePhase = .loading
+
+        do {
+            if guideMustReloadBeforeGeneration
+                || target.analysisFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                target = try await reloadDetailForGuide(id: target.id, token: token)
+                guideMustReloadBeforeGeneration = false
+            }
+            try Task.checkCancellation()
+
+            if target.analysisJson.learningGuide != nil {
+                guidePhase = .ready
+                return
+            }
+            guard !target.analysisFingerprint
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                guideMustReloadBeforeGeneration = true
+                guidePhase = .fingerprintUnavailable
+                return
+            }
+
+            let accepted = try await guideService.generate(
+                entry: target,
+                settings: settings,
+                token: token
+            )
+            try Task.checkCancellation()
+            entry = target.applyingLearningGuide(accepted)
+            guidePhase = .ready
+        } catch let error as APIError {
+            if Task.isCancelled {
+                guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
+                return
+            }
+            if case .server(let code, let reason) = error,
+               code == 409, reason == "analysis_changed" {
+                guideMustReloadBeforeGeneration = true
+                do {
+                    _ = try await reloadDetailForGuide(id: target.id, token: token)
+                    guideMustReloadBeforeGeneration = false
+                    guidePhase = .analysisChanged
+                } catch {
+                    guidePhase = .failed(RemoteFailure.from(
+                        error,
+                        fallback: "字幕解析已更新，但刷新失败，请重试"
+                    ))
+                }
+            } else {
+                guidePhase = .failed(RemoteFailure.from(error, fallback: "学习导览生成失败"))
+            }
+        } catch is CancellationError {
+            guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
+        } catch VideoLearningGuideServiceError.missingAnalysisFingerprint {
+            guideMustReloadBeforeGeneration = true
+            guidePhase = .fingerprintUnavailable
+        } catch {
+            if Task.isCancelled {
+                guidePhase = entry?.analysisJson.learningGuide == nil ? .idle : .ready
+            } else {
+                guidePhase = .failed(RemoteFailure.from(error, fallback: "学习导览生成失败"))
+            }
+        }
+    }
+
+    /// Lightweight detail refresh used by the inline guide state machine.
+    /// It intentionally leaves the page-level `loading` flag alone so video
+    /// and subtitles remain usable while fingerprint recovery runs.
+    private func reloadDetailForGuide(id: String, token: String) async throws -> LibraryEntryDetail {
+        let refreshed = try await replacementAPI.libraryEntry(id: id, token: token)
+        try Task.checkCancellation()
+        entry = refreshed
+        displayedCues = refreshed.analysisJson.subtitles
+        progressiveOverlay = ProgressiveAnalysisOverlay(baseline: displayedCues)
+        return refreshed
     }
 
     // MARK: - Subtitle editor actions

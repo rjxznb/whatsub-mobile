@@ -602,6 +602,31 @@ struct LibraryEntryDetail: Decodable {
 }
 
 extension LibraryEntryDetail {
+    /// Returns a new detail value containing only the server-accepted derived
+    /// guide fields. The currently displayed entry stays untouched until the
+    /// caller assigns this copy after PATCH success.
+    func applyingLearningGuide(_ update: LearningGuideUpdateResponse) -> LibraryEntryDetail {
+        let updatedAnalysis = AnalysisJson.assembled(
+            subtitles: analysisJson.subtitles,
+            keyPhrases: analysisJson.keyPhrases,
+            learningGuide: update.learningGuide,
+            contextProfile: update.contextProfile,
+            learningGuideSourceFingerprint: update.analysisFingerprint
+        )
+        return LibraryEntryDetail(
+            id: id,
+            youtubeId: youtubeId,
+            sourceUrl: sourceUrl,
+            title: title,
+            durationSec: durationSec,
+            transcriptSrt: transcriptSrt,
+            analysisJson: updatedAnalysis,
+            videoUrl: videoUrl,
+            audioUrl: audioUrl,
+            analysisFingerprint: update.analysisFingerprint
+        )
+    }
+
     /// Canonical URL used by the replacement enqueue contract. A backend-safe
     /// URL is derived from the validated 11-character YouTube id instead of
     /// trusting a stale/free-form source URL cached by an older client.

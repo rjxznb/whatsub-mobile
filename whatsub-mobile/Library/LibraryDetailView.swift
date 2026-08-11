@@ -34,14 +34,14 @@ struct LibraryDetailView: View {
     /// 2026-06-03 Stage 5: portrait content tab switcher. Subtitle list is the
     /// existing default; .collections renders EntryCollectionsList scoped to
     /// this entry (corpus phrases tagged with libraryEntryId == entryId).
-    @State private var contentTab: ContentTab = .subtitles
+    @State private var showGuideSubscribe = false
+    @State private var showGuideLLMSettings = false
     /// 2026-06-18: 取消编辑 confirmation when there are unsaved drafts.
     /// Skipping the alert when `!vm.dirty` lets users back out of an
     /// untouched edit session without a noisy "are you sure" prompt.
     @State private var confirmCancelEdit: Bool = false
     @State private var confirmDesktopReplacement: Bool = false
     @State private var showDesktopReplacementSheet: Bool = false
-    enum ContentTab: String, Hashable, CaseIterable { case subtitles, collections, roleplay }
     // (showPendingSheet + 「待同步 N 条」 banner removed 2026-06-07.
     // PendingPhraseStore is still used — observed inside
     // EntryCollectionsList now, where each pending phrase has its own
@@ -160,6 +160,17 @@ struct LibraryDetailView: View {
             desktopReplacementSheet
                 .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $showGuideSubscribe) {
+            SubscribeSheet(onPurchased: {
+                Task {
+                    await appState.refreshMe()
+                    requestGuideGeneration()
+                }
+            })
+        }
+        .sheet(isPresented: $showGuideLLMSettings) {
+            NavigationStack { LlmSettingsView() }
+        }
         // (词汇本 toolbar button removed build 248+ — local vocab notebook
         // retired. Collections from this video are now in the [收藏] tab
         // below the player; long-pressing a cue writes straight to corpus.)
@@ -231,6 +242,7 @@ struct LibraryDetailView: View {
             avPlayer?.pause()
             youtubeClipPlayback.stop()
             vm.stopManagedProgress()
+            vm.cancelGuideGeneration()
         }
     }
 
@@ -388,6 +400,16 @@ struct LibraryDetailView: View {
                 // per-row ☁️ upload button. A top-of-page banner +
                 // separate sheet was redundant.)
                 managedAnalysisBanner
+                VideoLearningGuideCard(
+                    guide: vm.entry?.analysisJson.learningGuide,
+                    phase: vm.guidePhase,
+                    isExpanded: $vm.guideExpanded,
+                    onGenerate: requestGuideGeneration,
+                    onRetry: requestGuideGeneration,
+                    onSubscribe: { showGuideSubscribe = true },
+                    onConfigureLLM: { showGuideLLMSettings = true },
+                    onSelectSegment: vm.selectRecommendedSegment
+                )
                 contentArea(entry)
                     .refreshable { await reloadDetail() }
             }
@@ -397,16 +419,16 @@ struct LibraryDetailView: View {
     @ViewBuilder
     private func contentArea(_ entry: LibraryEntryDetail) -> some View {
         VStack(spacing: 0) {
-            Picker("", selection: $contentTab) {
-                Text("字幕").tag(ContentTab.subtitles)
-                Text("收藏").tag(ContentTab.collections)
-                Text("角色扮演").tag(ContentTab.roleplay)
+            Picker("", selection: $vm.contentTab) {
+                Text("字幕").tag(LibraryDetailContentTab.subtitles)
+                Text("收藏").tag(LibraryDetailContentTab.collections)
+                Text("角色扮演").tag(LibraryDetailContentTab.roleplay)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
 
-            switch contentTab {
+            switch vm.contentTab {
             case .subtitles:
                 subtitleList(entry)
             case .collections:
@@ -629,6 +651,12 @@ struct LibraryDetailView: View {
         if pollingLifecycle.shouldStart(taskIsCancelled: Task.isCancelled) {
             vm.startManagedProgress(token: token)
         }
+    }
+
+    private func requestGuideGeneration() {
+        guard let token = appState.session?.sessionToken else { return }
+        let settings = LlmSettingsStore.load()
+        Task { await vm.generateGuide(settings: settings, token: token) }
     }
 
     // Landscape = fullscreen: the player fills the screen (video letterboxed on
