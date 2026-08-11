@@ -100,7 +100,7 @@ final class HighlightWordCardModelTests: XCTestCase {
             contextSentence: "They said welcome back.",
             timestampSec: 12.5
         )
-        HighlightWordCardModel(
+        return HighlightWordCardModel(
             gloss: WordGloss(
                 word: "welcome back",
                 translation: "欢迎回来",
