@@ -476,7 +476,8 @@ struct LibraryDetailView: View {
                 EntryCollectionsList(
                     entryId: entryId,
                     youtubeId: vm.entry?.youtubeId,
-                    onTapPhrase: { sec in vm.seekTo(seconds: sec) }
+                    onTapPhrase: { sec in vm.seekTo(seconds: sec) },
+                    onTapGloss: presentCollectionGloss
                 )
             case .roleplay:
                 // Pause the underlying video the moment the user opens a
@@ -773,6 +774,36 @@ struct LibraryDetailView: View {
         return cues.indices.min(by: {
             abs(cues[$0].time - anchorTime) < abs(cues[$1].time - anchorTime)
         }) ?? 0
+    }
+
+    /// Opens the same Task 7 sheet and cache path used by subtitle highlights.
+    /// A missing cue anchor keeps the quick collection meaning readable while
+    /// leaving contextual generation to fail inline rather than blocking browse.
+    private func presentCollectionGloss(_ selection: CollectionGlossSelection) {
+        avPlayer?.pause()
+        youtubeClipPlayback.stop()
+
+        guard let entry = vm.entry else { return }
+        let sourceContext: WordGloss.SourceContext?
+        if let timestamp = selection.timestamp, !vm.displayedCues.isEmpty {
+            sourceContext = WordGloss.SourceContext(
+                title: entry.title,
+                analysisFingerprint: entry.analysisFingerprint,
+                profile: entry.analysisJson.contextProfile,
+                cues: vm.displayedCues,
+                currentCueIndex: nearestCueIndex(to: timestamp, in: vm.displayedCues)
+            )
+        } else {
+            sourceContext = nil
+        }
+
+        glossWord = WordGloss(
+            word: selection.phrase,
+            translation: selection.meaning,
+            note: selection.usageNote,
+            sourceContext: sourceContext,
+            collectionState: selection.collectionState
+        )
     }
 
     // Landscape = fullscreen: the player fills the screen (video letterboxed on

@@ -1,5 +1,41 @@
 import SwiftUI
 
+/// The read-only payload a Collection row gives the parent when the user asks
+/// for an explanation. Both pending and synced rows are already collected, so
+/// presenting this selection can never add the phrase to pending storage again.
+struct CollectionGlossSelection {
+    let phrase: String
+    let meaning: String?
+    let usageNote: String?
+    let contextSentence: String
+    let timestamp: Double?
+    let collectionState: WordGloss.CollectionState
+}
+
+/// Keeps the two Collection-row hit targets explicit and independently testable.
+enum EntryCollectionRowInteraction {
+    enum Target {
+        case body
+        case timestamp
+    }
+
+    enum Action: Equatable {
+        case openGloss
+        case seek(Double)
+        case unavailable
+    }
+
+    static func action(for target: Target, timestamp: Double?) -> Action {
+        switch target {
+        case .body:
+            return .openGloss
+        case .timestamp:
+            guard let timestamp else { return .unavailable }
+            return .seek(timestamp)
+        }
+    }
+}
+
 /// Stage 5 of the 2026-06-03 corpus refactor. Inside the Library video detail
 /// page, gives the user "这个视频的收藏" — every phrase tied to this Library
 /// entry, listed in cue order with seekable rows.
@@ -15,17 +51,18 @@ import SwiftUI
 /// Sorted together by timestamp so the user reads them in video order
 /// regardless of sync state.
 ///
-/// Tapping a row body calls `onTapPhrase(seconds)` so the parent's
-/// existing SeekRequest pipeline drives the AVPlayer; no second player
-/// here.
+/// The body opens the parent's shared gloss sheet; the dedicated timestamp
+/// target independently drives the parent's existing SeekRequest pipeline.
 struct EntryCollectionsList: View {
     let entryId: String
     /// Library entry's YouTube id (when available) — needed to build the
     /// PhraseSource if the user uploads a pending phrase that didn't
     /// remember it at collect time.
     let youtubeId: String?
-    /// Called when the user taps a phrase row → parent seeks its main player.
+    /// Called when the user taps a row timestamp → parent seeks its main player.
     let onTapPhrase: (Double) -> Void
+    /// Called when the user taps the phrase content → parent opens shared gloss.
+    let onTapGloss: (CollectionGlossSelection) -> Void
 
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var pendingStore = PendingPhraseStore.shared
@@ -126,15 +163,22 @@ struct EntryCollectionsList: View {
         // corner radius — so the 收藏 tab feels like a continuation of the
         // subtitle reading surface rather than a denser secondary list.
         HStack(alignment: .top, spacing: 10) {
-            Button {
-                if let ts = row.timestampSec { onTapPhrase(ts) }
-            } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let ts = row.timestampSec {
+            VStack(alignment: .leading, spacing: 6) {
+                if let ts = row.timestampSec {
+                    Button {
+                        perform(.timestamp, for: row)
+                    } label: {
                         Text(mmss(ts))
                             .font(.caption.monospaced())
                             .foregroundStyle(.whatsubAccent)
                     }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    perform(.body, for: row)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
                     Text(row.phraseRaw)
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(.whatsubInk)
@@ -155,16 +199,28 @@ struct EntryCollectionsList: View {
                             .font(.caption2)
                             .foregroundStyle(.red)
                     }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color.whatsubBgElev, in: RoundedRectangle(cornerRadius: 10))
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .disabled(row.timestampSec == nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             uploadButton(for: row)
+        }
+    }
+
+    private func perform(_ target: EntryCollectionRowInteraction.Target, for row: Row) {
+        switch EntryCollectionRowInteraction.action(for: target, timestamp: row.timestampSec) {
+        case .openGloss:
+            onTapGloss(row.glossSelection)
+        case .seek(let timestamp):
+            onTapPhrase(timestamp)
+        case .unavailable:
+            break
         }
     }
 
@@ -300,6 +356,28 @@ struct EntryCollectionsList: View {
             case .pending(let p): return p.meaningZh
             case .synced(let m): return m.meaningZh
             }
+        }
+        var usageNote: String? {
+            switch self {
+            case .pending(let p): return p.usageNote
+            case .synced(let m): return m.usageNote
+            }
+        }
+        var contextSentence: String {
+            switch self {
+            case .pending(let p): return p.contextSentence
+            case .synced(let m): return m.contextSentence
+            }
+        }
+        var glossSelection: CollectionGlossSelection {
+            CollectionGlossSelection(
+                phrase: phraseRaw,
+                meaning: meaningZh,
+                usageNote: usageNote,
+                contextSentence: contextSentence,
+                timestamp: timestampSec,
+                collectionState: .alreadyCollected
+            )
         }
         /// Stable-sort tiebreaker within the same timestamp bucket.
         /// MineItem.contributedAt is epoch milliseconds (Int64); convert
