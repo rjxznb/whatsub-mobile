@@ -52,13 +52,23 @@ enum YouTubeSurfaceReuseAction: Equatable {
 
 struct YouTubeSurfaceReuseState: Equatable {
     private var currentKey: String?
+    private var isActive = false
 
     mutating func action(for key: String) -> YouTubeSurfaceReuseAction {
-        guard currentKey == key else {
+        guard isActive, currentKey == key else {
+            isActive = true
             currentKey = key
             return .rebuild
         }
         return .reuse
+    }
+
+    @discardableResult
+    mutating func deactivate() -> Bool {
+        guard isActive else { return false }
+        isActive = false
+        currentKey = nil
+        return true
     }
 }
 
@@ -88,6 +98,7 @@ struct YouTubeBridgeHandoffSnapshot: Equatable {
 struct YouTubeBridgeHandoffState: Equatable {
     private var surfaceReady = false
     private var playerReady = false
+    private var failed = false
     private var queuedEvents: [YouTubeBridgeEvent] = []
 
     mutating func record(
@@ -100,28 +111,34 @@ struct YouTubeBridgeHandoffState: Equatable {
         case .ready:
             surfaceReady = true
             playerReady = true
+        case .failure:
+            failed = true
         default:
             break
         }
 
         guard !hasConsumer else { return [event] }
         switch event {
-        case .playing, .clipEnded, .failure, .ended:
+        case .playing, .clipEnded, .ended:
             queuedEvents.append(event)
             if queuedEvents.count > 8 {
                 queuedEvents.removeFirst(queuedEvents.count - 8)
             }
-        case .surfaceReady, .ready, .time:
+        case .surfaceReady, .ready, .time, .failure:
             break
         }
         return []
     }
 
     mutating func bind() -> YouTubeBridgeHandoffSnapshot {
+        var events = queuedEvents
+        if failed, !events.contains(.failure) {
+            events.append(.failure)
+        }
         let snapshot = YouTubeBridgeHandoffSnapshot(
             surfaceReady: surfaceReady,
-            playerReady: playerReady,
-            queuedEvents: queuedEvents
+            playerReady: playerReady && !failed,
+            queuedEvents: events
         )
         queuedEvents.removeAll(keepingCapacity: true)
         return snapshot
@@ -148,6 +165,10 @@ final class YouTubeBridgeProxy: NSObject, WKScriptMessageHandler {
     func unbind(_ coordinator: YouTubeEmbedView.Coordinator) {
         guard self.coordinator === coordinator else { return }
         self.coordinator = nil
+    }
+
+    func deactivate() {
+        coordinator = nil
     }
 
     func userContentController(
@@ -410,9 +431,17 @@ struct YouTubeEmbedView: UIViewRepresentable {
         private func deliverExplicitSeek(_ request: SeekRequest) {
             let seconds = max(0, request.seconds)
             guard seconds.isFinite, let webView else { return }
-            webView.evaluateJavaScript("window.whatsubExplicitSeek(\(seconds));")
-            DispatchQueue.main.async { [weak self] in
-                self?.onSeekConsumed(request.nonce)
+            let acknowledge = onSeekConsumed
+            let nonce = request.nonce
+            webView.evaluateJavaScript("window.whatsubExplicitSeek(\(seconds))") { result, error in
+                let resultWasTrue = (result as? NSNumber)?.boolValue == true
+                guard PlayerSeekAcceptance.javascript(
+                    resultWasTrue: resultWasTrue,
+                    errorWasNil: error == nil
+                ) else { return }
+                DispatchQueue.main.async {
+                    acknowledge(nonce)
+                }
             }
         }
 
@@ -575,10 +604,11 @@ struct YouTubeEmbedView: UIViewRepresentable {
           };
           window.whatsubExplicitSeek = function(seconds) {
             window.whatsubRestoreRevision += 1;
-            if (!window.player || !window.player.seekTo || !Number.isFinite(seconds)) { return; }
+            if (!window.player || !window.player.seekTo || !Number.isFinite(seconds)) { return false; }
             window.player.seekTo(Math.max(0, seconds), true);
             if (window.player.playVideo) { window.player.playVideo(); }
             window.whatsubSignalReady();
+            return true;
           };
           function onYouTubeIframeAPIReady() {
             window.player = new YT.Player('player', {
@@ -629,10 +659,9 @@ final class YouTubeWebViewSurface: ObservableObject {
 
         if action == .rebuild || webView == nil {
             if let oldWebView = webView {
-                oldWebView.configuration.userContentController
-                    .removeScriptMessageHandler(forName: "iosBridge")
-                oldWebView.stopLoading()
+                dispose(oldWebView)
             }
+            bridgeProxy?.deactivate()
             let proxy = YouTubeBridgeProxy()
             bridgeProxy = proxy
             target = YouTubeEmbedView.makeWebView(bridgeProxy: proxy)
@@ -653,6 +682,18 @@ final class YouTubeWebViewSurface: ObservableObject {
         bridgeProxy?.unbind(coordinator)
     }
 
+    /// Permanently leaves the current playback path. Rotation deliberately
+    /// uses `release` instead so the iframe and its playback position survive.
+    func deactivate() {
+        guard reuseState.deactivate() else { return }
+        bridgeProxy?.deactivate()
+        bridgeProxy = nil
+        if let webView {
+            dispose(webView)
+            self.webView = nil
+        }
+    }
+
     private func bind(
         _ coordinator: YouTubeEmbedView.Coordinator,
         webView: WKWebView
@@ -661,5 +702,22 @@ final class YouTubeWebViewSurface: ObservableObject {
         coordinator.bridgeProxy = bridgeProxy
         coordinator.webView = webView
         bridgeProxy?.bind(coordinator)
+    }
+
+    private func dispose(_ webView: WKWebView) {
+        webView.evaluateJavaScript("""
+        (function() {
+          if (window.player && window.player.pauseVideo) { window.player.pauseVideo(); }
+          if (window.player && window.player.destroy) { window.player.destroy(); }
+        })()
+        """)
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "iosBridge"
+        )
+        webView.stopLoading()
+        // Navigating away tears down the iframe even if the pause/destroy
+        // evaluation above is cancelled by a concurrent source transition.
+        webView.loadHTMLString("<html><body style='background:#000'></body></html>", baseURL: nil)
+        webView.removeFromSuperview()
     }
 }

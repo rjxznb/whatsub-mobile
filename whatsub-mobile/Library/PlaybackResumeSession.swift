@@ -55,6 +55,11 @@ struct PlaybackResumeSession: Equatable {
 
         latestPosition = position
         resumePosition = position
+        if lastPersistedAt != nil,
+           let lastPersistedPosition,
+           floor(lastPersistedPosition) == floor(position) {
+            return .none
+        }
         guard lastPersistedAt == nil || now.timeIntervalSince(lastPersistedAt!) >= 5 else {
             return .none
         }

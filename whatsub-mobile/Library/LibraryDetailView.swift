@@ -93,6 +93,7 @@ struct LibraryDetailView: View {
     @State private var playbackSession = PlaybackResumeSession(restoredPosition: nil)
     @State private var playerRestorePosition: Double?
     @State private var playerSeekState = PlayerSeekCommandState()
+    @State private var avOperationOwner = PlayerOperationOwner()
     @State private var activePlayerSource: LibraryPlayerSource?
     @State private var ossReloadState = LibraryPlaybackReloadState()
     @State private var ossReloadTask: Task<Void, Never>?
@@ -236,6 +237,7 @@ struct LibraryDetailView: View {
                   let newValue,
                   let url = URL(string: newValue) else { return }
             flushPlaybackProgress()
+            youtubeSurface.deactivate()
             _ = beginPlaybackGeneration()
             activePlayerSource = .oss
             avPlayer = makeAVPlayer(url: url)
@@ -364,6 +366,7 @@ struct LibraryDetailView: View {
             }
             avPlayer?.pause()
             youtubeClipPlayback.stop()
+            youtubeSurface.deactivate()
             vm.stopManagedProgress()
             vm.cancelGuideGeneration()
         }
@@ -401,7 +404,8 @@ struct LibraryDetailView: View {
                     onPlaying: { handlePlayerPlaying(generation: generation) },
                     onSeekConsumed: { nonce in
                         handlePlayerSeekConsumed(nonce, generation: generation)
-                    }
+                    },
+                    operationOwner: avOperationOwner
                 )
             } else if playbackPrepared,
                       source == .youtube,

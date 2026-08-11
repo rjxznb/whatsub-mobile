@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 import AVKit
 import AVFoundation
 import UIKit
@@ -16,11 +17,16 @@ enum AVPlayerLifecycleDecision: Equatable {
     case failure
     case ended
 
-    static func ready(resumeSeconds: Double?) -> AVPlayerLifecycleDecision {
+    static func ready(
+        resumeSeconds: Double?,
+        durationSeconds: Double? = nil
+    ) -> AVPlayerLifecycleDecision {
         guard let resumeSeconds,
-              resumeSeconds.isFinite,
-              resumeSeconds >= 0 else { return .ready }
-        return .seekPaused(resumeSeconds)
+              let target = AVPlayerRestorePolicy.target(
+                savedSeconds: resumeSeconds,
+                durationSeconds: durationSeconds
+              ) else { return .ready }
+        return .seekPaused(target)
     }
 
     static func forEvent(_ event: AVPlayerLifecycleEvent) -> AVPlayerLifecycleDecision {
@@ -34,6 +40,29 @@ enum AVPlayerLifecycleDecision: Equatable {
     static func explicitSeek(seconds: Double) -> AVPlayerLifecycleDecision {
         guard seconds.isFinite, seconds >= 0 else { return .ready }
         return .seekAndPlay(seconds)
+    }
+}
+
+enum AVPlayerRestorePolicy {
+    static let maximumSeconds: Double = 7 * 24 * 60 * 60
+
+    static func target(savedSeconds: Double, durationSeconds: Double?) -> Double? {
+        guard savedSeconds.isFinite, savedSeconds >= 0 else { return nil }
+        let saved = min(savedSeconds, maximumSeconds)
+        guard let durationSeconds,
+              durationSeconds.isFinite,
+              durationSeconds > 0 else { return saved }
+        return min(saved, max(0, durationSeconds - 0.25))
+    }
+}
+
+enum PlayerSeekAcceptance {
+    static func av(finished: Bool, operationIsCurrent: Bool) -> Bool {
+        finished && operationIsCurrent
+    }
+
+    static func javascript(resultWasTrue: Bool, errorWasNil: Bool) -> Bool {
+        resultWasTrue && errorWasNil
     }
 }
 
@@ -85,6 +114,35 @@ struct PlayerOperationRevision: Equatable {
     }
 }
 
+/// Shared by every coordinator wrapping the same parent-owned AVPlayer. Tokens
+/// make operation completion and coordinator teardown safe in either order.
+final class PlayerOperationOwner {
+    private let lock = NSLock()
+    private var revision = 0
+
+    func begin() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        revision += 1
+        return revision
+    }
+
+    func isCurrent(_ token: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return revision == token
+    }
+
+    @discardableResult
+    func invalidate(_ token: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard revision == token else { return false }
+        revision += 1
+        return true
+    }
+}
+
 /// Native AVPlayer-backed video view. Input surface mirrors YouTubeEmbedView
 /// (player, seek, onReady, onTime) so LibraryDetailView can swap between them
 /// without changing the view model.
@@ -121,6 +179,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     var onEnded: () -> Void = {}
     var onPlaying: () -> Void = {}
     var onSeekConsumed: (UUID) -> Void = { _ in }
+    var operationOwner: PlayerOperationOwner = PlayerOperationOwner()
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -130,7 +189,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             onFailure: onFailure,
             onEnded: onEnded,
             onPlaying: onPlaying,
-            onSeekConsumed: onSeekConsumed
+            onSeekConsumed: onSeekConsumed,
+            operationOwner: operationOwner
         )
     }
 
@@ -207,6 +267,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         let onEnded: () -> Void
         let onPlaying: () -> Void
         let onSeekConsumed: (UUID) -> Void
+        let operationOwner: PlayerOperationOwner
         private let resumeSeconds: Double?
         private var lastSeek: SeekRequest?
         private weak var player: AVPlayer?
@@ -218,7 +279,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         private var didSignalReady = false
         private var didFail = false
         private var seekDeliveryState = PlayerSeekDeliveryState()
-        private var operationRevision = PlayerOperationRevision()
+        private var activeOperationToken: Int?
         // Caption UI lives in the player's contentOverlayView so it shows in
         // native fullscreen too.
         private var captionContainer: UIView?
@@ -232,7 +293,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             onFailure: @escaping () -> Void,
             onEnded: @escaping () -> Void,
             onPlaying: @escaping () -> Void,
-            onSeekConsumed: @escaping (UUID) -> Void
+            onSeekConsumed: @escaping (UUID) -> Void,
+            operationOwner: PlayerOperationOwner
         ) {
             self.resumeSeconds = resumeSeconds
             self.onReady = onReady
@@ -241,6 +303,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             self.onEnded = onEnded
             self.onPlaying = onPlaying
             self.onSeekConsumed = onSeekConsumed
+            self.operationOwner = operationOwner
         }
         func attach(player: AVPlayer) {
             self.player = player
@@ -277,6 +340,10 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             }
         }
         func detach() {
+            if let activeOperationToken {
+                operationOwner.invalidate(activeOperationToken)
+                self.activeOperationToken = nil
+            }
             if let o = timeObserver { player?.removeTimeObserver(o); timeObserver = nil }
             statusObs?.invalidate(); statusObs = nil
             timeControlObs?.invalidate(); timeControlObs = nil
@@ -294,21 +361,37 @@ struct VideoPlayerView: UIViewControllerRepresentable {
                 performExplicitSeek(pendingSeek)
                 return
             }
-            switch AVPlayerLifecycleDecision.ready(resumeSeconds: resumeSeconds) {
+            switch AVPlayerLifecycleDecision.ready(
+                resumeSeconds: resumeSeconds,
+                durationSeconds: player.currentItem?.duration.seconds
+            ) {
             case .seekPaused(let seconds):
-                let revision = operationRevision.begin()
+                let token = operationOwner.begin()
+                activeOperationToken = token
                 player.pause()
                 let time = CMTime(seconds: seconds, preferredTimescale: 600)
+                guard time.isValid, time.isNumeric else {
+                    operationOwner.invalidate(token)
+                    activeOperationToken = nil
+                    signalReadyOnce()
+                    return
+                }
+                let operationOwner = operationOwner
                 player.seek(
                     to: time,
                     toleranceBefore: .zero,
                     toleranceAfter: .zero
-                ) { [weak self, weak player] finished in
-                    guard let self,
-                          finished,
-                          self.operationRevision.isCurrent(revision) else { return }
-                    player?.pause()
-                    self.signalReadyOnce()
+                ) { [weak self, weak player, operationOwner] finished in
+                    DispatchQueue.main.async {
+                        guard finished,
+                              operationOwner.isCurrent(token),
+                              let player else { return }
+                        player.pause()
+                        if self?.activeOperationToken == token {
+                            self?.activeOperationToken = nil
+                        }
+                        self?.signalReadyOnce()
+                    }
                 }
             case .ready:
                 signalReadyOnce()
@@ -329,21 +412,35 @@ struct VideoPlayerView: UIViewControllerRepresentable {
                   case .seekAndPlay(let seconds) = AVPlayerLifecycleDecision.explicitSeek(
                     seconds: request.seconds
                   ) else { return }
-            let revision = operationRevision.begin()
+            let token = operationOwner.begin()
+            activeOperationToken = token
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
+            guard time.isValid, time.isNumeric else {
+                operationOwner.invalidate(token)
+                activeOperationToken = nil
+                return
+            }
+            let operationOwner = operationOwner
+            let acknowledge = onSeekConsumed
+            let nonce = request.nonce
             player.seek(
                 to: time,
                 toleranceBefore: .zero,
                 toleranceAfter: .zero
-            ) { [weak self, weak player] finished in
-                guard let self,
-                      finished,
-                      self.operationRevision.isCurrent(revision) else { return }
-                player?.play()
-                self.signalReadyOnce()
-            }
-            DispatchQueue.main.async { [weak self] in
-                self?.onSeekConsumed(request.nonce)
+            ) { [weak self, weak player, operationOwner] finished in
+                DispatchQueue.main.async {
+                    let isCurrent = operationOwner.isCurrent(token)
+                    guard PlayerSeekAcceptance.av(
+                        finished: finished,
+                        operationIsCurrent: isCurrent
+                    ), let player else { return }
+                    player.play()
+                    acknowledge(nonce)
+                    if self?.activeOperationToken == token {
+                        self?.activeOperationToken = nil
+                    }
+                    self?.signalReadyOnce()
+                }
             }
         }
 
