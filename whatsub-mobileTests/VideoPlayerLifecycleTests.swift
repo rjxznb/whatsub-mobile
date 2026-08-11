@@ -64,6 +64,45 @@ final class VideoPlayerLifecycleTests: XCTestCase {
         XCTAssertTrue(revision.isCurrent(explicitSeek))
     }
 
+    func testSharedOperationOwnerMakesDetachAndReplacementOrderSafe() {
+        let owner = PlayerOperationOwner()
+        let oldRestore = owner.begin()
+        let replacementSeek = owner.begin()
+
+        // A late detach from the old coordinator must not cancel newer work.
+        XCTAssertFalse(owner.invalidate(oldRestore))
+        XCTAssertTrue(owner.isCurrent(replacementSeek))
+        XCTAssertTrue(owner.invalidate(replacementSeek))
+        XCTAssertFalse(owner.isCurrent(replacementSeek))
+    }
+
+    func testSeekAcknowledgementRequiresSuccessfulCurrentExecution() {
+        XCTAssertFalse(PlayerSeekAcceptance.av(finished: false, operationIsCurrent: true))
+        XCTAssertFalse(PlayerSeekAcceptance.av(finished: true, operationIsCurrent: false))
+        XCTAssertTrue(PlayerSeekAcceptance.av(finished: true, operationIsCurrent: true))
+
+        XCTAssertFalse(PlayerSeekAcceptance.javascript(resultWasTrue: false, errorWasNil: true))
+        XCTAssertFalse(PlayerSeekAcceptance.javascript(resultWasTrue: true, errorWasNil: false))
+        XCTAssertTrue(PlayerSeekAcceptance.javascript(resultWasTrue: true, errorWasNil: true))
+    }
+
+    func testNativeRestoreClampsHugeAndPastDurationPositions() {
+        XCTAssertEqual(
+            AVPlayerRestorePolicy.target(
+                savedSeconds: .greatestFiniteMagnitude,
+                durationSeconds: nil
+            ),
+            AVPlayerRestorePolicy.maximumSeconds
+        )
+        XCTAssertEqual(
+            AVPlayerLifecycleDecision.ready(
+                resumeSeconds: 150,
+                durationSeconds: 100
+            ),
+            .seekPaused(99.75)
+        )
+    }
+
     func testConsumedSeekDoesNotReplayAfterSurfaceRebuild() {
         var state = PlayerSeekCommandState()
         let old = SeekRequest(seconds: 30, nonce: UUID())

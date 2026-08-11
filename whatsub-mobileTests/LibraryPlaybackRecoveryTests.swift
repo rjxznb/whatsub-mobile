@@ -105,4 +105,31 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
         XCTAssertTrue(source.contains("func makeUIView(context: Context) -> YouTubeWebViewContainer"))
         XCTAssertTrue(source.contains("private var bridgeProxy"))
     }
+
+    func testDetailDeactivatesYouTubeWhenSwitchingSourceOrLeaving() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = tests.deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Library/LibraryDetailView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertGreaterThanOrEqual(
+            source.components(separatedBy: "youtubeSurface.deactivate()").count - 1,
+            2
+        )
+    }
+
+    func testPlayerWrappersUseCompletionBasedSeekAcceptance() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = tests.deletingLastPathComponent()
+        let nativeSource = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Components/VideoPlayerView.swift"
+        ), encoding: .utf8)
+        let youtubeSource = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Components/YouTubeEmbedView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertTrue(nativeSource.contains("PlayerSeekAcceptance.av"))
+        XCTAssertTrue(youtubeSource.contains("PlayerSeekAcceptance.javascript"))
+    }
 }

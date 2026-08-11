@@ -76,6 +76,14 @@ final class PlaybackResumeSessionTests: XCTestCase {
         XCTAssertEqual(session.resumePosition, 8)
     }
 
+    func testPausedTimerDoesNotRewriteAnUnchangedPersistedSecond() {
+        var session = PlaybackResumeSession(restoredPosition: nil)
+
+        XCTAssertEqual(session.receiveTime(12.2, now: date(0)), .save(12.2))
+        XCTAssertEqual(session.receiveTime(12.8, now: date(5)), .none)
+        XCTAssertEqual(session.receiveTime(13.1, now: date(10)), .save(13.1))
+    }
+
     func testOnlyCurrentGenerationAcceptsFailureEvenAfterReady() {
         var session = PlaybackResumeSession(restoredPosition: 8)
         let first = session.beginReload()

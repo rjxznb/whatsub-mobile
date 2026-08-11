@@ -115,6 +115,9 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
 
         XCTAssertEqual(state.action(for: "entry-1-generation-1"), .rebuild)
         XCTAssertEqual(state.action(for: "entry-1-generation-1"), .reuse)
+        XCTAssertTrue(state.deactivate())
+        XCTAssertFalse(state.deactivate())
+        XCTAssertEqual(state.action(for: "entry-1-generation-1"), .rebuild)
         XCTAssertEqual(state.action(for: "entry-1-generation-2"), .rebuild)
     }
 
@@ -128,8 +131,21 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
 
         let handoff = state.bind()
         XCTAssertTrue(handoff.surfaceReady)
-        XCTAssertTrue(handoff.playerReady)
+        XCTAssertFalse(handoff.playerReady)
         XCTAssertEqual(handoff.queuedEvents, [.failure])
-        XCTAssertTrue(state.bind().queuedEvents.isEmpty)
+        XCTAssertEqual(state.bind().queuedEvents, [.failure])
+    }
+
+    func testDeliveredFailureStaysStickyAcrossLaterCoordinatorHandoffs() {
+        var state = YouTubeBridgeHandoffState()
+
+        XCTAssertEqual(state.record(.surfaceReady, hasConsumer: true), [.surfaceReady])
+        XCTAssertEqual(state.record(.ready, hasConsumer: true), [.ready])
+        XCTAssertEqual(state.record(.failure, hasConsumer: true), [.failure])
+
+        let handoff = state.bind()
+        XCTAssertTrue(handoff.surfaceReady)
+        XCTAssertFalse(handoff.playerReady)
+        XCTAssertEqual(handoff.queuedEvents, [.failure])
     }
 }
