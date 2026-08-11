@@ -42,8 +42,40 @@ SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
     "expression": string,
     "meaningZh": string,
     "usage": string
-  }]
+  }],
+  "learningGuide": {
+    "verdict": "study_all" | "select_segments" | "extensive_listening" | "limited_value",
+    "overview": string,
+    "contentOutline": string[],
+    "cefrLevel": "A2" | "B1" | "B2" | "C1" | "C2",
+    "cefrReason": string,
+    "recommendedFor": string[],
+    "learningReasons": string[],
+    "cultureNotes": string[],
+    "studyTips": string[],
+    "topSegments": [{
+      "startTime": number,
+      "endTime": number,
+      "title": string,
+      "reason": string,
+      "focusExpressions": string[]
+    }]
+  },
+  "contextProfile": {
+    "theme": string,
+    "participants": string,
+    "setting": string,
+    "tone": string,
+    "culturalContext": string,
+    "recurringConcepts": string[]
+  }
 }
+
+SUMMARY RULES
+- The summary line MUST include keyPhrases, learningGuide, and contextProfile exactly as shown above; do not add fields such as scores, ratings, percentages, rankings, or generated timestamps.
+- topSegments contains at most 3 entries. Each startTime/endTime MUST overlap a supplied cue time/endTime; never invent timestamp evidence.
+- cultureNotes, culturalContext, and recurringConcepts may be empty when the transcript does not support them.
+- Do NOT output numeric scores or ratings anywhere. CEFR is the only proficiency label.
 
 CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
@@ -87,20 +119,98 @@ them.
         return "Subtitle cues (tab-separated: index<TAB>start<TAB>end<TAB>JSON-encoded text):\n\(lines)\n\nProduce one JSON-line per cue in order. Per-cue lines ONLY — do NOT emit a summary line; the summary will be requested separately."
     }
 
-    static func summaryPrompt(_ subs: [Cue]) -> String {
+    private static func summaryPrompt(_ subs: [Cue]) -> String {
         let compact = subs.map { c -> String in
             let obj: [String: Any] = [
+                "index": c.index,
+                "time": c.time,
+                "endTime": c.endTime,
                 "text": c.text,
                 "translation": c.translation,
                 "highlightWords": c.highlightWords,
                 "keyNotes": c.keyNotes,
             ]
-            if let data = try? JSONSerialization.data(withJSONObject: obj),
+            if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
                let s = String(data: data, encoding: .utf8) {
                 return s
             }
             return "{}"
         }.joined(separator: "\n")
-        return "These are the per-cue analyses you produced for this transcript (one JSON per line):\n\(compact)\n\nNow produce ONE single JSON line: the GLOBAL keyPhrases summary across the entire transcript.\n\nSchema (this exact \"type\":\"summary\" envelope):\n{\"type\":\"summary\",\"keyPhrases\":[{\"expression\":\"...\",\"meaningZh\":\"...\",\"usage\":\"...\"}, ...]}\n\nRules:\n- Deduplicate by expression (case-insensitive). Pick the most natural canonical form.\n- Drop trivial fillers, greetings, function words; keep idioms, phrasal verbs, vocabulary worth reviewing.\n- Aim for 8-20 entries depending on transcript size.\n- meaningZh: 8-25 Chinese characters; concise gloss.\n- usage: 30-80 Chinese characters; how/when it's used, optionally a tiny example or context cue.\n\nOutput exactly one JSON object on one line. No fences, no prose, no other lines."
+        return """
+        These are the per-cue analyses you produced for this transcript (one JSON per line). index, time, and endTime are the only timestamp evidence available for topSegments:
+        \(compact)
+
+        Now produce ONE single JSON line containing the complete global summary.
+
+        Schema (the exact complete "type":"summary" envelope):
+        {"type":"summary","keyPhrases":[{"expression":"...","meaningZh":"...","usage":"..."}],"learningGuide":{"verdict":"select_segments","overview":"...","contentOutline":["..."],"cefrLevel":"B2","cefrReason":"...","recommendedFor":["..."],"learningReasons":["..."],"cultureNotes":[],"studyTips":["..."],"topSegments":[{"startTime":0,"endTime":1,"title":"...","reason":"...","focusExpressions":["..."]}]},"contextProfile":{"theme":"...","participants":"...","setting":"...","tone":"...","culturalContext":"","recurringConcepts":[]}}
+
+        Rules:
+        - Deduplicate keyPhrases by expression (case-insensitive). Drop trivial fillers, greetings, and function words.
+        - keyPhrases meaningZh: 8-25 Chinese characters; usage: 30-80 Chinese characters.
+        - learningGuide.topSegments: choose at most 3. Each startTime/endTime MUST overlap a supplied cue time/endTime; do not invent timestamps or evidence.
+        - cultureNotes, culturalContext, and recurringConcepts may be empty when unsupported by the transcript.
+        - Do NOT output scores or ratings, percentages, rankings, generatedAt, or learningGuideSourceFingerprint.
+
+        Output exactly one JSON object on one line. No fences, no prose, no other lines.
+        """
     }
+
+    /// Builds summary messages under the exact serialized-character ceiling.
+    /// Sampling is deterministic, retains complete cue JSON objects, always
+    /// preserves first/last, and places retained middle cues uniformly.
+    static func boundedSummaryMessages(
+        _ subtitles: [Cue],
+        maxCharacters: Int = 120_000
+    ) throws -> [ChatMessage] {
+        guard maxCharacters > 0 else { throw AnalysisPromptError.summaryTooLarge }
+        let all = summaryMessages(subtitles)
+        if try serializedCharacterCount(all) <= maxCharacters { return all }
+        guard subtitles.count > 1 else { throw AnalysisPromptError.summaryTooLarge }
+
+        let emptySize = try serializedCharacterCount(summaryMessages([]))
+        let fullSize = try serializedCharacterCount(all)
+        let variableSize = max(1, fullSize - emptySize)
+        let available = max(1, maxCharacters - emptySize)
+        var sampleCount = min(
+            subtitles.count - 1,
+            max(2, Int(Double(subtitles.count) * Double(available) / Double(variableSize)))
+        )
+
+        while sampleCount >= 2 {
+            let sampled = uniformSample(subtitles, count: sampleCount)
+            let messages = summaryMessages(sampled)
+            if try serializedCharacterCount(messages) <= maxCharacters { return messages }
+            sampleCount -= 1
+        }
+        throw AnalysisPromptError.summaryTooLarge
+    }
+
+    private static func summaryMessages(_ subtitles: [Cue]) -> [ChatMessage] {
+        [
+            ChatMessage(role: "system", content: system),
+            ChatMessage(role: "user", content: summaryPrompt(subtitles)),
+        ]
+    }
+
+    private static func serializedCharacterCount(_ messages: [ChatMessage]) throws -> Int {
+        let object = messages.map { ["role": $0.role, "content": $0.content] }
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(decoding: data, as: UTF8.self).count
+    }
+
+    private static func uniformSample(_ subtitles: [Cue], count: Int) -> [Cue] {
+        guard count < subtitles.count else { return subtitles }
+        guard count > 1 else { return [subtitles[0]] }
+        let last = subtitles.count - 1
+        return (0..<count).map { position in
+            let fraction = Double(position) / Double(count - 1)
+            let index = Int((fraction * Double(last)).rounded())
+            return subtitles[index]
+        }
+    }
+}
+
+enum AnalysisPromptError: Error {
+    case summaryTooLarge
 }

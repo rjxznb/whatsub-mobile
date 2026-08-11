@@ -259,10 +259,17 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         let keyPhrasesDicts: [[String: Any]] = analysis.keyPhrases.map { kp in
             ["expression": kp.expression, "meaningZh": kp.meaningZh, "usage": kp.usage]
         }
-        let analysisDict: [String: Any] = [
+        var analysisDict: [String: Any] = [
             "subtitles": subtitlesDicts,
             "keyPhrases": keyPhrasesDicts,
         ]
+        if let guide = analysis.learningGuide,
+           let profile = analysis.contextProfile {
+            analysisDict["learningGuide"] = try jsonObject(guide)
+            analysisDict["contextProfile"] = try jsonObject(profile)
+        }
+        // Never forward learningGuideSourceFingerprint. It is derived and
+        // stamped by the backend from the submitted title + subtitle analysis.
 
         var body: [String: Any] = [
             "id": youtubeId,
@@ -318,6 +325,30 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
         _ = try await postExpectingOk(Endpoints.library("sync/\(entryId)/cues"), body: data, bearer: token)
+    }
+
+    /// Persist only a lazily generated guide/profile pair. The expected
+    /// server fingerprint makes the write stale-safe without granting this
+    /// endpoint permission to replace subtitles or media metadata.
+    func updateLearningGuide(
+        id: String,
+        expectedFingerprint: String,
+        guide: LearningGuideDraft,
+        profile: VideoContextProfile,
+        token: String
+    ) async throws -> LearningGuideUpdateResponse {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let body: [String: Any] = [
+            "expectedAnalysisFingerprint": expectedFingerprint,
+            "learningGuide": try jsonObject(guide),
+            "contextProfile": try jsonObject(profile),
+        ]
+        let data = try await patch(
+            Endpoints.library("entry/\(encoded)/learning-guide"),
+            body: try JSONSerialization.data(withJSONObject: body),
+            bearer: token
+        )
+        return try decode(LearningGuideUpdateResponse.self, from: data)
     }
 
     // ----- Live Activity -----
@@ -522,6 +553,15 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         return try await send(req)
     }
 
+    private func patch(_ url: URL, body: Data, bearer: String?) async throws -> Data {
+        var req = URLRequest(url: url)
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        applyBearer(&req, bearer)
+        return try await send(req)
+    }
+
     @discardableResult
     private func postExpectingOk(_ url: URL, body: Data, bearer: String?) async throws -> Data {
         try await post(url, body: body, bearer: bearer)
@@ -583,5 +623,9 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         } catch {
             throw APIError.decoding(error.localizedDescription)
         }
+    }
+
+    private func jsonObject<T: Encodable>(_ value: T) throws -> Any {
+        try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
     }
 }

@@ -33,7 +33,7 @@ struct AnalysisCheckpoint: Codable {
     let version: Int
     let fingerprint: String
     private var batches: [CompletedBatch]
-    private(set) var completedSummary: [KeyPhrase]?
+    private(set) var completedSummary: AnalysisSummary?
     var updatedAt: Date
 
     init(fingerprint: String, updatedAt: Date = Date()) {
@@ -77,7 +77,7 @@ struct AnalysisCheckpoint: Codable {
         updatedAt = Date()
     }
 
-    mutating func recordSummary(_ summary: [KeyPhrase]) {
+    mutating func recordSummary(_ summary: AnalysisSummary) {
         completedSummary = summary
         updatedAt = Date()
     }

@@ -4,9 +4,9 @@ struct AnalysisPausedError: Error {}
 
 struct AnalysisResumeContext {
     let completedBatches: [Int: [Cue]]
-    let completedSummary: [KeyPhrase]?
+    let completedSummary: AnalysisSummary?
     let onBatchCompleted: (Int, [Cue]) throws -> Void
-    let onSummaryCompleted: ([KeyPhrase]) throws -> Void
+    let onSummaryCompleted: (AnalysisSummary) throws -> Void
     let shouldBeginRequest: () -> Bool
 }
 
@@ -49,12 +49,19 @@ struct AnalysisEngine {
         return try? JSONDecoder().decode(Cue.self, from: data)
     }
 
-    static func parseSummary(_ obj: Any) -> [KeyPhrase]? {
+    static func parseSummary(
+        _ obj: Any,
+        durationSec: Double?,
+        cues: [Cue]
+    ) -> AnalysisSummary? {
         guard let dict = obj as? [String: Any],
               dict["keyPhrases"] != nil,
               let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
-        struct Summary: Decodable { let keyPhrases: [KeyPhrase] }
-        return (try? JSONDecoder().decode(Summary.self, from: data))?.keyPhrases
+        return try? VideoLearningParser.parseSummary(
+            data,
+            durationSec: durationSec,
+            cues: cues
+        )
     }
 
     func analyze(
@@ -80,9 +87,9 @@ struct AnalysisEngine {
     func analyze(
         _ cues: [Cue],
         completedBatches: [Int: [Cue]],
-        completedSummary: [KeyPhrase]?,
+        completedSummary: AnalysisSummary?,
         onBatchCompleted: @escaping (Int, [Cue]) throws -> Void,
-        onSummaryCompleted: @escaping ([KeyPhrase]) throws -> Void,
+        onSummaryCompleted: @escaping (AnalysisSummary) throws -> Void,
         shouldBeginRequest: @escaping () -> Bool,
         onProgress: @escaping (Int, Int) -> Void,
         onDiagnostic: @escaping (AnalysisStreamEvent) -> Void = { _ in }
@@ -155,7 +162,9 @@ struct AnalysisEngine {
         var subtitles = batched.indices.flatMap { resultsByBatch[$0] ?? [] }
         for index in subtitles.indices { subtitles[index].index = index }
 
-        var keyPhrases = completedSummary ?? []
+        var summary = completedSummary ?? AnalysisSummary(
+            keyPhrases: [], learningGuide: nil, contextProfile: nil
+        )
         if completedSummary == nil, !subtitles.isEmpty {
             try Task.checkCancellation()
             guard shouldBeginRequest() else { throw AnalysisPausedError() }
@@ -165,33 +174,53 @@ struct AnalysisEngine {
                 onDiagnostic(AnalysisStreamEvent(
                     stage: .preparingRequest, batch: summaryBatch, parsedCues: totalCues
                 ))
-                let stream = streamProvider([
-                    ChatMessage(role: "system", content: AnalysisPrompts.system),
-                    ChatMessage(role: "user", content: AnalysisPrompts.summaryPrompt(subtitles)),
-                ]) { stage in
+                let messages = try AnalysisPrompts.boundedSummaryMessages(subtitles)
+                let stream = streamProvider(messages) { stage in
                     onDiagnostic(AnalysisStreamEvent(
                         stage: stage, batch: summaryBatch, parsedCues: totalCues
                     ))
                 }
                 for try await chunk in stream {
                     parser.feed(chunk) { object in
-                        if let summary = Self.parseSummary(object) { keyPhrases = summary }
+                        if let parsed = Self.parseSummary(
+                            object,
+                            durationSec: nil,
+                            cues: subtitles
+                        ) {
+                            summary = parsed
+                        }
                     }
                 }
                 parser.flush { object in
-                    if let summary = Self.parseSummary(object) { keyPhrases = summary }
+                    if let parsed = Self.parseSummary(
+                        object,
+                        durationSec: nil,
+                        cues: subtitles
+                    ) {
+                        summary = parsed
+                    }
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 // Cue analysis remains useful even if the optional summary fails.
-                keyPhrases = []
+                summary = AnalysisSummary(
+                    keyPhrases: [], learningGuide: nil, contextProfile: nil
+                )
             }
-            try onSummaryCompleted(keyPhrases)
+            try onSummaryCompleted(summary)
         }
 
         onProgress(totalCues + 1, totalCues + 1)
-        return AnalysisJson.assembled(subtitles: subtitles, keyPhrases: keyPhrases)
+        let generatedAt = Int64((Date().timeIntervalSince1970 * 1_000).rounded())
+        return AnalysisJson.assembled(
+            subtitles: subtitles,
+            keyPhrases: summary.keyPhrases,
+            learningGuide: summary.learningGuide.map {
+                LearningGuide(draft: $0, generatedAt: generatedAt)
+            },
+            contextProfile: summary.contextProfile
+        )
     }
 
     private static func validateBatch(index: Int, result: [Cue], sourceCues: [Cue]) throws {

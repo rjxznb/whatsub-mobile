@@ -273,8 +273,14 @@ struct KeyPhrase: Codable {
 struct AnalysisJson: Decodable {
     let subtitles: [Cue]
     let keyPhrases: [KeyPhrase]
+    let learningGuide: LearningGuide?
+    let contextProfile: VideoContextProfile?
+    let learningGuideSourceFingerprint: String?
 
-    enum CodingKeys: String, CodingKey { case subtitles, keyPhrases }
+    enum CodingKeys: String, CodingKey {
+        case subtitles, keyPhrases
+        case learningGuide, contextProfile, learningGuideSourceFingerprint
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -282,22 +288,49 @@ struct AnalysisJson: Decodable {
         for i in subs.indices { subs[i].index = i }
         subtitles = subs
         keyPhrases = try c.decodeIfPresent([KeyPhrase].self, forKey: .keyPhrases) ?? []
+        learningGuide = try c.decodeIfPresent(LearningGuide.self, forKey: .learningGuide)
+        contextProfile = try c.decodeIfPresent(VideoContextProfile.self, forKey: .contextProfile)
+        learningGuideSourceFingerprint = try c.decodeIfPresent(
+            String.self,
+            forKey: .learningGuideSourceFingerprint
+        )
     }
 
     /// Build from parts (used by AnalysisEngine after assembling batch results).
     /// Skips the JSON round-trip that `init(from:)` requires.
-    static func assembled(subtitles: [Cue], keyPhrases: [KeyPhrase]) -> AnalysisJson {
+    static func assembled(
+        subtitles: [Cue],
+        keyPhrases: [KeyPhrase],
+        learningGuide: LearningGuide? = nil,
+        contextProfile: VideoContextProfile? = nil,
+        learningGuideSourceFingerprint: String? = nil
+    ) -> AnalysisJson {
         // Use the Decodable init path by encoding + decoding, so index re-numbering
         // stays in one place (init(from:) sets index = array position).
         // Fast path: build via private memberwise init instead.
-        return AnalysisJson(_subtitles: subtitles, _keyPhrases: keyPhrases)
+        return AnalysisJson(
+            _subtitles: subtitles,
+            _keyPhrases: keyPhrases,
+            learningGuide: learningGuide,
+            contextProfile: contextProfile,
+            learningGuideSourceFingerprint: learningGuideSourceFingerprint
+        )
     }
 
     // Private memberwise init for assembled(). The caller (AnalysisEngine) has
     // already re-indexed, so we store as-is without JSON round-trip.
-    private init(_subtitles: [Cue], _keyPhrases: [KeyPhrase]) {
+    private init(
+        _subtitles: [Cue],
+        _keyPhrases: [KeyPhrase],
+        learningGuide: LearningGuide?,
+        contextProfile: VideoContextProfile?,
+        learningGuideSourceFingerprint: String?
+    ) {
         subtitles = _subtitles
         keyPhrases = _keyPhrases
+        self.learningGuide = learningGuide
+        self.contextProfile = contextProfile
+        self.learningGuideSourceFingerprint = learningGuideSourceFingerprint
     }
 }
 
@@ -516,6 +549,56 @@ struct LibraryEntryDetail: Decodable {
     /// Signed CDN URL for the audio-only .m4a sidecar. Practice modes
     /// (跟读/听抄) prefer this over videoUrl. nil = older entry, falls back.
     let audioUrl: String?
+    /// Server-computed fingerprint for stale-safe guide writes. Transitional
+    /// old backends omit it; callers must not generate until a refresh returns
+    /// a non-empty value.
+    let analysisFingerprint: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, youtubeId, sourceUrl, title, durationSec, transcriptSrt
+        case analysisJson, videoUrl, audioUrl, analysisFingerprint
+    }
+
+    init(
+        id: String,
+        youtubeId: String,
+        sourceUrl: String,
+        title: String,
+        durationSec: Int?,
+        transcriptSrt: String?,
+        analysisJson: AnalysisJson,
+        videoUrl: String?,
+        audioUrl: String?,
+        analysisFingerprint: String = ""
+    ) {
+        self.id = id
+        self.youtubeId = youtubeId
+        self.sourceUrl = sourceUrl
+        self.title = title
+        self.durationSec = durationSec
+        self.transcriptSrt = transcriptSrt
+        self.analysisJson = analysisJson
+        self.videoUrl = videoUrl
+        self.audioUrl = audioUrl
+        self.analysisFingerprint = analysisFingerprint
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        youtubeId = try container.decode(String.self, forKey: .youtubeId)
+        sourceUrl = try container.decode(String.self, forKey: .sourceUrl)
+        title = try container.decode(String.self, forKey: .title)
+        durationSec = try container.decodeIfPresent(Int.self, forKey: .durationSec)
+        transcriptSrt = try container.decodeIfPresent(String.self, forKey: .transcriptSrt)
+        analysisJson = try container.decode(AnalysisJson.self, forKey: .analysisJson)
+        videoUrl = try container.decodeIfPresent(String.self, forKey: .videoUrl)
+        audioUrl = try container.decodeIfPresent(String.self, forKey: .audioUrl)
+        analysisFingerprint = try container.decodeIfPresent(
+            String.self,
+            forKey: .analysisFingerprint
+        ) ?? ""
+    }
 }
 
 extension LibraryEntryDetail {

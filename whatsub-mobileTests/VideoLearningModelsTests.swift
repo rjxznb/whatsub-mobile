@@ -24,8 +24,22 @@ final class VideoLearningModelsTests: XCTestCase {
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
         override func startLoading() {
+            var captured = request
+            if captured.httpBody == nil, let stream = captured.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var data = Data()
+                let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4_096)
+                defer { buffer.deallocate() }
+                while stream.hasBytesAvailable {
+                    let count = stream.read(buffer, maxLength: 4_096)
+                    if count <= 0 { break }
+                    data.append(buffer, count: count)
+                }
+                captured.httpBody = data
+            }
             Self.lock.lock()
-            Self.storedRequest = request
+            Self.storedRequest = captured
             let data = Self.responseData
             Self.lock.unlock()
             let response = HTTPURLResponse(
