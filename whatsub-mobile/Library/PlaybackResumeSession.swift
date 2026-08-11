@@ -14,7 +14,7 @@ struct PlaybackResumeSession: Equatable {
     private var lastPersistedPosition: Double?
     private var lastPersistedAt: Date?
     private var readyGeneration: Int?
-    private var completedTail: Double?
+    private var isRestoring = false
     private var isCompletionSuppressed = false
 
     init(restoredPosition: Double?) {
@@ -28,12 +28,14 @@ struct PlaybackResumeSession: Equatable {
         generation += 1
         readyGeneration = nil
         resumePosition = latestPosition
+        isRestoring = resumePosition != nil
         return generation
     }
 
     mutating func markReady(generation: Int) {
         guard generation == self.generation else { return }
         readyGeneration = generation
+        isRestoring = false
     }
 
     func shouldAcceptTimeout(generation: Int) -> Bool {
@@ -49,15 +51,7 @@ struct PlaybackResumeSession: Equatable {
         now: Date = Date()
     ) -> PlaybackPersistenceDecision {
         guard let position = Self.validPosition(position) else { return .none }
-
-        if isCompletionSuppressed {
-            guard let completedTail,
-                  position <= max(0, completedTail - 1) else { return .none }
-            isCompletionSuppressed = false
-            self.completedTail = nil
-            lastPersistedAt = nil
-            lastPersistedPosition = nil
-        }
+        guard !isRestoring, !isCompletionSuppressed else { return .none }
 
         latestPosition = position
         resumePosition = position
@@ -69,9 +63,31 @@ struct PlaybackResumeSession: Equatable {
         return .save(position)
     }
 
+    mutating func markExplicitSeek(
+        _ position: Double,
+        now: Date = Date()
+    ) -> PlaybackPersistenceDecision {
+        guard let position = Self.validPosition(position) else { return .none }
+        isRestoring = false
+        isCompletionSuppressed = false
+        latestPosition = position
+        resumePosition = position
+        lastPersistedAt = now
+        lastPersistedPosition = position
+        return .save(position)
+    }
+
+    mutating func markPlaying() {
+        guard isRestoring || isCompletionSuppressed else { return }
+        isRestoring = false
+        isCompletionSuppressed = false
+        lastPersistedAt = nil
+        lastPersistedPosition = nil
+    }
+
     mutating func markEnded() -> PlaybackPersistenceDecision {
-        completedTail = latestPosition ?? resumePosition
         isCompletionSuppressed = true
+        isRestoring = false
         latestPosition = nil
         resumePosition = nil
         lastPersistedAt = nil
