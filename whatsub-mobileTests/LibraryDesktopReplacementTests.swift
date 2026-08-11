@@ -7,6 +7,7 @@ private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
     private let enqueueResponse: EnqueueImportResponse
     private var enqueueCalls = 0
     private var listCalls = 0
+    private var libraryEntryCalls = 0
     private var listStartedWaiter: CheckedContinuation<Void, Never>?
     private var listRelease: CheckedContinuation<Void, Never>?
     private var releaseRequested = false
@@ -26,6 +27,7 @@ private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
     }
 
     func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
+        libraryEntryCalls += 1
         detail
     }
 
@@ -59,6 +61,7 @@ private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
 
     func enqueueCallCount() -> Int { enqueueCalls }
     func listCallCount() -> Int { listCalls }
+    func libraryEntryCallCount() -> Int { libraryEntryCalls }
 
     func waitUntilListStarts() async {
         if listCalls > 0 { return }
@@ -355,6 +358,26 @@ final class LibraryDesktopReplacementTests: XCTestCase {
 
         await api.releaseList()
         await load.value
+    }
+
+    func testPlaybackRefreshPublishesSignedURLWithoutPageLoadingOrManagedWork() async throws {
+        let refreshed = try entry(videoUrl: "https://cdn.example.com/refreshed.mp4")
+        let api = LibraryDesktopReplacementAPISpy(detail: refreshed)
+        let viewModel = LibraryDetailViewModel(api: api)
+
+        let result = try await viewModel.refreshPlaybackDetail(
+            id: refreshed.id,
+            token: "token"
+        )
+
+        XCTAssertEqual(result.videoUrl, "https://cdn.example.com/refreshed.mp4")
+        XCTAssertEqual(viewModel.entry?.videoUrl, "https://cdn.example.com/refreshed.mp4")
+        XCTAssertFalse(viewModel.loading)
+        XCTAssertNil(viewModel.managedProgress)
+        let detailCalls = await api.libraryEntryCallCount()
+        let listCalls = await api.listCallCount()
+        XCTAssertEqual(detailCalls, 1)
+        XCTAssertEqual(listCalls, 0)
     }
 
     func testKnownOverLimitBlocksBeforeCallingEnqueueAPI() async throws {
