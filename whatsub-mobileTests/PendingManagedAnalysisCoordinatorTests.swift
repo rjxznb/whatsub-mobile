@@ -6,9 +6,14 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
         private(set) var requestIDs: [String] = []
         private(set) var cancelledJobIDs: [String] = []
         private var createErrors: [ManagedAnalysisClientError]
+        private var cancelErrors: [ManagedAnalysisClientError]
 
-        init(createErrors: [ManagedAnalysisClientError] = []) {
+        init(
+            createErrors: [ManagedAnalysisClientError] = [],
+            cancelErrors: [ManagedAnalysisClientError] = []
+        ) {
             self.createErrors = createErrors
+            self.cancelErrors = cancelErrors
         }
 
         func createJob(
@@ -43,6 +48,9 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
         }
         func cancel(id: String, token: String) async throws -> ManagedAnalysisJob {
             cancelledJobIDs.append(id)
+            if !cancelErrors.isEmpty {
+                throw cancelErrors.removeFirst()
+            }
             return ManagedAnalysisJob(
                 jobId: id, status: .cancelled, tier: .pro,
                 createdAt: 1, updatedAt: 2, completedCues: 0, totalCues: 1,
@@ -257,6 +265,68 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
             let remaining = try await fixture.store.all()
             XCTAssertTrue(remaining.isEmpty)
         }
+    }
+
+    func testCancelAfterAcceptanceStillCancelsJobBeforeUIStateCatchesUp() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let client = Client()
+        let coordinator = PendingManagedAnalysisCoordinator(
+            client: client,
+            store: fixture.store,
+            sleeper: { _ in }
+        )
+
+        _ = try await coordinator.enqueue(
+            request: request("accepted-before-ui"),
+            ownerEmail: "user@example.com",
+            retryAfterSeconds: 0,
+            token: "token"
+        )
+        let resolution = await coordinator.waitForResolution(
+            requestID: "accepted-before-ui",
+            ownerEmail: "user@example.com"
+        )
+        guard case .accepted = resolution else {
+            return XCTFail("submission should be accepted")
+        }
+
+        await coordinator.cancel(
+            requestID: "accepted-before-ui",
+            ownerEmail: "user@example.com"
+        )
+
+        let cancelled = await client.cancelledJobIDs
+        XCTAssertEqual(cancelled, ["job-accepted-before-ui"])
+    }
+
+    func testAcceptedJobCancellationRetriesTransientNetworkFailure() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let client = Client(cancelErrors: [.network("offline")])
+        let coordinator = PendingManagedAnalysisCoordinator(
+            client: client,
+            store: fixture.store,
+            sleeper: { _ in }
+        )
+
+        _ = try await coordinator.enqueue(
+            request: request("retry-cancel"),
+            ownerEmail: "user@example.com",
+            retryAfterSeconds: 0,
+            token: "token"
+        )
+        _ = await coordinator.waitForResolution(
+            requestID: "retry-cancel",
+            ownerEmail: "user@example.com"
+        )
+        await coordinator.cancel(
+            requestID: "retry-cancel",
+            ownerEmail: "user@example.com"
+        )
+
+        let cancelled = await client.cancelledJobIDs
+        XCTAssertEqual(cancelled, ["job-retry-cancel", "job-retry-cancel"])
     }
 
     private actor GateSleeper {

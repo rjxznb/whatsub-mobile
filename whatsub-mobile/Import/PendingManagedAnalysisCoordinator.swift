@@ -32,6 +32,8 @@ actor PendingManagedAnalysisCoordinator {
     private var generation = 0
     private var activeSubmissionKeys: Set<String> = []
     private var cancelledSubmissionKeys: Set<String> = []
+    private var recentlyAcceptedJobs: [String: String] = [:]
+    private var recentlyAcceptedOrder: [String] = []
     private var waiters: [
         String: [UUID: CheckedContinuation<Resolution, Never>]
     ] = [:]
@@ -126,6 +128,13 @@ actor PendingManagedAnalysisCoordinator {
     func cancel(requestID: String, ownerEmail: String) async {
         let owner = normalized(ownerEmail)
         let key = resolutionKey(requestID: requestID, ownerEmail: owner)
+        if let jobID = recentlyAcceptedJobs[key] {
+            if await cancelServerJobWithRetry(jobID, ownerEmail: owner) {
+                removeRecentlyAcceptedJob(for: key)
+            }
+            publish(.cancelled(requestID: requestID, ownerEmail: owner))
+            return
+        }
         // If POST /jobs is already in flight, do not cancel its URLSession
         // task: the server may have accepted it before the response reaches
         // us. Keep a tombstone so the returned jobId is cancelled instead.
@@ -169,6 +178,9 @@ actor PendingManagedAnalysisCoordinator {
         cancelledSubmissionKeys.formUnion(activeKeys)
         if account?.email == owner {
             deactivate()
+        }
+        for key in Array(recentlyAcceptedJobs.keys) where key.hasPrefix(prefix) {
+            removeRecentlyAcceptedJob(for: key)
         }
         let pending = (try? await store.all(at: now()))?
             .filter { $0.ownerEmail == owner } ?? []
@@ -236,9 +248,16 @@ actor PendingManagedAnalysisCoordinator {
                 // can re-enter this actor while that await is suspended.
                 activeSubmissionKeys.remove(submissionKey)
                 if cancelledSubmissionKeys.remove(submissionKey) != nil {
-                    _ = try? await client.cancel(id: job.jobId, token: account.token)
+                    rememberAcceptedJob(job.jobId, for: submissionKey)
+                    if await cancelServerJobWithRetry(
+                        job.jobId,
+                        ownerEmail: account.email
+                    ) {
+                        removeRecentlyAcceptedJob(for: submissionKey)
+                    }
                     return
                 }
+                rememberAcceptedJob(job.jobId, for: submissionKey)
                 publish(.accepted(
                     requestID: pending.requestID,
                     ownerEmail: account.email,
@@ -318,8 +337,67 @@ actor PendingManagedAnalysisCoordinator {
         // it either returns the accepted job or creates exactly one job; both
         // cases yield a jobId that can immediately be cancelled.
         if let job = try? await client.createJob(pending.request, token: token) {
-            _ = try? await client.cancel(id: job.jobId, token: token)
+            let key = resolutionKey(
+                requestID: pending.requestID,
+                ownerEmail: pending.ownerEmail
+            )
+            rememberAcceptedJob(job.jobId, for: key)
+            if await cancelServerJobWithRetry(
+                job.jobId,
+                ownerEmail: pending.ownerEmail,
+                fallbackToken: token
+            ) {
+                removeRecentlyAcceptedJob(for: key)
+            }
         }
+    }
+
+    private func cancelServerJobWithRetry(
+        _ jobID: String,
+        ownerEmail: String,
+        fallbackToken: String? = nil
+    ) async -> Bool {
+        let token: String?
+        if let account, account.email == ownerEmail {
+            token = account.token
+        } else {
+            token = fallbackToken
+        }
+        guard let token else { return false }
+        for attempt in 0..<3 {
+            do {
+                _ = try await client.cancel(id: jobID, token: token)
+                return true
+            } catch let error as ManagedAnalysisClientError {
+                guard retryableDelay(for: error) != nil, attempt < 2 else {
+                    return error == .notFound || error == .invalidState
+                }
+            } catch is CancellationError {
+                return false
+            } catch {
+                return false
+            }
+            try? await Task.sleep(
+                nanoseconds: UInt64(250 * (1 << attempt)) * 1_000_000
+            )
+        }
+        return false
+    }
+
+    private func rememberAcceptedJob(_ jobID: String, for key: String) {
+        recentlyAcceptedJobs[key] = jobID
+        recentlyAcceptedOrder.removeAll { $0 == key }
+        recentlyAcceptedOrder.append(key)
+        while recentlyAcceptedOrder.count > 20 {
+            recentlyAcceptedJobs.removeValue(
+                forKey: recentlyAcceptedOrder.removeFirst()
+            )
+        }
+    }
+
+    private func removeRecentlyAcceptedJob(for key: String) {
+        recentlyAcceptedJobs.removeValue(forKey: key)
+        recentlyAcceptedOrder.removeAll { $0 == key }
     }
 
     private func publish(_ resolution: Resolution) {

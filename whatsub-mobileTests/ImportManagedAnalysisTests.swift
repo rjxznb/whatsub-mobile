@@ -547,6 +547,10 @@ final class ImportManagedAnalysisTests: XCTestCase {
         await eventually {
             await client.createCalls == 2
         }
+        await eventually {
+            if case .managedJob = vm.state { return true }
+            return false
+        }
         let keys = await client.idempotencyKeys
         XCTAssertEqual(keys.count, 2)
         XCTAssertEqual(keys[0], keys[1])
