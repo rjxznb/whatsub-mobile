@@ -153,13 +153,50 @@ final class LibraryManagedAnalysisTests: XCTestCase {
 
     private func job(
         status: ManagedAnalysisJobStatus = .running,
-        completedCues: Int = 0
+        completedCues: Int = 0,
+        jobsAhead: Int? = nil,
+        estimatedStartSeconds: Int? = nil
     ) -> ManagedAnalysisJob {
         ManagedAnalysisJob(
             jobId: "job-1", status: status, tier: .pro,
             createdAt: 1, updatedAt: 2, completedCues: completedCues, totalCues: 2,
-            tokensIn: 0, tokensOut: 0, errorCode: nil, resultEntryId: "entry-1"
+            tokensIn: 0, tokensOut: 0, errorCode: nil, resultEntryId: "entry-1",
+            jobsAhead: jobsAhead, estimatedStartSeconds: estimatedStartSeconds
         )
+    }
+
+    private func streamCue(_ index: Int, translation: String) -> ManagedAnalysisStreamCue {
+        ManagedAnalysisStreamCue(
+            type: .cue,
+            index: index,
+            time: Double(index),
+            endTime: Double(index) + 0.5,
+            text: "Cue \(index)",
+            translation: translation,
+            isKeyPoint: false,
+            highlightWords: [],
+            keyNotes: [:],
+            highlightTranslations: [:]
+        )
+    }
+
+    private func cueEvent(
+        eventID: Int64,
+        batchIndex: Int,
+        attempt: Int,
+        cueIndex: Int,
+        translation: String
+    ) -> ManagedAnalysisStreamEvent {
+        .cue(.init(
+            eventId: eventID,
+            jobId: "job-1",
+            eventType: "cue",
+            batchIndex: batchIndex,
+            attempt: attempt,
+            cueIndex: cueIndex,
+            payload: streamCue(cueIndex, translation: translation),
+            createdAt: eventID
+        ))
     }
 
     private func runningPage(firstTranslation: String = "") -> ManagedAnalysisResultsPage {
@@ -441,5 +478,115 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         await viewModel.discoverManagedAnalysis(token: "token")
         XCTAssertFalse(viewModel.managedDiscoveryPending)
         XCTAssertEqual(viewModel.managedProgress?.status, .running)
+    }
+
+    @MainActor
+    func testStreamCueAppearsImmediatelyAndResetRemovesAbandonedAttempt() async throws {
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [runningPage()]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+
+        await viewModel.handleManagedStreamEvent(
+            cueEvent(eventID: 1, batchIndex: 0, attempt: 1, cueIndex: 0, translation: "即时翻译"),
+            token: "token"
+        )
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["即时翻译", ""])
+
+        await viewModel.handleManagedStreamEvent(
+            .batchReset(.init(
+                eventId: 2,
+                jobId: "job-1",
+                eventType: "batch_reset",
+                batchIndex: 0,
+                attempt: 1,
+                cueIndex: nil,
+                payload: .init(abandonedAttempt: 1, nextAttempt: 2),
+                createdAt: 2
+            )),
+            token: "token"
+        )
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["", ""])
+    }
+
+    @MainActor
+    func testBatchCommittedHydratesDurableResultBeforeDroppingPreview() async throws {
+        let durablePage = ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .running,
+            completedCues: 1, totalCues: 2, nextBatchCursor: 0,
+            batches: [ManagedAnalysisCompletedBatch(
+                batchIndex: 0,
+                subtitles: [cue(0, translation: "持久翻译")]
+            )],
+            errorCode: nil
+        )
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [runningPage(), durablePage]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        await viewModel.handleManagedStreamEvent(
+            cueEvent(eventID: 1, batchIndex: 0, attempt: 1, cueIndex: 0, translation: "预览翻译"),
+            token: "token"
+        )
+
+        await viewModel.handleManagedStreamEvent(
+            .batchCommitted(.init(
+                eventId: 2,
+                jobId: "job-1",
+                eventType: "batch_committed",
+                batchIndex: 0,
+                attempt: 1,
+                cueIndex: nil,
+                payload: .init(batchIndex: 0, attempt: 1, completedCues: 1),
+                createdAt: 2
+            )),
+            token: "token"
+        )
+
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["持久翻译", ""])
+        XCTAssertEqual(viewModel.managedProgress?.completedCues, 1)
+        let cursors = await api.cursors()
+        XCTAssertEqual(cursors, [-1, -1])
+    }
+
+    @MainActor
+    func testSnapshotPublishesQueueEstimateAndConnectionState() async throws {
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job(status: .queued, jobsAhead: 3, estimatedStartSeconds: 121)],
+            results: [runningPage()]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+
+        await viewModel.handleManagedStreamEvent(
+            .snapshot(.init(
+                jobId: "job-1",
+                status: .queued,
+                totalCues: 2,
+                completedCues: 0,
+                completedBatchCursor: -1,
+                latestEventId: 7,
+                errorCode: nil,
+                jobsAhead: 3,
+                estimatedStartSeconds: 121,
+                currentAttempt: nil
+            )),
+            token: "token"
+        )
+
+        XCTAssertEqual(viewModel.managedProgress?.jobsAhead, 3)
+        XCTAssertEqual(viewModel.managedProgress?.estimatedStartSeconds, 121)
+        XCTAssertEqual(viewModel.managedProgress?.connection, .streaming)
+        XCTAssertEqual(viewModel.managedQueuePresentation.detail, "前面还有 3 个任务，预计约 3 分钟开始")
     }
 }

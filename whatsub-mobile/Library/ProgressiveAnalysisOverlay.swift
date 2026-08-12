@@ -62,7 +62,7 @@ struct ProgressiveAnalysisOverlay {
             .reduce(into: [Int: Cue]()) { result, item in
                 result[item.value.index] = item.value
             }
-        baseline.map { source in
+        return baseline.map { source in
             guard let generated = generatedByIndex[source.index] ?? previewsByIndex[source.index] else {
                 return source
             }
@@ -158,27 +158,42 @@ struct ManagedAnalysisProgressState: Equatable {
     var completedCues: Int
     var totalCues: Int
     var errorCode: ManagedAnalysisFailureCode?
+    var jobsAhead: Int?
+    var estimatedStartSeconds: Int?
+    var connection: ManagedAnalysisConnectionState
 
     init(
         jobID: String,
         status: ManagedAnalysisJobStatus,
         completedCues: Int,
         totalCues: Int,
-        errorCode: ManagedAnalysisFailureCode?
+        errorCode: ManagedAnalysisFailureCode?,
+        jobsAhead: Int? = nil,
+        estimatedStartSeconds: Int? = nil,
+        connection: ManagedAnalysisConnectionState = .streaming
     ) {
         self.jobID = jobID
         self.status = status
         self.completedCues = completedCues
         self.totalCues = totalCues
         self.errorCode = errorCode
+        self.jobsAhead = status == .queued ? jobsAhead : nil
+        self.estimatedStartSeconds = status == .queued ? estimatedStartSeconds : nil
+        self.connection = connection
     }
 
-    init(job: ManagedAnalysisJob) {
+    init(
+        job: ManagedAnalysisJob,
+        connection: ManagedAnalysisConnectionState = .streaming
+    ) {
         jobID = job.jobId
         status = job.status
         completedCues = job.completedCues
         totalCues = job.totalCues
         errorCode = job.errorCode
+        jobsAhead = job.status == .queued ? job.jobsAhead : nil
+        estimatedStartSeconds = job.status == .queued ? job.estimatedStartSeconds : nil
+        self.connection = connection
     }
 
     var fraction: Double {

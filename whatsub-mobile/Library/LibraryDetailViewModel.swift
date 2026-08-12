@@ -1,6 +1,12 @@
 import Foundation
 import SwiftUI
 
+private extension ManagedAnalysisJobStatus {
+    var isActivelyProcessing: Bool {
+        self == .queued || self == .running
+    }
+}
+
 enum DesktopReplacementState: Equatable {
     case idle
     case sending
@@ -142,6 +148,7 @@ final class LibraryDetailViewModel: ObservableObject {
     private var replacementStatusTask: Task<Void, Never>?
     private var managedProgressTask: Task<Void, Never>?
     private var progressiveOverlay: ProgressiveAnalysisOverlay?
+    private var managedStreamState = ManagedAnalysisStreamState()
     private var managedBatchCursor = -1
     private var managedPollFailures = 0
     private var loadRevision = 0
@@ -188,6 +195,18 @@ final class LibraryDetailViewModel: ObservableObject {
         return managedProgress?.label
     }
 
+    var managedQueuePresentation: ManagedAnalysisQueuePresentation {
+        guard let progress = managedProgress else {
+            return .init(detail: nil, accessibilityLabel: "")
+        }
+        return .make(
+            status: progress.status,
+            jobsAhead: progress.jobsAhead,
+            estimatedStartSeconds: progress.estimatedStartSeconds,
+            connection: progress.connection
+        )
+    }
+
     func load(id: String, token: String) async {
         loadRevision += 1
         let revision = loadRevision
@@ -206,6 +225,7 @@ final class LibraryDetailViewModel: ObservableObject {
             guideExpanded = false
             guideMustReloadBeforeGeneration = false
             progressiveOverlay = ProgressiveAnalysisOverlay(baseline: displayedCues)
+            managedStreamState = ManagedAnalysisStreamState()
             managedBatchCursor = -1
             managedProgress = nil
             managedFinalSyncPending = false
@@ -265,12 +285,18 @@ final class LibraryDetailViewModel: ObservableObject {
                 return
             }
             let isNewJob = managedProgress?.jobID != job.jobId
-            managedProgress = ManagedAnalysisProgressState(job: job)
+            let existingConnection = managedProgress?.connection ?? .streaming
+            managedProgress = ManagedAnalysisProgressState(
+                job: job,
+                connection: existingConnection
+            )
             if isNewJob {
                 progressiveOverlay = ProgressiveAnalysisOverlay(baseline: entry.analysisJson.subtitles)
                 displayedCues = entry.analysisJson.subtitles
+                managedStreamState = ManagedAnalysisStreamState()
+                managedStreamState.resetForColdSnapshot()
+                managedBatchCursor = -1
             }
-            managedBatchCursor = -1
             managedPollFailures = 0
             if job.status == .completed {
                 managedHydrationPending = false
@@ -309,16 +335,23 @@ final class LibraryDetailViewModel: ObservableObject {
         guard page.entryId == entry.id else { return }
         managedHydrationPending = false
         progressiveOverlay?.merge(page.batches)
+        managedStreamState.applyDurable(page)
+        progressiveOverlay?.replacePreviews(managedStreamState.previews)
         if let progressiveOverlay {
             displayedCues = progressiveOverlay.displayedCues(from: entry.analysisJson.subtitles)
         }
         managedBatchCursor = max(managedBatchCursor, page.nextBatchCursor)
+        let existingConnection = managedProgress?.connection ?? .streaming
         managedProgress = ManagedAnalysisProgressState(
             jobID: page.jobId,
             status: page.status,
             completedCues: page.completedCues,
             totalCues: page.totalCues,
-            errorCode: page.errorCode
+            errorCode: page.errorCode,
+            jobsAhead: managedStreamState.jobsAhead ?? managedProgress?.jobsAhead,
+            estimatedStartSeconds: managedStreamState.estimatedStartSeconds
+                ?? managedProgress?.estimatedStartSeconds,
+            connection: existingConnection
         )
         managedPollFailures = 0
         managedProgressError = nil
@@ -334,7 +367,7 @@ final class LibraryDetailViewModel: ObservableObject {
         defer { managedResuming = false }
         do {
             let job = try await managedAPI.resume(id: jobID, token: token)
-            managedProgress = ManagedAnalysisProgressState(job: job)
+            managedProgress = ManagedAnalysisProgressState(job: job, connection: .reconnecting)
             managedFinalSyncPending = false
             managedPollFailures = 0
             startManagedProgress(token: token)
@@ -372,51 +405,244 @@ final class LibraryDetailViewModel: ObservableObject {
 
     private func runManagedProgress(token: String) async {
         await discoverManagedAnalysis(token: token)
+        var consecutiveStreamFailures = 0
+        var pollingFallbackUntil: Date?
+
         while !Task.isCancelled {
             let progress = managedProgress
             guard managedDiscoveryPending
                     || progress?.isPolling == true
                     || managedFinalSyncPending
                     || managedHydrationPending else { return }
-            let delay: TimeInterval
+
             if managedFinalSyncPending {
-                delay = 4
-            } else if managedHydrationPending {
-                delay = ManagedAnalysisPollPolicy.delay(
-                    status: progress?.status ?? .queued,
-                    failureCount: max(managedPollFailures, 1)
-                ) ?? 2
-            } else {
-                delay = ManagedAnalysisPollPolicy.delay(
-                    status: progress?.status ?? .queued,
+                do {
+                    try await sleepManagedProgress(seconds: 4)
+                    try await pollManagedAnalysisOnce(token: token)
+                } catch is CancellationError {
+                    return
+                } catch ManagedAnalysisClientError.unauthorized {
+                    handleManagedAnalysisUnauthorized()
+                    return
+                } catch {
+                    recordManagedProgressFailure()
+                }
+                continue
+            }
+
+            if managedDiscoveryPending {
+                do {
+                    try await sleepManagedProgress(seconds: 2)
+                    await discoverManagedAnalysis(token: token)
+                } catch {
+                    return
+                }
+                continue
+            }
+
+            if let fallbackUntil = pollingFallbackUntil,
+               fallbackUntil > Date() {
+                setManagedConnection(.pollingFallback)
+                do {
+                    try await pollManagedAnalysisOnce(token: token)
+                } catch is CancellationError {
+                    return
+                } catch ManagedAnalysisClientError.unauthorized {
+                    handleManagedAnalysisUnauthorized()
+                    return
+                } catch {
+                    recordManagedProgressFailure()
+                }
+
+                let pollDelay = ManagedAnalysisPollPolicy.delay(
+                    status: managedProgress?.status ?? .queued,
                     failureCount: managedPollFailures
                 ) ?? 5
-            }
-            let jitter = Double.random(in: 0...0.35)
-            do {
-                try await Task.sleep(nanoseconds: UInt64((delay + jitter) * 1_000_000_000))
-                try Task.checkCancellation()
-                if managedDiscoveryPending {
-                    await discoverManagedAnalysis(token: token)
-                } else {
-                    try await pollManagedAnalysisOnce(token: token)
+                let remaining = max(0.25, fallbackUntil.timeIntervalSinceNow)
+                do {
+                    try await sleepManagedProgress(seconds: min(pollDelay, remaining))
+                } catch {
+                    return
                 }
+                continue
+            }
+
+            pollingFallbackUntil = nil
+            if consecutiveStreamFailures > 0 {
+                setManagedConnection(.reconnecting)
+            }
+
+            do {
+                try await consumeManagedEventStream(token: token)
+                consecutiveStreamFailures = 0
+                guard managedProgress?.isPolling == true || managedHydrationPending else {
+                    return
+                }
+                throw ManagedAnalysisClientError.network("event stream ended")
             } catch is CancellationError {
                 return
             } catch ManagedAnalysisClientError.unauthorized {
                 handleManagedAnalysisUnauthorized()
                 return
+            } catch ManagedAnalysisClientError.notFound,
+                    ManagedAnalysisStreamError.unsupported,
+                    ManagedAnalysisStreamError.forbidden {
+                // A rolling deployment may leave the old polling API online
+                // before the SSE route. Polling remains a safe compatibility
+                // path and the stream is tried again after a short cooldown.
+                pollingFallbackUntil = Date().addingTimeInterval(30)
+                setManagedConnection(.pollingFallback)
+            } catch let ManagedAnalysisStreamError.admissionRejected(_, retryAfterSeconds) {
+                pollingFallbackUntil = Date().addingTimeInterval(
+                    TimeInterval(max(retryAfterSeconds ?? 30, 5))
+                )
+                setManagedConnection(.pollingFallback)
             } catch {
-                recordManagedProgressFailure()
+                consecutiveStreamFailures += 1
+                if consecutiveStreamFailures >= 3 {
+                    pollingFallbackUntil = Date().addingTimeInterval(30)
+                    setManagedConnection(.pollingFallback)
+                } else {
+                    setManagedConnection(.reconnecting)
+                    let delays: [TimeInterval] = [1, 2, 4, 8, 15]
+                    let delay = delays[min(consecutiveStreamFailures - 1, delays.count - 1)]
+                    do {
+                        try await sleepManagedProgress(seconds: delay)
+                    } catch {
+                        return
+                    }
+                }
             }
         }
+    }
+
+    private func consumeManagedEventStream(token: String) async throws {
+        guard let jobID = managedProgress?.jobID else { return }
+        let cursor = managedStreamState.lastEventID
+        let mode: ManagedAnalysisStreamMode = cursor == nil ? .snapshot : .replay
+        let stream = managedAPI.events(
+            id: jobID,
+            afterEventID: cursor,
+            mode: mode,
+            token: token
+        )
+        for try await event in stream {
+            try Task.checkCancellation()
+            await handleManagedStreamEvent(event, token: token)
+        }
+    }
+
+    /// Applies one server event in protocol order. Kept internal so tests can
+    /// exercise recovery without timing a live URLSession stream.
+    func handleManagedStreamEvent(
+        _ event: ManagedAnalysisStreamEvent,
+        token: String
+    ) async {
+        guard managedEventBelongsToCurrentJob(event) else { return }
+        managedStreamState.apply(event)
+        setManagedConnection(.streaming)
+        publishManagedStreamState()
+
+        switch event {
+        case .connected, .cue, .batchReset, .phase:
+            publishManagedPreviews()
+        case let .snapshot(snapshot):
+            publishManagedPreviews()
+            if snapshot.completedBatchCursor > managedBatchCursor {
+                await hydrateManagedResultsAfterEvent(token: token)
+            } else if snapshot.status == .completed, let entry {
+                managedFinalSyncPending = !(await reloadFinalEntry(id: entry.id, token: token))
+            }
+        case .batchCommitted:
+            // Keep the preview visible until `/results` has supplied its
+            // durable replacement; this avoids a visible subtitle flash.
+            await hydrateManagedResultsAfterEvent(token: token)
+        case let .jobState(stateEvent):
+            if stateEvent.status == .completed {
+                await hydrateManagedResultsAfterEvent(token: token)
+            } else if !stateEvent.status.isActivelyProcessing {
+                await hydrateManagedResultsAfterEvent(token: token)
+            }
+        case .resync:
+            managedBatchCursor = -1
+            managedHydrationPending = true
+            publishManagedPreviews()
+            await hydrateManagedResultsAfterEvent(token: token)
+        }
+    }
+
+    private func hydrateManagedResultsAfterEvent(token: String) async {
+        do {
+            try await pollManagedAnalysisOnce(token: token)
+        } catch is CancellationError {
+            return
+        } catch ManagedAnalysisClientError.unauthorized {
+            handleManagedAnalysisUnauthorized()
+        } catch {
+            managedHydrationPending = true
+            recordManagedProgressFailure()
+        }
+    }
+
+    private func publishManagedStreamState() {
+        guard let progress = managedProgress else { return }
+        managedProgress = ManagedAnalysisProgressState(
+            jobID: progress.jobID,
+            status: managedStreamState.status ?? progress.status,
+            completedCues: managedStreamState.completedCues,
+            totalCues: managedStreamState.totalCues > 0
+                ? managedStreamState.totalCues
+                : progress.totalCues,
+            errorCode: managedStreamState.errorCode,
+            jobsAhead: managedStreamState.jobsAhead,
+            estimatedStartSeconds: managedStreamState.estimatedStartSeconds,
+            connection: progress.connection
+        )
+    }
+
+    private func publishManagedPreviews() {
+        guard let entry else { return }
+        progressiveOverlay?.replacePreviews(managedStreamState.previews)
+        if let progressiveOverlay {
+            displayedCues = progressiveOverlay.displayedCues(from: entry.analysisJson.subtitles)
+        }
+    }
+
+    private func setManagedConnection(_ connection: ManagedAnalysisConnectionState) {
+        managedProgress?.connection = connection
+    }
+
+    private func managedEventBelongsToCurrentJob(
+        _ event: ManagedAnalysisStreamEvent
+    ) -> Bool {
+        guard let jobID = managedProgress?.jobID else { return false }
+        switch event {
+        case let .connected(value): return value.jobId == jobID
+        case let .snapshot(value): return value.jobId == jobID
+        case let .cue(value): return value.jobId == jobID
+        case let .batchReset(value): return value.jobId == jobID
+        case let .batchCommitted(value): return value.jobId == jobID
+        case let .phase(value): return value.jobId == jobID
+        case let .jobState(value): return value.jobId == jobID
+        case .resync: return true
+        }
+    }
+
+    private func sleepManagedProgress(seconds: TimeInterval) async throws {
+        let jitter = Double.random(in: 0...0.25)
+        try await Task.sleep(
+            nanoseconds: UInt64(max(0, seconds + jitter) * 1_000_000_000)
+        )
     }
 
     private func reconcileManagedCancellation(
         _ job: ManagedAnalysisJob,
         token: String
     ) async {
-        managedProgress = ManagedAnalysisProgressState(job: job)
+        managedProgress = ManagedAnalysisProgressState(
+            job: job,
+            connection: managedProgress?.connection ?? .streaming
+        )
         switch job.status {
         case .completed:
             stopManagedProgress()

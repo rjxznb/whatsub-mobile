@@ -693,6 +693,13 @@ struct LibraryDetailView: View {
                         .tint(.whatsubAccent)
                 }
 
+                if let detail = vm.managedQueuePresentation.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                        .accessibilityLabel(vm.managedQueuePresentation.accessibilityLabel)
+                }
+
                 if let error = vm.managedProgressError {
                     Text(error)
                         .font(.caption)
