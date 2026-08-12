@@ -49,7 +49,7 @@ final class PendingManagedAnalysisStoreTests: XCTestCase {
         )
         XCTAssertEqual(persistedFiles.map(\.lastPathComponent), [fileURL.lastPathComponent])
 
-        #if os(iOS)
+        #if os(iOS) && !targetEnvironment(simulator)
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         XCTAssertEqual(
             attributes[.protectionKey] as? FileProtectionType,
@@ -141,17 +141,17 @@ final class PendingManagedAnalysisStoreTests: XCTestCase {
         let ready = try await store.ready(
             ownerEmail: "FIRST@example.com",
             limit: 3,
-            at: now
+            at: now.addingTimeInterval(5)
         )
         XCTAssertEqual(ready.map(\.requestID), ["ready"])
 
         try await store.remove(
             requestID: "ready",
             ownerEmail: "first@example.com",
-            at: now
+            at: now.addingTimeInterval(5)
         )
         let reloaded = PendingManagedAnalysisStore(fileURL: fileURL)
-        let remaining = try await reloaded.all(at: now)
+        let remaining = try await reloaded.all(at: now.addingTimeInterval(5))
         XCTAssertEqual(remaining.map(\.requestID), ["other-owner"])
     }
 

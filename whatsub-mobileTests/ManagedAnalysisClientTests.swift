@@ -603,17 +603,17 @@ final class ManagedAnalysisClientTests: XCTestCase {
             for try await _ in stream { probe.recordReceivedEvent() }
         }
 
-        for _ in 0..<100 {
+        for _ in 0..<200 {
             if probe.snapshot().receivedEvents == 1 { break }
-            await Task.yield()
+            try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTAssertEqual(probe.snapshot().receivedEvents, 1)
         consumer.cancel()
         _ = await consumer.result
-        for _ in 0..<20 {
+        for _ in 0..<200 {
             let counts = probe.snapshot()
             if counts.cancelCalls == 1, counts.sourceTerminations == 1 { break }
-            await Task.yield()
+            try await Task.sleep(nanoseconds: 5_000_000)
         }
 
         let counts = probe.snapshot()

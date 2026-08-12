@@ -88,6 +88,7 @@ final class ImportViewModel: ObservableObject {
     private var byokPaused = false
     private var pendingRetryTask: Task<Void, Never>?
     private var pendingRetryGeneration = 0
+    private var pendingRetrySceneActive = true
 
     init(
         managedClient: ManagedAnalysisClientProtocol = WhatsubAPI.shared,
@@ -206,6 +207,7 @@ final class ImportViewModel: ObservableObject {
     /// request. Foregrounding resumes through the same serialized entry point.
     func setSceneActive(_ active: Bool, token: String?, email: String? = nil) {
         byokRequestGate.setActive(active)
+        pendingRetrySceneActive = active
         if !active {
             cancelPendingRetryTask()
         } else if let token,
@@ -587,7 +589,8 @@ final class ImportViewModel: ObservableObject {
                 return
             }
             guard !Task.isCancelled,
-                  pendingRetryGeneration == retryGeneration else { return }
+                  pendingRetryGeneration == retryGeneration,
+                  pendingRetrySceneActive else { return }
 
             do {
                 let job = try await managedClient.createJob(
