@@ -205,6 +205,17 @@ struct ManagedAnalysisResultsPage: Decodable {
     let errorCode: ManagedAnalysisFailureCode?
 }
 
+enum ManagedAnalysisStreamError: Error, Equatable {
+    case forbidden
+    case admissionRejected(status: Int, retryAfterSeconds: Int?)
+    case unsupported
+}
+
+enum ManagedAnalysisStreamMode: String, Equatable {
+    case snapshot
+    case replay
+}
+
 enum ManagedAnalysisCuePayloadType: String, Codable, Equatable {
     case cue
 }
@@ -515,4 +526,23 @@ protocol ManagedAnalysisClientProtocol {
     func results(id: String, afterBatch: Int, token: String) async throws -> ManagedAnalysisResultsPage
     func cancel(id: String, token: String) async throws -> ManagedAnalysisJob
     func resume(id: String, token: String) async throws -> ManagedAnalysisJob
+    func events(
+        id: String,
+        afterEventID: Int64?,
+        mode: ManagedAnalysisStreamMode,
+        token: String
+    ) -> AsyncThrowingStream<ManagedAnalysisStreamEvent, Error>
+}
+
+extension ManagedAnalysisClientProtocol {
+    func events(
+        id: String,
+        afterEventID: Int64?,
+        mode: ManagedAnalysisStreamMode,
+        token: String
+    ) -> AsyncThrowingStream<ManagedAnalysisStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish(throwing: ManagedAnalysisStreamError.unsupported)
+        }
+    }
 }
