@@ -251,7 +251,8 @@ actor PendingManagedAnalysisCoordinator {
                     rememberAcceptedJob(job.jobId, for: submissionKey)
                     if await cancelServerJobWithRetry(
                         job.jobId,
-                        ownerEmail: account.email
+                        ownerEmail: account.email,
+                        fallbackToken: account.token
                     ) {
                         removeRecentlyAcceptedJob(for: submissionKey)
                     }
