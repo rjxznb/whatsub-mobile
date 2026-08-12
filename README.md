@@ -48,8 +48,11 @@ page, backgrounding, buffering, timeout, and failure all preserve it.
 The loading error surface has an in-place `重新加载` action for both sources.
 YouTube retry constructs a fresh WKWebView/iframe. OSS retry reads the existing
 Library detail endpoint once to refresh a possibly expired signed URL, then
-constructs a fresh AVPlayer item. Playback progress remains local-only, is
-atomically stored under Application Support, and is bounded to 500 entries.
+constructs a fresh AVPlayer item. If an OSS refresh is interrupted by leaving
+the tab, returning automatically resumes recovery instead of leaving an empty
+player. Pending pre-ready seeks are generation-bound, so leaving the view cannot
+start off-screen audio later. Playback progress remains local-only, is atomically
+stored under Application Support, and is bounded to 500 entries.
 
 ## Local dev (on Apple Silicon Mac with Xcode)
 

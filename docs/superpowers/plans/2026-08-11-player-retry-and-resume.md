@@ -132,7 +132,7 @@ Create the parent directory, decode lazily, trim entry IDs, floor valid position
 
 - [ ] **Step 5: Implement the pure session state**
 
-`receiveTime` rejects non-finite/negative values, saves immediately on the first accepted time, then every `>= 5` seconds. `markEnded` enters completion suppression and returns `.clear`. While completed, same-tail callbacks return `.none`; a later time at least one second below the completed tail exits suppression and can save. `beginReload` increments an integer generation, resets readiness, and returns the generation. Only the current not-ready generation accepts timeout.
+`receiveTime` rejects non-finite/negative values, saves immediately on the first accepted time, then every `>= 5` seconds. `markEnded(at:)` records the player's actual ending position, enters completion suppression, and returns `.clear`. While completed, same-tail callbacks return `.none`; a later time meaningfully below the completed tail (beyond a small floating-point tolerance, including within the final second) exits suppression and can save. `beginReload` increments an integer generation, resets readiness, and returns the generation. Only the current not-ready generation accepts timeout.
 
 - [ ] **Step 6: Commit GREEN implementation after full CI**
 
