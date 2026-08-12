@@ -168,6 +168,36 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
         XCTAssertTrue(submitted.isEmpty)
     }
 
+    func testCancellingInFlightCreateWaitsForJobIDThenCancelsServerJob() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let client = InFlightClient()
+        let coordinator = PendingManagedAnalysisCoordinator(
+            client: client,
+            store: fixture.store,
+            sleeper: { _ in }
+        )
+
+        _ = try await coordinator.enqueue(
+            request: request("in-flight"),
+            ownerEmail: "user@example.com",
+            retryAfterSeconds: 0,
+            token: "token"
+        )
+        await eventually { await client.started }
+        await coordinator.cancel(
+            requestID: "in-flight",
+            ownerEmail: "user@example.com"
+        )
+        await client.release(job: makeJob(id: "job-in-flight"))
+        await eventually { await client.cancelledJobIDs == ["job-in-flight"] }
+
+        let cancelled = await client.cancelledJobIDs
+        XCTAssertEqual(cancelled, ["job-in-flight"])
+        let remaining = try await fixture.store.all()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
     func testTransientNetworkAndServerFailuresRemainQueuedUntilAccepted() async throws {
         for transient in [
             ManagedAnalysisClientError.network("offline"),
@@ -217,6 +247,63 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
             continuation?.resume()
             continuation = nil
         }
+    }
+
+    private actor InFlightClient: ManagedAnalysisClientProtocol {
+        private(set) var started = false
+        private(set) var cancelledJobIDs: [String] = []
+        private var continuation: CheckedContinuation<ManagedAnalysisJob, Never>?
+
+        func createJob(
+            _ request: ManagedAnalysisCreateRequest,
+            token: String
+        ) async throws -> ManagedAnalysisJob {
+            started = true
+            return await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func release(job: ManagedAnalysisJob) {
+            continuation?.resume(returning: job)
+            continuation = nil
+        }
+
+        func job(id: String, token: String) async throws -> ManagedAnalysisJob {
+            throw ManagedAnalysisClientError.notFound
+        }
+        func jobs(token: String) async throws -> [ManagedAnalysisJob] { [] }
+        func results(
+            id: String,
+            afterBatch: Int,
+            token: String
+        ) async throws -> ManagedAnalysisResultsPage {
+            throw ManagedAnalysisClientError.notFound
+        }
+        func cancel(id: String, token: String) async throws -> ManagedAnalysisJob {
+            cancelledJobIDs.append(id)
+            return ManagedAnalysisJob(
+                jobId: id, status: .cancelled, tier: .pro,
+                createdAt: 1, updatedAt: 2, completedCues: 0, totalCues: 1,
+                tokensIn: 0, tokensOut: 0, errorCode: nil,
+                resultEntryId: nil
+            )
+        }
+        func resume(id: String, token: String) async throws -> ManagedAnalysisJob {
+            throw ManagedAnalysisClientError.notFound
+        }
+    }
+
+    private func makeJob(
+        id: String,
+        status: ManagedAnalysisJobStatus = .queued
+    ) -> ManagedAnalysisJob {
+        ManagedAnalysisJob(
+            jobId: id, status: status, tier: .pro,
+            createdAt: 1, updatedAt: 1, completedCues: 0, totalCues: 1,
+            tokensIn: 0, tokensOut: 0, errorCode: nil,
+            resultEntryId: nil
+        )
     }
 
     private struct Fixture {

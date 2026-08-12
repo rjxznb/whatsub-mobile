@@ -30,6 +30,8 @@ actor PendingManagedAnalysisCoordinator {
     private var account: Account?
     private var runner: Task<Void, Never>?
     private var generation = 0
+    private var activeSubmissionKeys: Set<String> = []
+    private var cancelledSubmissionKeys: Set<String> = []
     private var waiters: [
         String: [UUID: CheckedContinuation<Resolution, Never>]
     ] = [:]
@@ -74,7 +76,6 @@ actor PendingManagedAnalysisCoordinator {
         let next = Account(token: token, email: normalized(email))
         if account != next {
             generation += 1
-            runner?.cancel()
             runner = nil
             account = next
         }
@@ -83,7 +84,6 @@ actor PendingManagedAnalysisCoordinator {
 
     func deactivate() {
         generation += 1
-        runner?.cancel()
         runner = nil
         account = nil
     }
@@ -125,18 +125,27 @@ actor PendingManagedAnalysisCoordinator {
 
     func cancel(requestID: String, ownerEmail: String) async {
         let owner = normalized(ownerEmail)
+        let key = resolutionKey(requestID: requestID, ownerEmail: owner)
+        // If POST /jobs is already in flight, do not cancel its URLSession
+        // task: the server may have accepted it before the response reaches
+        // us. Keep a tombstone so the returned jobId is cancelled instead.
+        if activeSubmissionKeys.contains(key) {
+            cancelledSubmissionKeys.insert(key)
+        }
+        // A sleeping runner is invalidated by generation and exits before POST.
+        // It is deliberately not Task.cancelled because that same Task may
+        // already be inside the accepted-response race described above.
+        let shouldRestart = account?.email == owner
+        if shouldRestart {
+            generation += 1
+            runner = nil
+        }
         try? await store.remove(
             requestID: requestID,
             ownerEmail: owner,
             at: now()
         )
-        // The runner may already have read this row and be sleeping outside
-        // the store actor. Invalidate that generation before acknowledging
-        // the user's cancellation, then restart for any other queued rows.
-        if account?.email == owner {
-            generation += 1
-            runner?.cancel()
-            runner = nil
+        if shouldRestart {
             startRunnerIfNeeded()
         }
         publish(.cancelled(requestID: requestID, ownerEmail: owner))
@@ -152,11 +161,14 @@ actor PendingManagedAnalysisCoordinator {
 
     func clear(ownerEmail: String) async {
         let owner = normalized(ownerEmail)
-        let pending = (try? await store.all(at: now()))?
-            .filter { $0.ownerEmail == owner } ?? []
+        // Stop this account before the first suspension. Otherwise the actor
+        // can re-enter while store.all() waits and let the old runner submit
+        // or reschedule after logout has started.
         if account?.email == owner {
             deactivate()
         }
+        let pending = (try? await store.all(at: now()))?
+            .filter { $0.ownerEmail == owner } ?? []
         try? await store.removeAll(ownerEmail: owner, at: now())
         for item in pending {
             publish(.cancelled(requestID: item.requestID, ownerEmail: owner))
@@ -202,14 +214,15 @@ actor PendingManagedAnalysisCoordinator {
                   generation == expectedGeneration,
                   self.account == account else { return }
 
+            let submissionKey = resolutionKey(
+                requestID: pending.requestID,
+                ownerEmail: account.email
+            )
+            activeSubmissionKeys.insert(submissionKey)
             do {
                 let job = try await client.createJob(pending.request, token: account.token)
-                guard !Task.isCancelled,
-                      generation == expectedGeneration,
-                      self.account == account else {
-                    // Logout/background can race a request that already left
-                    // the device. Do not publish it into the next account, and
-                    // best-effort cancel the just-created backend job.
+                activeSubmissionKeys.remove(submissionKey)
+                if cancelledSubmissionKeys.remove(submissionKey) != nil {
                     _ = try? await client.cancel(id: job.jobId, token: account.token)
                     return
                 }
@@ -223,11 +236,30 @@ actor PendingManagedAnalysisCoordinator {
                     ownerEmail: account.email,
                     job: job
                 ))
+                guard !Task.isCancelled,
+                      generation == expectedGeneration,
+                      self.account == account else { return }
                 // Continue: one account may have several independently queued
                 // imports, and a successful first item must not strand the rest.
             } catch is CancellationError {
+                activeSubmissionKeys.remove(submissionKey)
+                cancelledSubmissionKeys.remove(submissionKey)
                 return
             } catch let error as ManagedAnalysisClientError {
+                activeSubmissionKeys.remove(submissionKey)
+                if cancelledSubmissionKeys.remove(submissionKey) != nil {
+                    // Reissue the same idempotency key once. If the first POST
+                    // reached the server but its response was lost, this gets
+                    // the existing jobId; if it did not, the newly-created job
+                    // is immediately cancelled.
+                    if let job = try? await client.createJob(
+                        pending.request,
+                        token: account.token
+                    ) {
+                        _ = try? await client.cancel(id: job.jobId, token: account.token)
+                    }
+                    return
+                }
                 if let delay = retryableDelay(for: error) {
                     _ = try? await store.reschedule(
                         requestID: pending.requestID,
@@ -248,6 +280,8 @@ actor PendingManagedAnalysisCoordinator {
                     error: error
                 ))
             } catch {
+                activeSubmissionKeys.remove(submissionKey)
+                cancelledSubmissionKeys.remove(submissionKey)
                 return
             }
         }

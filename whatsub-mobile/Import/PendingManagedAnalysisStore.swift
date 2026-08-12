@@ -13,6 +13,8 @@ struct PendingManagedAnalysisSubmission: Codable, Equatable, Identifiable {
 
 actor PendingManagedAnalysisStore {
     static let shared = PendingManagedAnalysisStore()
+    private static let purgeStateLock = NSLock()
+    nonisolated(unsafe) private static var synchronouslyPurgedPaths: Set<String> = []
 
     enum StoreError: Error, Equatable {
         case missingOwner
@@ -63,6 +65,9 @@ actor PendingManagedAnalysisStore {
         at url: URL,
         fileManager: FileManager = .default
     ) {
+        purgeStateLock.lock()
+        defer { purgeStateLock.unlock() }
+        synchronouslyPurgedPaths.insert(url.standardizedFileURL.path)
         if fileManager.fileExists(atPath: url.path) {
             try? fileManager.removeItem(at: url)
         }
@@ -75,7 +80,10 @@ actor PendingManagedAnalysisStore {
         retryAfterSeconds: Int?,
         at now: Date = Date()
     ) throws -> PendingManagedAnalysisSubmission {
+        // A new explicit import after login owns the file again. Stale
+        // reschedule/remove operations never call this and remain fenced out.
         let owner = try normalizedOwner(ownerEmail)
+        Self.allowWrites(to: fileURL)
         var submissions = try load(at: now)
 
         if let existing = submissions.first(where: {
@@ -209,6 +217,14 @@ actor PendingManagedAnalysisStore {
     }
 
     private func persist(_ submissions: [PendingManagedAnalysisSubmission]) throws {
+        // AppState marks the path before its synchronous logout deletion.
+        // Any actor operation that loaded the old file just before logout is
+        // therefore prevented from recreating it afterwards.
+        Self.purgeStateLock.lock()
+        defer { Self.purgeStateLock.unlock() }
+        guard !Self.synchronouslyPurgedPaths.contains(
+            fileURL.standardizedFileURL.path
+        ) else { return }
         if submissions.isEmpty {
             if fileManager.fileExists(atPath: fileURL.path) {
                 try fileManager.removeItem(at: fileURL)
@@ -279,5 +295,11 @@ actor PendingManagedAnalysisStore {
         return base
             .appendingPathComponent("whatSub", isDirectory: true)
             .appendingPathComponent("pending-managed-analysis.json")
+    }
+
+    private nonisolated static func allowWrites(to url: URL) {
+        purgeStateLock.lock()
+        synchronouslyPurgedPaths.remove(url.standardizedFileURL.path)
+        purgeStateLock.unlock()
     }
 }
