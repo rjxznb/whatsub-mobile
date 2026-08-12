@@ -80,15 +80,11 @@ final class ImportViewModel: ObservableObject {
     private let localAnalyzer: LocalAnalyzer
     private let checkpointStore: AnalysisCheckpointStore
     private let noProgressWait: () async throws -> Void
-    private let pendingManagedStore: PendingManagedAnalysisStore
-    private let pendingNow: () -> Date
-    private let pendingRetrySleep: (TimeInterval) async throws -> Void
+    private let pendingCoordinator: PendingManagedAnalysisCoordinator
     private let byokRequestGate = BYOKRequestGate()
     private var byokCheckpointLease: BYOKCheckpointLease?
     private var byokPaused = false
     private var pendingRetryTask: Task<Void, Never>?
-    private var pendingRetryGeneration = 0
-    private var pendingRetrySceneActive = true
 
     init(
         managedClient: ManagedAnalysisClientProtocol = WhatsubAPI.shared,
@@ -121,12 +117,7 @@ final class ImportViewModel: ObservableObject {
         noProgressWait: @escaping () async throws -> Void = {
             try await Task.sleep(nanoseconds: 90_000_000_000)
         },
-        pendingManagedStore: PendingManagedAnalysisStore = PendingManagedAnalysisStore(),
-        pendingNow: @escaping () -> Date = Date.init,
-        pendingRetrySleep: @escaping (TimeInterval) async throws -> Void = { seconds in
-            let nanoseconds = UInt64(max(0, seconds) * 1_000_000_000)
-            try await Task.sleep(nanoseconds: nanoseconds)
-        },
+        pendingCoordinator: PendingManagedAnalysisCoordinator = .shared,
         localAnalyzer: @escaping LocalAnalyzer = { cues, durationSec, settings, resume, onProgress, onDiagnostic in
             let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
             return try await engine.analyze(
@@ -151,9 +142,7 @@ final class ImportViewModel: ObservableObject {
         self.durationRefresher = durationRefresher
         self.checkpointStore = checkpointStore
         self.noProgressWait = noProgressWait
-        self.pendingManagedStore = pendingManagedStore
-        self.pendingNow = pendingNow
-        self.pendingRetrySleep = pendingRetrySleep
+        self.pendingCoordinator = pendingCoordinator
         self.localAnalyzer = localAnalyzer
         try? checkpointStore.prune()
     }
@@ -207,13 +196,9 @@ final class ImportViewModel: ObservableObject {
     /// request. Foregrounding resumes through the same serialized entry point.
     func setSceneActive(_ active: Bool, token: String?, email: String? = nil) {
         byokRequestGate.setActive(active)
-        pendingRetrySceneActive = active
-        if !active {
-            cancelPendingRetryTask()
-        } else if let token,
-                  let ownerEmail = normalizedEmail(email ?? accountEmail) {
+        if active,
+           let ownerEmail = normalizedEmail(email ?? accountEmail) {
             accountEmail = ownerEmail
-            schedulePendingManagedRetry(token: token, ownerEmail: ownerEmail)
         }
         guard active, byokPaused, let token, !rawCues.isEmpty else { return }
         byokPaused = false
@@ -442,10 +427,9 @@ final class ImportViewModel: ObservableObject {
             let job = try await managedClient.createJob(request, token: token)
             guard isCurrent(generation) else { return }
             if let ownerEmail = normalizedEmail(accountEmail) {
-                try? await pendingManagedStore.remove(
+                await pendingCoordinator.discard(
                     requestID: request.idempotencyKey,
-                    ownerEmail: ownerEmail,
-                    at: pendingNow()
+                    ownerEmail: ownerEmail
                 )
             }
             await acceptManagedJob(job, ownerEmail: accountEmail, title: title)
@@ -466,20 +450,21 @@ final class ImportViewModel: ObservableObject {
                 if let retryDelay = retryableSaturationDelay(for: managedError),
                    let ownerEmail = normalizedEmail(accountEmail) {
                     do {
-                        let pending = try await pendingManagedStore.enqueue(
+                        let pending = try await pendingCoordinator.enqueue(
                             request: request,
                             ownerEmail: ownerEmail,
                             retryAfterSeconds: retryDelay,
-                            at: pendingNow()
+                            token: token
                         )
                         state = .pendingManagedSubmission(
                             requestID: pending.requestID,
                             retryAt: pending.nextRetryAt
                         )
                         cancelPendingRetryTask()
-                        schedulePendingManagedRetry(
-                            token: token,
-                            ownerEmail: ownerEmail
+                        observePendingManagedResolution(
+                            requestID: pending.requestID,
+                            ownerEmail: ownerEmail,
+                            title: pending.request.title
                         )
                     } catch {
                         state = managedState(for: managedError, duration: duration)
@@ -538,122 +523,32 @@ final class ImportViewModel: ObservableObject {
         }
     }
 
-    private func schedulePendingManagedRetry(
-        token: String,
-        ownerEmail: String
+    private func observePendingManagedResolution(
+        requestID: String,
+        ownerEmail: String,
+        title: String
     ) {
-        guard pendingRetryTask == nil else { return }
-        pendingRetryGeneration += 1
-        let retryGeneration = pendingRetryGeneration
+        pendingRetryTask?.cancel()
         pendingRetryTask = Task { [weak self] in
             guard let self else { return }
-            await self.runPendingManagedRetry(
-                token: token,
-                ownerEmail: ownerEmail,
-                retryGeneration: retryGeneration
+            let resolution = await pendingCoordinator.waitForResolution(
+                requestID: requestID,
+                ownerEmail: ownerEmail
             )
-            if self.pendingRetryGeneration == retryGeneration {
-                self.pendingRetryTask = nil
-            }
-        }
-    }
-
-    private func runPendingManagedRetry(
-        token: String,
-        ownerEmail: String,
-        retryGeneration: Int
-    ) async {
-        while !Task.isCancelled && pendingRetryGeneration == retryGeneration {
-            let pending: PendingManagedAnalysisSubmission
-            do {
-                guard let next = try await pendingManagedStore.next(
-                    ownerEmail: ownerEmail,
-                    at: pendingNow()
-                ) else { return }
-                pending = next
-            } catch {
-                return
-            }
-
-            state = .pendingManagedSubmission(
-                requestID: pending.requestID,
-                retryAt: pending.nextRetryAt
-            )
-            let delay = max(
-                0,
-                pending.nextRetryAt.timeIntervalSince(pendingNow())
-            )
-            do {
-                try await pendingRetrySleep(delay)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled,
-                  pendingRetryGeneration == retryGeneration,
-                  pendingRetrySceneActive else { return }
-
-            do {
-                let job = try await managedClient.createJob(
-                    pending.request,
-                    token: token
-                )
-                guard !Task.isCancelled,
-                      pendingRetryGeneration == retryGeneration else { return }
-                try? await pendingManagedStore.remove(
-                    requestID: pending.requestID,
-                    ownerEmail: ownerEmail,
-                    at: pendingNow()
-                )
+            guard !Task.isCancelled else { return }
+            switch resolution {
+            case let .accepted(_, _, job):
                 await acceptManagedJob(
                     job,
                     ownerEmail: ownerEmail,
-                    title: pending.request.title
+                    title: title
                 )
-                return
-            } catch is CancellationError {
-                return
-            } catch let managedError as ManagedAnalysisClientError {
-                if let retryDelay = retryableSaturationDelay(for: managedError) {
-                    do {
-                        guard let rescheduled = try await pendingManagedStore.reschedule(
-                            requestID: pending.requestID,
-                            ownerEmail: ownerEmail,
-                            retryAfterSeconds: retryDelay,
-                            at: pendingNow()
-                        ) else { return }
-                        state = .pendingManagedSubmission(
-                            requestID: rescheduled.requestID,
-                            retryAt: rescheduled.nextRetryAt
-                        )
-                        continue
-                    } catch {
-                        state = managedState(
-                            for: managedError,
-                            duration: pending.request.durationSec
-                        )
-                        return
-                    }
-                }
-
-                try? await pendingManagedStore.remove(
-                    requestID: pending.requestID,
-                    ownerEmail: ownerEmail,
-                    at: pendingNow()
-                )
-                state = managedState(
-                    for: managedError,
-                    duration: pending.request.durationSec
-                )
-                return
-            } catch {
-                try? await pendingManagedStore.remove(
-                    requestID: pending.requestID,
-                    ownerEmail: ownerEmail,
-                    at: pendingNow()
-                )
-                state = .error(error.localizedDescription)
-                return
+            case let .failed(_, _, error):
+                state = managedState(for: error, duration: durationSec ?? 0)
+            case .cancelled:
+                state = .idle
             }
+            pendingRetryTask = nil
         }
     }
 
@@ -661,16 +556,11 @@ final class ImportViewModel: ObservableObject {
         guard case .pendingManagedSubmission(let requestID, _) = state,
               let ownerEmail = normalizedEmail(accountEmail) else { return }
         cancelPendingRetryTask()
-        try? await pendingManagedStore.remove(
-            requestID: requestID,
-            ownerEmail: ownerEmail,
-            at: pendingNow()
-        )
+        await pendingCoordinator.cancel(requestID: requestID, ownerEmail: ownerEmail)
         state = .idle
     }
 
     private func cancelPendingRetryTask() {
-        pendingRetryGeneration += 1
         pendingRetryTask?.cancel()
         pendingRetryTask = nil
     }

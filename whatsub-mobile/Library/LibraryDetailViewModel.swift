@@ -151,6 +151,8 @@ final class LibraryDetailViewModel: ObservableObject {
     private var managedStreamState = ManagedAnalysisStreamState()
     private var managedBatchCursor = -1
     private var managedPollFailures = 0
+    private var managedStreamHealthRevision = 0
+    private var managedStreamMustReconnect = false
     private var loadRevision = 0
     private let guideService: VideoLearningGuideService
     private var guideTask: Task<Void, Never>?
@@ -472,6 +474,7 @@ final class LibraryDetailViewModel: ObservableObject {
                 setManagedConnection(.reconnecting)
             }
 
+            let healthBeforeConnection = managedStreamHealthRevision
             do {
                 try await consumeManagedEventStream(token: token)
                 consecutiveStreamFailures = 0
@@ -498,6 +501,9 @@ final class LibraryDetailViewModel: ObservableObject {
                 )
                 setManagedConnection(.pollingFallback)
             } catch {
+                if managedStreamHealthRevision != healthBeforeConnection {
+                    consecutiveStreamFailures = 0
+                }
                 consecutiveStreamFailures += 1
                 if consecutiveStreamFailures >= 3 {
                     pollingFallbackUntil = Date().addingTimeInterval(30)
@@ -529,6 +535,10 @@ final class LibraryDetailViewModel: ObservableObject {
         for try await event in stream {
             try Task.checkCancellation()
             await handleManagedStreamEvent(event, token: token)
+            if managedStreamMustReconnect {
+                managedStreamMustReconnect = false
+                throw ManagedAnalysisClientError.network("durable hydration pending")
+            }
         }
     }
 
@@ -540,6 +550,7 @@ final class LibraryDetailViewModel: ObservableObject {
     ) async {
         guard managedEventBelongsToCurrentJob(event) else { return }
         managedStreamState.apply(event)
+        managedStreamHealthRevision += 1
         setManagedConnection(.streaming)
         publishManagedStreamState()
 
@@ -581,6 +592,7 @@ final class LibraryDetailViewModel: ObservableObject {
         } catch {
             managedHydrationPending = true
             recordManagedProgressFailure()
+            managedStreamMustReconnect = true
         }
     }
 
@@ -654,10 +666,21 @@ final class LibraryDetailViewModel: ObservableObject {
         case .queued, .running:
             startManagedProgress(token: token)
         case .pausedQuota, .failed, .cancelled:
-            // The cancel response has counters but no subtitle batches. Hydrate
-            // once more so a batch committed just before cancellation is kept.
-            let resolvedCueCount = progressiveOverlay?.resolvedIndexes.count ?? 0
-            managedHydrationPending = job.completedCues > resolvedCueCount
+            // The HTTP cancel response can win the race against the stream's
+            // batch_reset. Remove every non-durable preview first, then rebuild
+            // from a full durable result page so abandoned output cannot remain.
+            managedStreamState.clearPreviews()
+            publishManagedPreviews()
+            managedBatchCursor = -1
+            do {
+                try await pollManagedAnalysisOnce(token: token)
+            } catch ManagedAnalysisClientError.unauthorized {
+                handleManagedAnalysisUnauthorized()
+                return
+            } catch {
+                let durableCueCount = progressiveOverlay?.durableResolvedIndexes.count ?? 0
+                managedHydrationPending = job.completedCues > durableCueCount
+            }
             if managedHydrationPending {
                 startManagedProgress(token: token)
             } else {

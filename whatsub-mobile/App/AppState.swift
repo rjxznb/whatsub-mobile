@@ -25,10 +25,16 @@ final class AppState: ObservableObject {
     /// stack).
     @Published var meShowImportQueue: Bool = false
     @Published var pendingLibraryEntryID: String?
+    private let pendingManagedCoordinator: PendingManagedAnalysisCoordinator
+    private var pendingManagedCleanupTask: Task<Void, Never>?
+    private var pendingManagedActivationTask: Task<Void, Never>?
 
     var isAuthenticated: Bool { session?.isValid == true }
 
-    init() {
+    init(
+        pendingManagedCoordinator: PendingManagedAnalysisCoordinator = .shared
+    ) {
+        self.pendingManagedCoordinator = pendingManagedCoordinator
         // Restore a non-expired session synchronously at launch.
         if let saved = KeychainStore.load(), saved.isValid {
             session = saved
@@ -43,8 +49,14 @@ final class AppState: ObservableObject {
     }
 
     func logout() {
+        let email = session?.email
         if let token = session?.sessionToken {
             Task { await WhatsubAPI.shared.logout(token: token) }
+        }
+        if let email {
+            pendingManagedCleanupTask = Task {
+                await pendingManagedCoordinator.clear(ownerEmail: email)
+            }
         }
         KeychainStore.clear()
         session = nil
@@ -67,11 +79,41 @@ final class AppState: ObservableObject {
     }
 
     func forceLogout() {
+        let email = session?.email
+        if let email {
+            pendingManagedCleanupTask = Task {
+                await pendingManagedCoordinator.clear(ownerEmail: email)
+            }
+        }
         KeychainStore.clear()
         session = nil
         currentUser = nil
         pendingLibraryEntryID = nil
         meShowImportQueue = false
+    }
+
+    func setPendingManagedRetryActive(_ active: Bool) {
+        pendingManagedActivationTask?.cancel()
+        guard active, let session else {
+            pendingManagedActivationTask = Task {
+                await pendingManagedCoordinator.deactivate()
+            }
+            return
+        }
+        let expectedEmail = session.email
+        let expectedToken = session.sessionToken
+        let cleanupTask = pendingManagedCleanupTask
+        let coordinator = pendingManagedCoordinator
+        pendingManagedActivationTask = Task { [weak self] in
+            await cleanupTask?.value
+            guard !Task.isCancelled,
+                  self?.session?.email == expectedEmail,
+                  self?.session?.sessionToken == expectedToken else { return }
+            await coordinator.activate(
+                token: expectedToken,
+                email: expectedEmail
+            )
+        }
     }
 
     func routeAppURL(_ url: URL) {

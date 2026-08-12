@@ -84,6 +84,11 @@ struct ManagedAnalysisStreamState {
         needsDurableResync = false
     }
 
+    mutating func clearPreviews() {
+        previews.removeAll()
+        currentAttemptByBatch.removeAll()
+    }
+
     private mutating func applySnapshot(_ snapshot: ManagedAnalysisStreamSnapshot) {
         lastEventID = snapshot.latestEventId
         status = snapshot.status

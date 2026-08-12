@@ -589,4 +589,42 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         XCTAssertEqual(viewModel.managedProgress?.connection, .streaming)
         XCTAssertEqual(viewModel.managedQueuePresentation.detail, "前面还有 3 个任务，预计约 3 分钟开始")
     }
+
+    @MainActor
+    func testCancelResponseClearsPreviewBeforeDelayedStreamReset() async throws {
+        let durable = ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .running,
+            completedCues: 1, totalCues: 2, nextBatchCursor: 0,
+            batches: [ManagedAnalysisCompletedBatch(
+                batchIndex: 0,
+                subtitles: [cue(0, translation: "已提交")]
+            )],
+            errorCode: nil
+        )
+        let cancelledDurable = ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .cancelled,
+            completedCues: 1, totalCues: 2, nextBatchCursor: 0,
+            batches: durable.batches,
+            errorCode: nil
+        )
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [durable, cancelledDurable],
+            cancelResponse: job(status: .cancelled, completedCues: 1)
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        await viewModel.handleManagedStreamEvent(
+            cueEvent(eventID: 1, batchIndex: 1, attempt: 1, cueIndex: 1, translation: "未提交"),
+            token: "token"
+        )
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["已提交", "未提交"])
+
+        await viewModel.cancelManagedAnalysis(token: "token")
+
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["已提交", ""])
+        XCTAssertEqual(viewModel.managedProgress?.status, .cancelled)
+    }
 }

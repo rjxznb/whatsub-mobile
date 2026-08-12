@@ -101,6 +101,7 @@ struct ContentView: View {
         // ("Apps may not freeze on launch") rejection.
         .task(id: appState.isAuthenticated) {
             guard appState.isAuthenticated else {
+                appState.setPendingManagedRetryActive(false)
                 gateReady = false
                 store.activateAccount(email: nil)
                 featureAccess.resetMemory()
@@ -162,6 +163,7 @@ struct ContentView: View {
                 return true
             }
             store.start()
+            appState.setPendingManagedRetryActive(scenePhase == .active)
             // Enter UI right away. The detached Task refreshes /me in the
             // background — UI shows mainTabs with the cached `currentUser`
             // (last known entitlements) while it runs, and the @Published
@@ -280,6 +282,7 @@ struct ContentView: View {
                 .tag(3)
         }
         .onChange(of: scenePhase) { phase in
+            appState.setPendingManagedRetryActive(phase == .active)
             if phase == .active {
                 if pendingImport == nil,
                    let saved = AppGroup.pendingImportURL() {

@@ -145,6 +145,20 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         try await ManagedAnalysisClient(session: session).resume(id: id, token: token)
     }
 
+    nonisolated func events(
+        id: String,
+        afterEventID: Int64?,
+        mode: ManagedAnalysisStreamMode,
+        token: String
+    ) -> AsyncThrowingStream<ManagedAnalysisStreamEvent, Error> {
+        ManagedAnalysisClient().events(
+            id: id,
+            afterEventID: afterEventID,
+            mode: mode,
+            token: token
+        )
+    }
+
     func listLibrary(token: String) async throws -> [LibraryListItem] {
         let data = try await get(Endpoints.library("list"), bearer: token)
         return try decode(LibraryListResponse.self, from: data).entries

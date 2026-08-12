@@ -16,6 +16,10 @@ struct ProgressiveAnalysisOverlay {
         Set(generatedByIndex.keys).union(previewByKey.values.map(\.index))
     }
 
+    var durableResolvedIndexes: Set<Int> {
+        Set(generatedByIndex.keys)
+    }
+
     mutating func merge(_ batches: [ManagedAnalysisCompletedBatch]) {
         for batch in batches {
             for cue in batch.subtitles where generatedByIndex[cue.index] == nil {

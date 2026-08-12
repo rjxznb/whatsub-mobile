@@ -12,6 +12,8 @@ struct PendingManagedAnalysisSubmission: Codable, Equatable, Identifiable {
 }
 
 actor PendingManagedAnalysisStore {
+    static let shared = PendingManagedAnalysisStore()
+
     enum StoreError: Error, Equatable {
         case missingOwner
     }

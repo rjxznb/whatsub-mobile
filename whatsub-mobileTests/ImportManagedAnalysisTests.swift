@@ -128,6 +128,12 @@ final class ImportManagedAnalysisTests: XCTestCase {
         }
     ) -> ImportViewModel {
         let cue = Cue(index: 0, time: 0, endTime: 1, text: "Hello")
+        let pendingCoordinator = PendingManagedAnalysisCoordinator(
+            client: client,
+            store: pendingStore,
+            now: now,
+            sleeper: retrySleep
+        )
         return ImportViewModel(
             managedClient: client,
             entitlementRefresher: { _ in entitlement },
@@ -138,9 +144,7 @@ final class ImportManagedAnalysisTests: XCTestCase {
             titleFetcher: { _ in "Test video" },
             thumbnailFetcher: { _ in nil },
             durationRefresher: { _ in refreshedDuration },
-            pendingManagedStore: pendingStore,
-            pendingNow: now,
-            pendingRetrySleep: retrySleep,
+            pendingCoordinator: pendingCoordinator,
             localAnalyzer: { cues, _, _, _, progress, _ in
                 try await analyzer.analyze(cues, progress)
             }
@@ -379,12 +383,20 @@ final class ImportManagedAnalysisTests: XCTestCase {
 
     private actor RetrySleeper {
         private(set) var calls = 0
+        private var continuation: CheckedContinuation<Void, Error>?
 
         func sleep(_: TimeInterval) async throws {
             calls += 1
             if calls == 1 {
-                try await Task.sleep(nanoseconds: UInt64.max)
+                try await withCheckedThrowingContinuation { continuation in
+                    self.continuation = continuation
+                }
             }
+        }
+
+        func release() {
+            continuation?.resume()
+            continuation = nil
         }
     }
 
@@ -547,45 +559,6 @@ final class ImportManagedAnalysisTests: XCTestCase {
         XCTAssertEqual(job.jobId, "job-1")
     }
 
-    func testViewLaunchRetriesPersistedSubmissionAndRoutesExistingLibraryEntry() async throws {
-        let fixture = try makePendingStoreFixture()
-        defer { fixture.cleanup() }
-        let now = Date(timeIntervalSince1970: 3_000)
-        let request = makePendingRequest(id: "stable-request")
-        _ = try await fixture.store.enqueue(
-            request: request,
-            ownerEmail: "user@example.com",
-            retryAfterSeconds: 0,
-            at: now.addingTimeInterval(-10)
-        )
-        let client = ClientSpy()
-        await client.setResultEntryID("entry-from-retry")
-        let vm = makeVM(
-            client: client,
-            analyzer: LocalAnalyzerSpy(),
-            entitlement: .freshPro,
-            duration: 60,
-            pendingStore: fixture.store,
-            now: { now },
-            retrySleep: { _ in }
-        )
-
-        vm.setSceneActive(true, token: "fresh-token", email: "user@example.com")
-
-        await eventually {
-            await client.createCalls == 1
-        }
-        let submittedKeys = await client.idempotencyKeys
-        XCTAssertEqual(submittedKeys, ["stable-request"])
-        let remaining = try await fixture.store.all(at: now)
-        XCTAssertTrue(remaining.isEmpty)
-        guard case .managedJob(let job) = vm.state else {
-            XCTFail("delayed success did not reuse the managed job route")
-            return
-        }
-        XCTAssertEqual(job.provisionalEntryID, "entry-from-retry")
-    }
-
     func testUserCanCancelPendingAutomaticSubmission() async throws {
         let fixture = try makePendingStoreFixture()
         defer { fixture.cleanup() }
@@ -614,17 +587,12 @@ final class ImportManagedAnalysisTests: XCTestCase {
         }
     }
 
-    func testBackgroundStopsRetryUntilNextForeground() async throws {
+    func testClosingImportViewDoesNotStopAppOwnedRetry() async throws {
         let fixture = try makePendingStoreFixture()
         defer { fixture.cleanup() }
         let now = Date(timeIntervalSince1970: 4_000)
-        _ = try await fixture.store.enqueue(
-            request: makePendingRequest(id: "foreground-request"),
-            ownerEmail: "user@example.com",
-            retryAfterSeconds: 0,
-            at: now.addingTimeInterval(-10)
-        )
         let client = ClientSpy()
+        await client.enqueueCreateError(.queueLimit)
         let sleeper = RetrySleeper()
         let vm = makeVM(
             client: client,
@@ -636,17 +604,21 @@ final class ImportManagedAnalysisTests: XCTestCase {
             retrySleep: { seconds in try await sleeper.sleep(seconds) }
         )
 
-        vm.setSceneActive(true, token: "t", email: "user@example.com")
+        await vm.run(
+            urlOrId: "abcdefghijk",
+            token: "t",
+            email: "user@example.com"
+        )
         await eventually { await sleeper.calls == 1 }
-        vm.setSceneActive(false, token: "t", email: "user@example.com")
-        for _ in 0..<20 { await Task.yield() }
-        let callsWhileBackgrounded = await client.createCalls
-        XCTAssertEqual(callsWhileBackgrounded, 0)
+        vm.cancelWork()
 
-        vm.setSceneActive(true, token: "t", email: "user@example.com")
-        await eventually { await client.createCalls == 1 }
+        // Closing the view only cancels its observation. The App-owned
+        // coordinator remains alive and submits when its delay elapses.
+        await sleeper.release()
+        await eventually { await client.createCalls == 2 }
         let keys = await client.idempotencyKeys
-        XCTAssertEqual(keys, ["foreground-request"])
+        XCTAssertEqual(keys.count, 2)
+        XCTAssertEqual(keys[0], keys[1])
     }
 
     private struct PendingStoreFixture {
