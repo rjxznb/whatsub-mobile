@@ -449,9 +449,9 @@ final class ImportViewModel: ObservableObject {
             await acceptManagedJob(job, ownerEmail: accountEmail, title: title)
         } catch is CancellationError {
             if isCurrent(generation) { state = .idle }
-        } catch let error as ManagedAnalysisClientError {
+        } catch let managedError as ManagedAnalysisClientError {
             if isCurrent(generation) {
-                if case let .server(status, code, diagnosticCode, diagnosticId) = error {
+                if case let .server(status, code, diagnosticCode, diagnosticId) = managedError {
                     diagnosticReport = .managed(
                         request: request,
                         encodedBytes: encodedRequestBytes,
@@ -461,7 +461,7 @@ final class ImportViewModel: ObservableObject {
                         diagnosticId: diagnosticId
                     )
                 }
-                if let retryDelay = retryableSaturationDelay(for: error),
+                if let retryDelay = retryableSaturationDelay(for: managedError),
                    let ownerEmail = normalizedEmail(accountEmail) {
                     do {
                         let pending = try await pendingManagedStore.enqueue(
@@ -480,10 +480,10 @@ final class ImportViewModel: ObservableObject {
                             ownerEmail: ownerEmail
                         )
                     } catch {
-                        state = managedState(for: error, duration: duration)
+                        state = managedState(for: managedError, duration: duration)
                     }
                 } else {
-                    state = managedState(for: error, duration: duration)
+                    state = managedState(for: managedError, duration: duration)
                 }
             }
         } catch {
@@ -609,8 +609,8 @@ final class ImportViewModel: ObservableObject {
                 return
             } catch is CancellationError {
                 return
-            } catch let error as ManagedAnalysisClientError {
-                if let retryDelay = retryableSaturationDelay(for: error) {
+            } catch let managedError as ManagedAnalysisClientError {
+                if let retryDelay = retryableSaturationDelay(for: managedError) {
                     do {
                         guard let rescheduled = try await pendingManagedStore.reschedule(
                             requestID: pending.requestID,
@@ -625,7 +625,7 @@ final class ImportViewModel: ObservableObject {
                         continue
                     } catch {
                         state = managedState(
-                            for: error,
+                            for: managedError,
                             duration: pending.request.durationSec
                         )
                         return
@@ -638,7 +638,7 @@ final class ImportViewModel: ObservableObject {
                     at: pendingNow()
                 )
                 state = managedState(
-                    for: error,
+                    for: managedError,
                     duration: pending.request.durationSec
                 )
                 return
