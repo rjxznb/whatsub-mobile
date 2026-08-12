@@ -177,4 +177,20 @@ final class LibraryPlaybackRecoveryTests: XCTestCase {
             .resumeExisting
         )
     }
+    func testNativePlayerKeepsStableIdentityAndCleansOverlayAcrossRotation() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = tests.deletingLastPathComponent()
+        let detail = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Library/LibraryDetailView.swift"
+        ), encoding: .utf8)
+        let player = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Components/VideoPlayerView.swift"
+        ), encoding: .utf8)
+
+        XCTAssertTrue(detail.contains("@State private var avPlayer: AVPlayer?"))
+        XCTAssertFalse(detail.contains(".id(\"oss-"))
+        XCTAssertTrue(player.contains("coordinator.removeCaptionView()"))
+        XCTAssertTrue(player.contains("vc.player = nil"))
+        XCTAssertTrue(player.contains("captionContainer?.removeFromSuperview()"))
+    }
 }

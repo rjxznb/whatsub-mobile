@@ -444,7 +444,6 @@ struct LibraryDetailView: View {
                     },
                     operationOwner: avOperationOwner
                 )
-                .id("oss-\(entry.id)-\(generation)")
             } else if playbackPrepared,
                       source == .youtube,
                       VideoSource.isLikelyYouTubeId(entry.youtubeId) {

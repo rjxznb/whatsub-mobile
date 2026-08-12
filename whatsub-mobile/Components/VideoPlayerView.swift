@@ -285,6 +285,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 
     static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.detach()
+        coordinator.removeCaptionView()
+        vc.player = nil
         // Clear the Now Playing card too — user navigated away from this
         // video, the lock screen shouldn't keep displaying its title.
         BackgroundAudioCoordinator.shared.teardown()
@@ -383,6 +385,13 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             }
         }
         deinit { detach() }
+
+        func removeCaptionView() {
+            captionContainer?.removeFromSuperview()
+            captionContainer = nil
+            captionLabel = nil
+            lastCaptionKey = nil
+        }
 
         private func handleReady() {
             guard !didHandleItemReady, let player else { return }
