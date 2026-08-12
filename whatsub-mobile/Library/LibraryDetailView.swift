@@ -191,11 +191,7 @@ struct LibraryDetailView: View {
                 Text(err).foregroundStyle(.whatsubInkMuted).padding()
             case .content(let inlineRefreshError):
                 if let entry = vm.entry {
-                    if isLandscape {
-                        landscape(entry, inlineRefreshError: inlineRefreshError)
-                    } else {
-                        portrait(entry, inlineRefreshError: inlineRefreshError)
-                    }
+                    stableContent(entry, inlineRefreshError: inlineRefreshError)
                 }
             case .empty:
                 EmptyView()
@@ -405,6 +401,65 @@ struct LibraryDetailView: View {
             vm.stopManagedProgress()
             vm.cancelGuideGeneration()
         }
+    }
+
+    private func stableContent(
+        _ entry: LibraryEntryDetail,
+        inlineRefreshError: String?
+    ) -> some View {
+        GeometryReader { geo in
+            let layout = LibraryDetailSurfaceLayout.resolve(isLandscape: isLandscape)
+            let fullWidthHeight = geo.size.width * 9.0 / 16.0
+            let defaultHeight = min(fullWidthHeight, geo.size.height * 0.42)
+            let maxHeight = min(fullWidthHeight, geo.size.height * 0.9)
+            let maxZoom = defaultHeight > 0 ? maxHeight / defaultHeight : 1.0
+            let portraitHeight = min(max(defaultHeight * playerZoom * pinch, defaultHeight), maxHeight)
+            let surface = player(entry, fullscreen: layout.geometry == .landscape)
+                .frame(
+                    width: layout.geometry == .landscape ? nil : portraitHeight * 16.0 / 9.0,
+                    height: layout.geometry == .landscape ? nil : portraitHeight
+                )
+                .frame(maxWidth: .infinity, maxHeight: layout.geometry == .landscape ? .infinity : nil)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .updating($pinch) { value, state, _ in
+                            if layout.geometry == .portrait { state = value }
+                        }
+                        .onEnded { value in
+                            guard layout.geometry == .portrait else { return }
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                playerZoom = min(max(playerZoom * value, 1.0), maxZoom)
+                            }
+                        }
+                )
+
+            VStack(spacing: 0) {
+                surface
+                    .frame(maxHeight: layout.geometry == .landscape ? .infinity : nil)
+                if layout.geometry == .portrait {
+                    managedAnalysisBanner
+                    if let inlineRefreshError {
+                        detailRefreshErrorBanner(inlineRefreshError)
+                    }
+                    VideoLearningGuideCard(
+                        guide: vm.entry?.analysisJson.learningGuide,
+                        phase: vm.guidePhase,
+                        analysisAvailability: vm.guideAnalysisAvailability,
+                        isExpanded: $vm.guideExpanded,
+                        onGenerate: requestGuideGeneration,
+                        onRetry: requestGuideGeneration,
+                        onResumeAnalysis: requestManagedAnalysisResume,
+                        onSubscribe: { showGuideSubscribe = true },
+                        onConfigureLLM: { showGuideLLMSettings = true },
+                        onSelectSegment: vm.selectRecommendedSegment
+                    )
+                    contentArea(entry)
+                        .refreshable { await reloadDetail() }
+                }
+            }
+        }
+        .ignoresSafeArea(edges: isLandscape ? .all : [])
     }
 
     /// The video surface + loading state + the caption / CC-toggle overlays.
@@ -940,7 +995,9 @@ struct LibraryDetailView: View {
             let currentIndex = nearestCueIndex(to: anchorTime, in: vm.displayedCues)
             return WordGloss.SourceContext(
                 title: entry.title,
-                analysisFingerprint: entry.analysisFingerprint,
+                analysisFingerprint: entry.analysisFingerprint.isEmpty
+                    ? LibraryAnalysisFingerprint.compute(title: entry.title, cues: entry.analysisJson.subtitles)
+                    : entry.analysisFingerprint,
                 profile: entry.analysisJson.contextProfile,
                 cues: vm.displayedCues,
                 currentCueIndex: currentIndex
@@ -1124,7 +1181,9 @@ struct LibraryDetailView: View {
         if let timestamp = selection.timestamp, !vm.displayedCues.isEmpty {
             sourceContext = WordGloss.SourceContext(
                 title: entry.title,
-                analysisFingerprint: entry.analysisFingerprint,
+                analysisFingerprint: entry.analysisFingerprint.isEmpty
+                    ? LibraryAnalysisFingerprint.compute(title: entry.title, cues: entry.analysisJson.subtitles)
+                    : entry.analysisFingerprint,
                 profile: entry.analysisJson.contextProfile,
                 cues: vm.displayedCues,
                 currentCueIndex: nearestCueIndex(to: timestamp, in: vm.displayedCues)
@@ -1223,7 +1282,9 @@ struct LibraryDetailView: View {
                                         note: n,
                                         sourceContext: WordGloss.SourceContext(
                                             title: entry.title,
-                                            analysisFingerprint: entry.analysisFingerprint,
+                                            analysisFingerprint: entry.analysisFingerprint.isEmpty
+                                                ? LibraryAnalysisFingerprint.compute(title: entry.title, cues: entry.analysisJson.subtitles)
+                                                : entry.analysisFingerprint,
                                             profile: entry.analysisJson.contextProfile,
                                             cues: vm.displayedCues,
                                             currentCueIndex: currentCueIndex

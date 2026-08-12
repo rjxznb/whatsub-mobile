@@ -53,7 +53,7 @@ enum VideoLearningGuideAnalysisAvailability: Equatable {
     static func make(status: ManagedAnalysisJobStatus?) -> Self {
         switch status {
         case .queued, .running:
-            return .waiting
+            return .available
         case .pausedQuota, .failed, .cancelled:
             return .resumeRequired
         case .completed, nil:

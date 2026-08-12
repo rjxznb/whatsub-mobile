@@ -210,7 +210,8 @@ final class LibraryDetailViewModel: ObservableObject {
     }
 
     var guideAnalysisAvailability: VideoLearningGuideAnalysisAvailability {
-        if managedDiscoveryPending || managedFinalSyncPending { return .waiting }
+        // English subtitles are enough to start the guide. Managed translation
+        // progress is independent and must not disable this action.
         return .make(status: managedProgress?.status)
     }
 
@@ -947,8 +948,7 @@ final class LibraryDetailViewModel: ObservableObject {
         guidePhase = .loading
 
         do {
-            if guideMustReloadBeforeGeneration
-                || target.analysisFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if guideMustReloadBeforeGeneration {
                 target = try await reloadDetailForGuide(
                     id: target.id,
                     token: token,
@@ -964,13 +964,6 @@ final class LibraryDetailViewModel: ObservableObject {
                 guidePhase = .ready
                 return
             }
-            guard !target.analysisFingerprint
-                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                guideMustReloadBeforeGeneration = true
-                guidePhase = .fingerprintUnavailable
-                return
-            }
-
             let accepted = try await guideService.generate(
                 entry: target,
                 settings: settings,
