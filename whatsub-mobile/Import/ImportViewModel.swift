@@ -13,6 +13,9 @@ final class ImportViewModel: ObservableObject {
         /// BYOK paused safely between requests because the app is backgrounded.
         case byokPaused(done: Int, total: Int, cueCount: Int)
         case submittingManaged
+        /// Server admission is temporarily saturated. The prepared request is
+        /// protected on disk and will be retried without another user action.
+        case pendingManagedSubmission(requestID: String, retryAt: Date)
         /// Durable server-side analysis. Closing the sheet does not cancel it.
         case managedJob(ManagedAnalysisJob)
         case managedPolicy(ManagedAnalysisPolicy)
@@ -77,9 +80,14 @@ final class ImportViewModel: ObservableObject {
     private let localAnalyzer: LocalAnalyzer
     private let checkpointStore: AnalysisCheckpointStore
     private let noProgressWait: () async throws -> Void
+    private let pendingManagedStore: PendingManagedAnalysisStore
+    private let pendingNow: () -> Date
+    private let pendingRetrySleep: (TimeInterval) async throws -> Void
     private let byokRequestGate = BYOKRequestGate()
     private var byokCheckpointLease: BYOKCheckpointLease?
     private var byokPaused = false
+    private var pendingRetryTask: Task<Void, Never>?
+    private var pendingRetryGeneration = 0
 
     init(
         managedClient: ManagedAnalysisClientProtocol = WhatsubAPI.shared,
@@ -112,6 +120,12 @@ final class ImportViewModel: ObservableObject {
         noProgressWait: @escaping () async throws -> Void = {
             try await Task.sleep(nanoseconds: 90_000_000_000)
         },
+        pendingManagedStore: PendingManagedAnalysisStore = PendingManagedAnalysisStore(),
+        pendingNow: @escaping () -> Date = Date.init,
+        pendingRetrySleep: @escaping (TimeInterval) async throws -> Void = { seconds in
+            let nanoseconds = UInt64(max(0, seconds) * 1_000_000_000)
+            try await Task.sleep(nanoseconds: nanoseconds)
+        },
         localAnalyzer: @escaping LocalAnalyzer = { cues, durationSec, settings, resume, onProgress, onDiagnostic in
             let engine = AnalysisEngine(client: ChatCompletionsClient(settings: settings))
             return try await engine.analyze(
@@ -136,6 +150,9 @@ final class ImportViewModel: ObservableObject {
         self.durationRefresher = durationRefresher
         self.checkpointStore = checkpointStore
         self.noProgressWait = noProgressWait
+        self.pendingManagedStore = pendingManagedStore
+        self.pendingNow = pendingNow
+        self.pendingRetrySleep = pendingRetrySleep
         self.localAnalyzer = localAnalyzer
         try? checkpointStore.prune()
     }
@@ -144,6 +161,7 @@ final class ImportViewModel: ObservableObject {
     func start(urlOrId: String, token: String, email: String? = nil) {
         deleteCurrentCheckpoint()
         workTask?.cancel()
+        cancelPendingRetryTask()
         let generation = beginGeneration(newAttempt: true)
         workTask = Task { [weak self] in
             await self?.run(urlOrId: urlOrId, token: token, email: email, generation: generation)
@@ -178,6 +196,7 @@ final class ImportViewModel: ObservableObject {
         runGeneration += 1
         workTask?.cancel()
         workTask = nil
+        cancelPendingRetryTask()
         byokPaused = false
         deleteCurrentCheckpoint()
     }
@@ -185,8 +204,15 @@ final class ImportViewModel: ObservableObject {
     /// Backgrounding does not cancel an in-flight BYOK request. The engine
     /// persists that batch, then observes this gate before opening the next
     /// request. Foregrounding resumes through the same serialized entry point.
-    func setSceneActive(_ active: Bool, token: String?) {
+    func setSceneActive(_ active: Bool, token: String?, email: String? = nil) {
         byokRequestGate.setActive(active)
+        if !active {
+            cancelPendingRetryTask()
+        } else if let token,
+                  let ownerEmail = normalizedEmail(email ?? accountEmail) {
+            accountEmail = ownerEmail
+            schedulePendingManagedRetry(token: token, ownerEmail: ownerEmail)
+        }
         guard active, byokPaused, let token, !rawCues.isEmpty else { return }
         byokPaused = false
         workTask?.cancel()
@@ -413,26 +439,14 @@ final class ImportViewModel: ObservableObject {
         do {
             let job = try await managedClient.createJob(request, token: token)
             guard isCurrent(generation) else { return }
-            if job.status == .failed || job.status == .cancelled {
-                rotateManagedAttempt()
-            }
-            if #available(iOS 16.2, *),
-               job.status != .cancelled,
-               let email = accountEmail {
-                let terminal = job.status == .completed || job.status == .failed || job.status == .cancelled
-                let initial = ImportActivityAttributes.ContentState(
-                    inProgress: terminal ? 0 : 1,
-                    completed: job.status == .completed ? 1 : 0,
-                    failed: job.status == .failed ? 1 : 0,
-                    recentTitle: title,
-                    recentEntryId: job.resultEntryId
-                )
-                await LiveActivityCoordinator.shared.ensureActivity(
-                    forUserEmail: email,
-                    initialState: initial
+            if let ownerEmail = normalizedEmail(accountEmail) {
+                try? await pendingManagedStore.remove(
+                    requestID: request.idempotencyKey,
+                    ownerEmail: ownerEmail,
+                    at: pendingNow()
                 )
             }
-            state = .managedJob(job)
+            await acceptManagedJob(job, ownerEmail: accountEmail, title: title)
         } catch is CancellationError {
             if isCurrent(generation) { state = .idle }
         } catch let error as ManagedAnalysisClientError {
@@ -447,11 +461,223 @@ final class ImportViewModel: ObservableObject {
                         diagnosticId: diagnosticId
                     )
                 }
-                state = managedState(for: error, duration: duration)
+                if let retryDelay = retryableSaturationDelay(for: error),
+                   let ownerEmail = normalizedEmail(accountEmail) {
+                    do {
+                        let pending = try await pendingManagedStore.enqueue(
+                            request: request,
+                            ownerEmail: ownerEmail,
+                            retryAfterSeconds: retryDelay,
+                            at: pendingNow()
+                        )
+                        state = .pendingManagedSubmission(
+                            requestID: pending.requestID,
+                            retryAt: pending.nextRetryAt
+                        )
+                        cancelPendingRetryTask()
+                        schedulePendingManagedRetry(
+                            token: token,
+                            ownerEmail: ownerEmail
+                        )
+                    } catch {
+                        state = managedState(for: error, duration: duration)
+                    }
+                } else {
+                    state = managedState(for: error, duration: duration)
+                }
             }
         } catch {
             if isCurrent(generation) { state = .error(error.localizedDescription) }
         }
+    }
+
+    private func acceptManagedJob(
+        _ job: ManagedAnalysisJob,
+        ownerEmail: String?,
+        title activityTitle: String
+    ) async {
+        if job.status == .failed || job.status == .cancelled {
+            rotateManagedAttempt()
+        }
+        if #available(iOS 16.2, *),
+           job.status != .cancelled,
+           let ownerEmail = normalizedEmail(ownerEmail) {
+            let terminal = job.status == .completed
+                || job.status == .failed
+                || job.status == .cancelled
+            let initial = ImportActivityAttributes.ContentState(
+                inProgress: terminal ? 0 : 1,
+                completed: job.status == .completed ? 1 : 0,
+                failed: job.status == .failed ? 1 : 0,
+                recentTitle: activityTitle,
+                recentEntryId: job.resultEntryId
+            )
+            await LiveActivityCoordinator.shared.ensureActivity(
+                forUserEmail: ownerEmail,
+                initialState: initial
+            )
+        }
+        state = .managedJob(job)
+    }
+
+    private func retryableSaturationDelay(
+        for error: ManagedAnalysisClientError
+    ) -> Int? {
+        switch error {
+        case .queueLimit:
+            // The current backend contract marks queue_limit retryable and
+            // returns retryAfterSec. The legacy client model does not expose
+            // that integer yet, so use the same five-second server default.
+            return 5
+        case .serverBusy(let retryable):
+            return retryable ? 5 : nil
+        default:
+            return nil
+        }
+    }
+
+    private func schedulePendingManagedRetry(
+        token: String,
+        ownerEmail: String
+    ) {
+        guard pendingRetryTask == nil else { return }
+        pendingRetryGeneration += 1
+        let retryGeneration = pendingRetryGeneration
+        pendingRetryTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runPendingManagedRetry(
+                token: token,
+                ownerEmail: ownerEmail,
+                retryGeneration: retryGeneration
+            )
+            if self.pendingRetryGeneration == retryGeneration {
+                self.pendingRetryTask = nil
+            }
+        }
+    }
+
+    private func runPendingManagedRetry(
+        token: String,
+        ownerEmail: String,
+        retryGeneration: Int
+    ) async {
+        while !Task.isCancelled && pendingRetryGeneration == retryGeneration {
+            let pending: PendingManagedAnalysisSubmission
+            do {
+                guard let next = try await pendingManagedStore.next(
+                    ownerEmail: ownerEmail,
+                    at: pendingNow()
+                ) else { return }
+                pending = next
+            } catch {
+                return
+            }
+
+            state = .pendingManagedSubmission(
+                requestID: pending.requestID,
+                retryAt: pending.nextRetryAt
+            )
+            let delay = max(
+                0,
+                pending.nextRetryAt.timeIntervalSince(pendingNow())
+            )
+            do {
+                try await pendingRetrySleep(delay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  pendingRetryGeneration == retryGeneration else { return }
+
+            do {
+                let job = try await managedClient.createJob(
+                    pending.request,
+                    token: token
+                )
+                guard !Task.isCancelled,
+                      pendingRetryGeneration == retryGeneration else { return }
+                try? await pendingManagedStore.remove(
+                    requestID: pending.requestID,
+                    ownerEmail: ownerEmail,
+                    at: pendingNow()
+                )
+                await acceptManagedJob(
+                    job,
+                    ownerEmail: ownerEmail,
+                    title: pending.request.title
+                )
+                return
+            } catch is CancellationError {
+                return
+            } catch let error as ManagedAnalysisClientError {
+                if let retryDelay = retryableSaturationDelay(for: error) {
+                    do {
+                        guard let rescheduled = try await pendingManagedStore.reschedule(
+                            requestID: pending.requestID,
+                            ownerEmail: ownerEmail,
+                            retryAfterSeconds: retryDelay,
+                            at: pendingNow()
+                        ) else { return }
+                        state = .pendingManagedSubmission(
+                            requestID: rescheduled.requestID,
+                            retryAt: rescheduled.nextRetryAt
+                        )
+                        continue
+                    } catch {
+                        state = managedState(
+                            for: error,
+                            duration: pending.request.durationSec
+                        )
+                        return
+                    }
+                }
+
+                try? await pendingManagedStore.remove(
+                    requestID: pending.requestID,
+                    ownerEmail: ownerEmail,
+                    at: pendingNow()
+                )
+                state = managedState(
+                    for: error,
+                    duration: pending.request.durationSec
+                )
+                return
+            } catch {
+                try? await pendingManagedStore.remove(
+                    requestID: pending.requestID,
+                    ownerEmail: ownerEmail,
+                    at: pendingNow()
+                )
+                state = .error(error.localizedDescription)
+                return
+            }
+        }
+    }
+
+    func cancelPendingManagedSubmission() async {
+        guard case .pendingManagedSubmission(let requestID, _) = state,
+              let ownerEmail = normalizedEmail(accountEmail) else { return }
+        cancelPendingRetryTask()
+        try? await pendingManagedStore.remove(
+            requestID: requestID,
+            ownerEmail: ownerEmail,
+            at: pendingNow()
+        )
+        state = .idle
+    }
+
+    private func cancelPendingRetryTask() {
+        pendingRetryGeneration += 1
+        pendingRetryTask?.cancel()
+        pendingRetryTask = nil
+    }
+
+    private func normalizedEmail(_ email: String?) -> String? {
+        guard let email else { return nil }
+        let normalized = email
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized.isEmpty ? nil : normalized
     }
 
     private func managedState(

@@ -54,6 +54,8 @@ struct ImportView: View {
                 )
             case .submittingManaged:
                 progressBody(icon: "icloud.and.arrow.up", label: "正在创建后台解析任务…", progress: nil)
+            case .pendingManagedSubmission(_, let retryAt):
+                pendingManagedSubmissionBody(retryAt: retryAt)
             case .managedJob(let job):
                 managedJobBody(job)
             case .managedPolicy(let policy):
@@ -89,7 +91,8 @@ struct ImportView: View {
         .onAppear {
             vm.setSceneActive(
                 scenePhase == .active,
-                token: appState.session?.sessionToken
+                token: appState.session?.sessionToken,
+                email: appState.session?.email
             )
         }
         // Closing the sheet must actually cancel the run (2026-07-20).
@@ -100,7 +103,8 @@ struct ImportView: View {
         .onChange(of: scenePhase) { phase in
             vm.setSceneActive(
                 phase == .active,
-                token: appState.session?.sessionToken
+                token: appState.session?.sessionToken,
+                email: appState.session?.email
             )
         }
         .onReceive(vm.$state) { state in
@@ -296,6 +300,43 @@ struct ImportView: View {
     }
 
     // MARK: - Done
+
+    private func pendingManagedSubmissionBody(retryAt: Date) -> some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "server.rack")
+                .font(.system(size: 44))
+                .foregroundStyle(.whatsubAccent)
+            Text("服务器繁忙，已等待自动提交")
+                .font(.headline)
+                .foregroundStyle(.whatsubInk)
+            Text("字幕和提交信息已安全保存在本机。可以关闭此页；下次打开或回到前台时会继续尝试。")
+                .font(.subheadline)
+                .foregroundStyle(.whatsubInkMuted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let seconds = max(
+                    0,
+                    Int(retryAt.timeIntervalSince(context.date).rounded(.up))
+                )
+                Label(
+                    seconds > 0 ? "约 \(seconds) 秒后自动重试" : "正在自动重试…",
+                    systemImage: "arrow.clockwise"
+                )
+                .font(.footnote)
+                .foregroundStyle(.whatsubInkSoft)
+            }
+            Button("不再自动提交", role: .destructive) {
+                Task { await vm.cancelPendingManagedSubmission() }
+            }
+            .buttonStyle(.borderless)
+            Spacer()
+        }
+        .padding()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("服务器繁忙，正在等待自动提交")
+    }
 
     private func managedJobBody(_ job: ManagedAnalysisJob) -> some View {
         VStack(spacing: 20) {
