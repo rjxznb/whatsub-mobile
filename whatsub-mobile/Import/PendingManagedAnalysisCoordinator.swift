@@ -30,7 +30,9 @@ actor PendingManagedAnalysisCoordinator {
     private var account: Account?
     private var runner: Task<Void, Never>?
     private var generation = 0
-    private var waiters: [String: [CheckedContinuation<Resolution, Never>]] = [:]
+    private var waiters: [
+        String: [UUID: CheckedContinuation<Resolution, Never>]
+    ] = [:]
     private var recent: [String: Resolution] = [:]
     private var recentOrder: [String] = []
 
@@ -90,13 +92,34 @@ actor PendingManagedAnalysisCoordinator {
         requestID: String,
         ownerEmail: String
     ) async -> Resolution {
-        let key = resolutionKey(requestID: requestID, ownerEmail: ownerEmail)
+        let owner = normalized(ownerEmail)
+        let key = resolutionKey(requestID: requestID, ownerEmail: owner)
         if let cached = recent.removeValue(forKey: key) {
             recentOrder.removeAll { $0 == key }
             return cached
         }
-        return await withCheckedContinuation { continuation in
-            waiters[key, default: []].append(continuation)
+        let cancelled = Resolution.cancelled(
+            requestID: requestID,
+            ownerEmail: owner
+        )
+        guard !Task.isCancelled else { return cancelled }
+        let waiterID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(returning: cancelled)
+                } else {
+                    waiters[key, default: [:]][waiterID] = continuation
+                }
+            }
+        } onCancel: { [weak self] in
+            Task {
+                await self?.cancelWaiter(
+                    key: key,
+                    waiterID: waiterID,
+                    resolution: cancelled
+                )
+            }
         }
     }
 
@@ -241,7 +264,9 @@ actor PendingManagedAnalysisCoordinator {
             key = resolutionKey(requestID: requestID, ownerEmail: ownerEmail)
         }
         if let continuations = waiters.removeValue(forKey: key), !continuations.isEmpty {
-            for continuation in continuations { continuation.resume(returning: resolution) }
+            for continuation in continuations.values {
+                continuation.resume(returning: resolution)
+            }
             return
         }
         recent[key] = resolution
@@ -254,6 +279,21 @@ actor PendingManagedAnalysisCoordinator {
 
     private func resolutionKey(requestID: String, ownerEmail: String) -> String {
         "\(normalized(ownerEmail))\u{0}\(requestID)"
+    }
+
+    private func cancelWaiter(
+        key: String,
+        waiterID: UUID,
+        resolution: Resolution
+    ) {
+        guard var bucket = waiters[key],
+              let continuation = bucket.removeValue(forKey: waiterID) else { return }
+        if bucket.isEmpty {
+            waiters.removeValue(forKey: key)
+        } else {
+            waiters[key] = bucket
+        }
+        continuation.resume(returning: resolution)
     }
 
     private func normalized(_ email: String) -> String {

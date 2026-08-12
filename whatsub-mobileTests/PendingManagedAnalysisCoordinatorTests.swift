@@ -96,6 +96,34 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
         XCTAssertTrue(submitted.isEmpty)
     }
 
+    func testCancelledObserverDoesNotLeaveSuspendedContinuation() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let coordinator = PendingManagedAnalysisCoordinator(
+            client: Client(),
+            store: fixture.store,
+            sleeper: { _ in }
+        )
+        let observer = Task {
+            await coordinator.waitForResolution(
+                requestID: "cancel-observer",
+                ownerEmail: "user@example.com"
+            )
+        }
+        await Task.yield()
+
+        observer.cancel()
+        let resolution = await observer.value
+
+        XCTAssertEqual(
+            resolution,
+            .cancelled(
+                requestID: "cancel-observer",
+                ownerEmail: "user@example.com"
+            )
+        )
+    }
+
     private struct Fixture {
         let store: PendingManagedAnalysisStore
         let directory: URL
