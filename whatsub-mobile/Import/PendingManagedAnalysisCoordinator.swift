@@ -37,7 +37,7 @@ actor PendingManagedAnalysisCoordinator {
     init(
         client: any ManagedAnalysisClientProtocol,
         store: PendingManagedAnalysisStore,
-        now: @escaping Clock = Date.init,
+        now: @escaping Clock = { Date() },
         sleeper: @escaping Sleeper = { seconds in
             try await Task.sleep(
                 nanoseconds: UInt64(max(0, seconds) * 1_000_000_000)

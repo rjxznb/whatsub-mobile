@@ -464,7 +464,8 @@ final class ImportViewModel: ObservableObject {
                         observePendingManagedResolution(
                             requestID: pending.requestID,
                             ownerEmail: ownerEmail,
-                            title: pending.request.title
+                            title: pending.request.title,
+                            duration: pending.request.durationSec
                         )
                     } catch {
                         state = managedState(for: managedError, duration: duration)
@@ -526,7 +527,8 @@ final class ImportViewModel: ObservableObject {
     private func observePendingManagedResolution(
         requestID: String,
         ownerEmail: String,
-        title: String
+        title: String,
+        duration: Int
     ) {
         pendingRetryTask?.cancel()
         pendingRetryTask = Task { [weak self] in
@@ -544,7 +546,7 @@ final class ImportViewModel: ObservableObject {
                     title: title
                 )
             case let .failed(_, _, error):
-                state = managedState(for: error, duration: durationSec ?? 0)
+                state = managedState(for: error, duration: duration)
             case .cancelled:
                 state = .idle
             }
