@@ -164,14 +164,20 @@ actor PendingManagedAnalysisCoordinator {
         // Stop this account before the first suspension. Otherwise the actor
         // can re-enter while store.all() waits and let the old runner submit
         // or reschedule after logout has started.
+        let prefix = "\(owner)\u{0}"
+        let activeKeys = activeSubmissionKeys.filter { $0.hasPrefix(prefix) }
+        cancelledSubmissionKeys.formUnion(activeKeys)
         if account?.email == owner {
             deactivate()
         }
         let pending = (try? await store.all(at: now()))?
             .filter { $0.ownerEmail == owner } ?? []
         try? await store.removeAll(ownerEmail: owner, at: now())
-        for item in pending {
-            publish(.cancelled(requestID: item.requestID, ownerEmail: owner))
+        let requestIDs = Set(pending.map(\.requestID)).union(
+            activeKeys.map { String($0.dropFirst(prefix.count)) }
+        )
+        for requestID in requestIDs {
+            publish(.cancelled(requestID: requestID, ownerEmail: owner))
         }
     }
 
@@ -221,16 +227,18 @@ actor PendingManagedAnalysisCoordinator {
             activeSubmissionKeys.insert(submissionKey)
             do {
                 let job = try await client.createJob(pending.request, token: account.token)
-                activeSubmissionKeys.remove(submissionKey)
-                if cancelledSubmissionKeys.remove(submissionKey) != nil {
-                    _ = try? await client.cancel(id: job.jobId, token: account.token)
-                    return
-                }
                 try? await store.remove(
                     requestID: pending.requestID,
                     ownerEmail: account.email,
                     at: now()
                 )
+                // Keep the active marker across store.remove: cancel/logout
+                // can re-enter this actor while that await is suspended.
+                activeSubmissionKeys.remove(submissionKey)
+                if cancelledSubmissionKeys.remove(submissionKey) != nil {
+                    _ = try? await client.cancel(id: job.jobId, token: account.token)
+                    return
+                }
                 publish(.accepted(
                     requestID: pending.requestID,
                     ownerEmail: account.email,
@@ -243,7 +251,12 @@ actor PendingManagedAnalysisCoordinator {
                 // imports, and a successful first item must not strand the rest.
             } catch is CancellationError {
                 activeSubmissionKeys.remove(submissionKey)
-                cancelledSubmissionKeys.remove(submissionKey)
+                if cancelledSubmissionKeys.remove(submissionKey) != nil {
+                    await reconcileCancelledSubmission(
+                        pending,
+                        token: account.token
+                    )
+                }
                 return
             } catch let error as ManagedAnalysisClientError {
                 activeSubmissionKeys.remove(submissionKey)
@@ -252,12 +265,7 @@ actor PendingManagedAnalysisCoordinator {
                     // reached the server but its response was lost, this gets
                     // the existing jobId; if it did not, the newly-created job
                     // is immediately cancelled.
-                    if let job = try? await client.createJob(
-                        pending.request,
-                        token: account.token
-                    ) {
-                        _ = try? await client.cancel(id: job.jobId, token: account.token)
-                    }
+                    await reconcileCancelledSubmission(pending, token: account.token)
                     return
                 }
                 if let delay = retryableDelay(for: error) {
@@ -299,6 +307,18 @@ actor PendingManagedAnalysisCoordinator {
             return 5
         default:
             return nil
+        }
+    }
+
+    private func reconcileCancelledSubmission(
+        _ pending: PendingManagedAnalysisSubmission,
+        token: String
+    ) async {
+        // The create endpoint is idempotent by owner + request key. Repeating
+        // it either returns the accepted job or creates exactly one job; both
+        // cases yield a jobId that can immediately be cancelled.
+        if let job = try? await client.createJob(pending.request, token: token) {
+            _ = try? await client.cancel(id: job.jobId, token: token)
         }
     }
 

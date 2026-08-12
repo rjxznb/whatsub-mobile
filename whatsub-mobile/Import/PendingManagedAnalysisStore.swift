@@ -222,15 +222,17 @@ actor PendingManagedAnalysisStore {
         // therefore prevented from recreating it afterwards.
         Self.purgeStateLock.lock()
         defer { Self.purgeStateLock.unlock() }
-        guard !Self.synchronouslyPurgedPaths.contains(
-            fileURL.standardizedFileURL.path
-        ) else { return }
         if submissions.isEmpty {
+            // Always retry deletion, even after the synchronous logout delete
+            // failed. The purge fence only blocks non-empty stale rewrites.
             if fileManager.fileExists(atPath: fileURL.path) {
                 try fileManager.removeItem(at: fileURL)
             }
             return
         }
+        guard !Self.synchronouslyPurgedPaths.contains(
+            fileURL.standardizedFileURL.path
+        ) else { return }
 
         try fileManager.createDirectory(
             at: fileURL.deletingLastPathComponent(),

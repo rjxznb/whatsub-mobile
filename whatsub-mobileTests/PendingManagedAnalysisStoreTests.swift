@@ -222,6 +222,26 @@ final class PendingManagedAnalysisStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
+    func testAsyncClearRetriesDeletionEvenWhenPathIsPurged() async throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let store = PendingManagedAnalysisStore(fileURL: fileURL)
+        _ = try await store.enqueue(
+            request: makeRequest(id: "private"),
+            ownerEmail: "user@example.com",
+            retryAfterSeconds: 5,
+            at: now
+        )
+        let payload = try Data(contentsOf: fileURL)
+        PendingManagedAnalysisStore.removeFileSynchronously(at: fileURL)
+        // Simulate a stale atomic writer winning immediately after a failed
+        // synchronous delete; removeAll must still retry the deletion.
+        try payload.write(to: fileURL)
+
+        try await store.removeAll(ownerEmail: "user@example.com", at: now)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     private func makeRequest(
         id: String,
         title: String = "Test video"

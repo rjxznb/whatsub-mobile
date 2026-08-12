@@ -198,6 +198,33 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
     }
 
+    func testLogoutClearCancelsInFlightServerJob() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let client = InFlightClient()
+        let coordinator = PendingManagedAnalysisCoordinator(
+            client: client,
+            store: fixture.store,
+            sleeper: { _ in }
+        )
+
+        _ = try await coordinator.enqueue(
+            request: request("logout-in-flight"),
+            ownerEmail: "user@example.com",
+            retryAfterSeconds: 0,
+            token: "token"
+        )
+        await eventually { await client.started }
+        await coordinator.clear(ownerEmail: "user@example.com")
+        await client.release(job: makeJob(id: "job-logout"))
+        await eventually { await client.cancelledJobIDs == ["job-logout"] }
+
+        let cancelled = await client.cancelledJobIDs
+        XCTAssertEqual(cancelled, ["job-logout"])
+        let remaining = try await fixture.store.all()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
     func testTransientNetworkAndServerFailuresRemainQueuedUntilAccepted() async throws {
         for transient in [
             ManagedAnalysisClientError.network("offline"),
