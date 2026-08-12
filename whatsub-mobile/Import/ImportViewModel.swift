@@ -147,6 +147,10 @@ final class ImportViewModel: ObservableObject {
         try? checkpointStore.prune()
     }
 
+    deinit {
+        pendingRetryTask?.cancel()
+    }
+
     /// Start the full import run, replacing any previous one.
     func start(urlOrId: String, token: String, email: String? = nil) {
         deleteCurrentCheckpoint()
@@ -531,13 +535,13 @@ final class ImportViewModel: ObservableObject {
         duration: Int
     ) {
         pendingRetryTask?.cancel()
+        let coordinator = pendingCoordinator
         pendingRetryTask = Task { [weak self] in
-            guard let self else { return }
-            let resolution = await pendingCoordinator.waitForResolution(
+            let resolution = await coordinator.waitForResolution(
                 requestID: requestID,
                 ownerEmail: ownerEmail
             )
-            guard !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled else { return }
             switch resolution {
             case let .accepted(_, _, job):
                 await acceptManagedJob(
