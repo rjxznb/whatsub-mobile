@@ -106,6 +106,68 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         XCTAssertNil(job(.running, entryID: "  ").provisionalEntryID)
     }
 
+    func testQueuePresentationIsCompactAndConservative() {
+        XCTAssertNil(ManagedAnalysisQueuePresentation.make(
+            status: .queued,
+            jobsAhead: nil,
+            estimatedStartSeconds: nil,
+            connection: .streaming
+        ).detail)
+
+        XCTAssertEqual(ManagedAnalysisQueuePresentation.make(
+            status: .queued,
+            jobsAhead: 0,
+            estimatedStartSeconds: 0,
+            connection: .streaming
+        ).detail, "即将开始解析")
+
+        XCTAssertEqual(ManagedAnalysisQueuePresentation.make(
+            status: .queued,
+            jobsAhead: 1,
+            estimatedStartSeconds: 1,
+            connection: .streaming
+        ).detail, "前面还有 1 个任务，预计约 1 分钟开始")
+
+        XCTAssertEqual(ManagedAnalysisQueuePresentation.make(
+            status: .queued,
+            jobsAhead: 3,
+            estimatedStartSeconds: 121,
+            connection: .streaming
+        ).detail, "前面还有 3 个任务，预计约 3 分钟开始")
+    }
+
+    func testQueuePresentationHidesEstimateAfterProcessingStarts() {
+        let presentation = ManagedAnalysisQueuePresentation.make(
+            status: .running,
+            jobsAhead: 9,
+            estimatedStartSeconds: 600,
+            connection: .streaming
+        )
+
+        XCTAssertNil(presentation.detail)
+        XCTAssertEqual(presentation.accessibilityLabel, "服务器解析中")
+    }
+
+    func testQueuePresentationDistinguishesReconnectAndPollingFallback() {
+        let reconnecting = ManagedAnalysisQueuePresentation.make(
+            status: .running,
+            jobsAhead: nil,
+            estimatedStartSeconds: nil,
+            connection: .reconnecting
+        )
+        XCTAssertEqual(reconnecting.detail, "正在重新连接进度…")
+        XCTAssertEqual(reconnecting.accessibilityLabel, "重新连接中")
+
+        let polling = ManagedAnalysisQueuePresentation.make(
+            status: .running,
+            jobsAhead: nil,
+            estimatedStartSeconds: nil,
+            connection: .pollingFallback
+        )
+        XCTAssertEqual(polling.detail, "实时连接暂不可用，正在轮询恢复")
+        XCTAssertEqual(polling.accessibilityLabel, "轮询恢复中")
+    }
+
     func testOldLiveActivityPayloadDecodesWithoutRecentEntryID() throws {
         let old = Data(#"{"inProgress":0,"completed":1,"failed":0,"recentTitle":"Done"}"#.utf8)
         let state = try JSONDecoder().decode(ImportActivityAttributes.ContentState.self, from: old)

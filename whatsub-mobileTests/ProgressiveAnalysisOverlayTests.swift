@@ -58,6 +58,81 @@ final class ProgressiveAnalysisOverlayTests: XCTestCase {
         XCTAssertEqual(overlay.resolvedIndexes.count, 1)
     }
 
+    func testPreviewRendersImmediatelyButCannotOverwriteEnglishAuthority() {
+        let baseline = [Cue(index: 0, time: 1, endTime: 2, text: "Authoritative English")]
+        var overlay = ProgressiveAnalysisOverlay(baseline: baseline)
+        let preview = ManagedAnalysisStreamCue(
+            type: .cue,
+            index: 0,
+            time: 1,
+            endTime: 2,
+            text: "Authoritative English",
+            translation: "即时译文",
+            isKeyPoint: true,
+            highlightWords: ["Authoritative"],
+            keyNotes: ["Authoritative": "重点"],
+            highlightTranslations: ["Authoritative": "权威"]
+        )
+
+        overlay.replacePreviews([
+            .init(batchIndex: 0, attempt: 1, cueIndex: 0): preview,
+        ])
+        let displayed = overlay.displayedCues(from: baseline)
+
+        XCTAssertEqual(displayed[0].text, "Authoritative English")
+        XCTAssertEqual(displayed[0].time, 1)
+        XCTAssertEqual(displayed[0].translation, "即时译文")
+        XCTAssertEqual(overlay.resolvedIndexes, [0])
+    }
+
+    func testPreviewRejectsTamperedBaselineFields() {
+        let baseline = [Cue(index: 0, time: 1, endTime: 2, text: "Authoritative English")]
+        var overlay = ProgressiveAnalysisOverlay(baseline: baseline)
+        let preview = ManagedAnalysisStreamCue(
+            type: .cue,
+            index: 0,
+            time: 1,
+            endTime: 2,
+            text: "Tampered English",
+            translation: "不应出现",
+            isKeyPoint: false,
+            highlightWords: [],
+            keyNotes: [:],
+            highlightTranslations: [:]
+        )
+
+        overlay.replacePreviews([
+            .init(batchIndex: 0, attempt: 1, cueIndex: 0): preview,
+        ])
+
+        XCTAssertEqual(overlay.displayedCues(from: baseline)[0].translation, "")
+        XCTAssertTrue(overlay.resolvedIndexes.isEmpty)
+    }
+
+    func testDurableBatchSupersedesItsPreviewWithoutDoubleCounting() {
+        let baseline = [Cue(index: 0, time: 1, endTime: 2, text: "Authoritative English")]
+        var overlay = ProgressiveAnalysisOverlay(baseline: baseline)
+        let preview = ManagedAnalysisStreamCue(
+            type: .cue,
+            index: 0,
+            time: 1,
+            endTime: 2,
+            text: "Authoritative English",
+            translation: "预览",
+            isKeyPoint: false,
+            highlightWords: [],
+            keyNotes: [:],
+            highlightTranslations: [:]
+        )
+        overlay.replacePreviews([
+            .init(batchIndex: 0, attempt: 1, cueIndex: 0): preview,
+        ])
+        overlay.merge([.init(batchIndex: 0, subtitles: [generated(translation: "持久结果")])])
+
+        XCTAssertEqual(overlay.displayedCues(from: baseline)[0].translation, "持久结果")
+        XCTAssertEqual(overlay.resolvedIndexes.count, 1)
+    }
+
     func testPollingPolicyUsesVisibleActiveCadenceAndBoundedBackoff() {
         XCTAssertEqual(ManagedAnalysisPollPolicy.delay(status: .running, failureCount: 0), 2)
         XCTAssertEqual(ManagedAnalysisPollPolicy.delay(status: .queued, failureCount: 0), 5)
