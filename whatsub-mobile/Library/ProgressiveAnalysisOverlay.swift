@@ -210,6 +210,26 @@ struct ManagedAnalysisProgressState: Equatable {
     var canResume: Bool { status == .pausedQuota || status == .failed || status == .cancelled }
     var blocksEditing: Bool { status != .completed }
 
+    var failureDetail: String? {
+        guard status == .failed else { return nil }
+        switch errorCode {
+        case .invalidAnalysisCue, .invalidSSE:
+            return "AI 返回格式异常"
+        case .upstreamUnavailable:
+            return "AI 服务暂时不可用"
+        case .freeUsedUp:
+            return "免费体验额度已用完"
+        case .quotaExceeded:
+            return "本月 AI 额度不足"
+        case .videoTooLong:
+            return "视频超过当前方案时长限制"
+        case .durationUnknown:
+            return "无法确认视频时长"
+        case nil:
+            return "解析任务未完成"
+        }
+    }
+
     var label: String? {
         switch status {
         case .queued: return "等待服务器"

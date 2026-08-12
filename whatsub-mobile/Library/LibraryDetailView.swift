@@ -612,9 +612,11 @@ struct LibraryDetailView: View {
                 VideoLearningGuideCard(
                     guide: vm.entry?.analysisJson.learningGuide,
                     phase: vm.guidePhase,
+                    analysisAvailability: vm.guideAnalysisAvailability,
                     isExpanded: $vm.guideExpanded,
                     onGenerate: requestGuideGeneration,
                     onRetry: requestGuideGeneration,
+                    onResumeAnalysis: requestManagedAnalysisResume,
                     onSubscribe: { showGuideSubscribe = true },
                     onConfigureLLM: { showGuideLLMSettings = true },
                     onSelectSegment: vm.selectRecommendedSegment
@@ -702,6 +704,10 @@ struct LibraryDetailView: View {
 
                 if let error = vm.managedProgressError {
                     Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                } else if let failureDetail = progress.failureDetail {
+                    Text(failureDetail)
                         .font(.caption)
                         .foregroundStyle(.whatsubInkMuted)
                 } else if vm.managedEditingBlocked {
@@ -897,9 +903,15 @@ struct LibraryDetailView: View {
     }
 
     private func requestGuideGeneration() {
+        guard vm.guideAnalysisAvailability == .available else { return }
         guard let token = appState.session?.sessionToken else { return }
         let settings = LlmSettingsStore.load()
         Task { await vm.generateGuide(settings: settings, token: token) }
+    }
+
+    private func requestManagedAnalysisResume() {
+        guard let token = appState.session?.sessionToken else { return }
+        Task { await vm.resumeManagedAnalysis(token: token) }
     }
 
     /// Reuses Task 6's single-flight guide generator. The accepted profile is

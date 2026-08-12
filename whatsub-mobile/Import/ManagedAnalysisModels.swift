@@ -47,6 +47,8 @@ enum ManagedAnalysisFailureCode: String, Codable, Equatable {
     case freeUsedUp = "free_used_up"
     case quotaExceeded = "quota_exceeded"
     case upstreamUnavailable = "upstream_unavailable"
+    case invalidAnalysisCue = "invalid_analysis_cue"
+    case invalidSSE = "invalid_sse"
     case videoTooLong = "video_too_long"
     case durationUnknown = "duration_unknown"
 }
@@ -145,6 +147,7 @@ extension ManagedAnalysisJob {
             case .freeUsedUp: detail = "免费体验额度已用完"
             case .quotaExceeded: detail = "本月 AI 额度不足"
             case .upstreamUnavailable: detail = "AI 服务暂时不可用"
+            case .invalidAnalysisCue, .invalidSSE: detail = "AI 返回格式异常"
             case .videoTooLong: detail = "视频超过当前方案时长限制"
             case .durationUnknown: detail = "无法确认视频时长"
             case nil: detail = "解析任务未完成"

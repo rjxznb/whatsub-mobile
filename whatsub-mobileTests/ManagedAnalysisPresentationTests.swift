@@ -33,6 +33,26 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         XCTAssertEqual(job(.completed, entryID: "entry-1").presentation.entryID, "entry-1")
     }
 
+    func testMalformedModelOutputHasActionableRecoveryCopy() {
+        XCTAssertEqual(job(.failed, error: .invalidAnalysisCue).presentation.detail, "AI 返回格式异常")
+        XCTAssertEqual(job(.failed, error: .invalidSSE).presentation.detail, "AI 返回格式异常")
+        XCTAssertTrue(job(.failed, error: .invalidAnalysisCue).presentation.canResume)
+        XCTAssertEqual(
+            ManagedAnalysisProgressState(job: job(.failed, error: .invalidAnalysisCue)).failureDetail,
+            "AI 返回格式异常"
+        )
+    }
+
+    func testLearningGuideAvailabilityTracksManagedAnalysisLifecycle() {
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: nil), .available)
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .queued), .waiting)
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .running), .waiting)
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .completed), .available)
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .failed), .resumeRequired)
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .cancelled), .resumeRequired)
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .pausedQuota), .resumeRequired)
+    }
+
     func testLibraryProgressLabelsStayCompactAndTerminalCompletionDisappears() {
         XCTAssertEqual(job(.queued).libraryProgressLabel, "等待 AI 解析")
         XCTAssertEqual(job(.running).libraryProgressLabel, "AI 解析中 · 25/100")

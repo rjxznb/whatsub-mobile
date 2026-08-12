@@ -117,7 +117,7 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published var guideExpanded = false
     @Published var contentTab: LibraryDetailContentTab = .subtitles
     private(set) var managedHydrationPending = false
-    private(set) var managedDiscoveryPending = false
+    @Published private(set) var managedDiscoveryPending = false
 
     // Popup for a tapped highlight.
     @Published var popupWord: String?
@@ -209,6 +209,11 @@ final class LibraryDetailViewModel: ObservableObject {
         )
     }
 
+    var guideAnalysisAvailability: VideoLearningGuideAnalysisAvailability {
+        if managedDiscoveryPending || managedFinalSyncPending { return .waiting }
+        return .make(status: managedProgress?.status)
+    }
+
     func load(id: String, token: String) async {
         loadRevision += 1
         let revision = loadRevision
@@ -260,6 +265,7 @@ final class LibraryDetailViewModel: ObservableObject {
 
     func startManagedProgress(token: String) {
         managedProgressTask?.cancel()
+        managedDiscoveryPending = true
         managedProgressTask = Task { [weak self] in
             await self?.runManagedProgress(token: token)
         }

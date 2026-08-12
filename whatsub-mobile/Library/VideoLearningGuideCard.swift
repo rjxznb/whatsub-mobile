@@ -45,12 +45,31 @@ struct VideoLearningGuidePresentation {
     }
 }
 
+enum VideoLearningGuideAnalysisAvailability: Equatable {
+    case available
+    case waiting
+    case resumeRequired
+
+    static func make(status: ManagedAnalysisJobStatus?) -> Self {
+        switch status {
+        case .queued, .running:
+            return .waiting
+        case .pausedQuota, .failed, .cancelled:
+            return .resumeRequired
+        case .completed, nil:
+            return .available
+        }
+    }
+}
+
 struct VideoLearningGuideCard: View {
     let guide: LearningGuide?
     let phase: VideoLearningGuidePhase
+    let analysisAvailability: VideoLearningGuideAnalysisAvailability
     @Binding var isExpanded: Bool
     let onGenerate: () -> Void
     let onRetry: () -> Void
+    let onResumeAnalysis: () -> Void
     let onSubscribe: () -> Void
     let onConfigureLLM: () -> Void
     let onSelectSegment: (RecommendedSegment) -> Void
@@ -189,32 +208,49 @@ struct VideoLearningGuideCard: View {
 
     @ViewBuilder
     private var missingGuideContent: some View {
-        switch phase {
-        case .loading:
-            HStack(spacing: 10) {
-                ProgressView().controlSize(.small).tint(.whatsubAccent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("正在生成视频学习导览…")
-                        .font(.subheadline.weight(.semibold))
-                    Text("字幕和视频仍可继续使用")
-                        .font(.caption)
-                        .foregroundStyle(.whatsubInkMuted)
-                }
-            }
-        case .failed(let failure):
-            inlineError(failure.message, failure: failure)
-        case .analysisChanged:
-            inlineError("字幕解析刚刚更新了，请按新版本重新生成。", failure: nil)
-        case .fingerprintUnavailable:
-            inlineError("视频解析版本还没准备好，请刷新后重试。", failure: nil)
-        case .idle, .ready:
-            Button(action: onGenerate) {
-                Label("生成视频学习导览", systemImage: "sparkles")
-                    .font(.subheadline.weight(.semibold))
+        if analysisAvailability == .waiting {
+            Label("解析完成后可生成", systemImage: "clock")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.whatsubInkMuted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if analysisAvailability == .resumeRequired {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("先继续完成 AI 解析，再生成视频学习导览。", systemImage: "exclamationmark.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.whatsubInkSoft)
+                Button("继续 AI 解析", action: onResumeAnalysis)
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.borderless)
                     .foregroundStyle(.whatsubAccent)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.plain)
+        } else {
+            switch phase {
+            case .loading:
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small).tint(.whatsubAccent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("正在生成视频学习导览…")
+                            .font(.subheadline.weight(.semibold))
+                        Text("字幕和视频仍可继续使用")
+                            .font(.caption)
+                            .foregroundStyle(.whatsubInkMuted)
+                    }
+                }
+            case .failed(let failure):
+                inlineError(failure.message, failure: failure)
+            case .analysisChanged:
+                inlineError("字幕解析刚刚更新了，请按新版本重新生成。", failure: nil)
+            case .fingerprintUnavailable:
+                inlineError("视频解析版本还没准备好，请刷新后重试。", failure: nil)
+            case .idle, .ready:
+                Button(action: onGenerate) {
+                    Label("生成视频学习导览", systemImage: "sparkles")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.whatsubAccent)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
