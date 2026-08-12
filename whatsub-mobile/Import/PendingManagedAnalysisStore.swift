@@ -46,6 +46,28 @@ actor PendingManagedAnalysisStore {
         self.lifetime = max(1, lifetime)
     }
 
+    /// Logout is synchronous from SwiftUI. Remove the default payload before
+    /// returning control so an immediate process kill cannot leave captions,
+    /// title, URL, or thumbnail bytes on disk. Actor-owned cleanup still runs
+    /// afterwards to cancel work and notify observers.
+    nonisolated static func removeDefaultFileSynchronously(
+        fileManager: FileManager = .default
+    ) {
+        removeFileSynchronously(
+            at: defaultFileURL(fileManager: fileManager),
+            fileManager: fileManager
+        )
+    }
+
+    nonisolated static func removeFileSynchronously(
+        at url: URL,
+        fileManager: FileManager = .default
+    ) {
+        if fileManager.fileExists(atPath: url.path) {
+            try? fileManager.removeItem(at: url)
+        }
+    }
+
     @discardableResult
     func enqueue(
         request: ManagedAnalysisCreateRequest,

@@ -627,4 +627,68 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["已提交", ""])
         XCTAssertEqual(viewModel.managedProgress?.status, .cancelled)
     }
+
+    @MainActor
+    func testConnectedFrameAloneDoesNotResetStreamFailureHealth() async throws {
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [runningPage()]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        let baseline = viewModel.managedStreamHealthRevision
+
+        await viewModel.handleManagedStreamEvent(
+            .connected(.init(jobId: "job-1", retryMilliseconds: 1_000)),
+            token: "token"
+        )
+        XCTAssertEqual(viewModel.managedStreamHealthRevision, baseline)
+
+        await viewModel.handleManagedStreamEvent(
+            cueEvent(
+                eventID: 1,
+                batchIndex: 0,
+                attempt: 1,
+                cueIndex: 0,
+                translation: "healthy"
+            ),
+            token: "token"
+        )
+        XCTAssertEqual(viewModel.managedStreamHealthRevision, baseline + 1)
+    }
+
+    @MainActor
+    func testProgressLoopRetriesDurableHydrationWithoutAnotherSSEEvent() async throws {
+        let durable = ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .running,
+            completedCues: 1, totalCues: 2, nextBatchCursor: 0,
+            batches: [ManagedAnalysisCompletedBatch(
+                batchIndex: 0,
+                subtitles: [cue(0, translation: "durable retry")]
+            )],
+            errorCode: nil
+        )
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [job()],
+            results: [durable],
+            failingResultCalls: [1]
+        )
+        let viewModel = LibraryDetailViewModel(api: api, managedAPI: api)
+        await viewModel.load(id: "entry-1", token: "token")
+
+        viewModel.startManagedProgress(token: "token")
+        for _ in 0..<300 {
+            if viewModel.displayedCues.first?.translation == "durable retry" { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        viewModel.stopManagedProgress()
+
+        XCTAssertEqual(viewModel.displayedCues.first?.translation, "durable retry")
+        XCTAssertFalse(viewModel.managedHydrationPending)
+        let cursors = await api.cursors()
+        XCTAssertGreaterThanOrEqual(cursors.count, 2)
+    }
 }

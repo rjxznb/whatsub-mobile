@@ -38,7 +38,12 @@ final class AppState: ObservableObject {
         // Restore a non-expired session synchronously at launch.
         if let saved = KeychainStore.load(), saved.isValid {
             session = saved
-        } else if KeychainStore.load() != nil {
+        } else if let expired = KeychainStore.load() {
+            PendingManagedAnalysisStore.removeDefaultFileSynchronously()
+            let coordinator = pendingManagedCoordinator
+            pendingManagedCleanupTask = Task {
+                await coordinator.clear(ownerEmail: expired.email)
+            }
             KeychainStore.clear() // expired — drop it
         }
     }
@@ -50,12 +55,14 @@ final class AppState: ObservableObject {
 
     func logout() {
         let email = session?.email
+        PendingManagedAnalysisStore.removeDefaultFileSynchronously()
         if let token = session?.sessionToken {
             Task { await WhatsubAPI.shared.logout(token: token) }
         }
         if let email {
+            let coordinator = pendingManagedCoordinator
             pendingManagedCleanupTask = Task {
-                await pendingManagedCoordinator.clear(ownerEmail: email)
+                await coordinator.clear(ownerEmail: email)
             }
         }
         KeychainStore.clear()
@@ -80,9 +87,11 @@ final class AppState: ObservableObject {
 
     func forceLogout() {
         let email = session?.email
+        PendingManagedAnalysisStore.removeDefaultFileSynchronously()
         if let email {
+            let coordinator = pendingManagedCoordinator
             pendingManagedCleanupTask = Task {
-                await pendingManagedCoordinator.clear(ownerEmail: email)
+                await coordinator.clear(ownerEmail: email)
             }
         }
         KeychainStore.clear()

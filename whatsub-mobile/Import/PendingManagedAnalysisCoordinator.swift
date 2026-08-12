@@ -130,6 +130,15 @@ actor PendingManagedAnalysisCoordinator {
             ownerEmail: owner,
             at: now()
         )
+        // The runner may already have read this row and be sleeping outside
+        // the store actor. Invalidate that generation before acknowledging
+        // the user's cancellation, then restart for any other queued rows.
+        if account?.email == owner {
+            generation += 1
+            runner?.cancel()
+            runner = nil
+            startRunnerIfNeeded()
+        }
         publish(.cancelled(requestID: requestID, ownerEmail: owner))
     }
 
@@ -250,6 +259,10 @@ actor PendingManagedAnalysisCoordinator {
             return 5
         case .serverBusy(let retryable):
             return retryable ? 5 : nil
+        case .network:
+            return 5
+        case .server(let status, _, _, _) where (500...599).contains(status):
+            return 5
         default:
             return nil
         }

@@ -151,7 +151,7 @@ final class LibraryDetailViewModel: ObservableObject {
     private var managedStreamState = ManagedAnalysisStreamState()
     private var managedBatchCursor = -1
     private var managedPollFailures = 0
-    private var managedStreamHealthRevision = 0
+    private(set) var managedStreamHealthRevision = 0
     private var managedStreamMustReconnect = false
     private var loadRevision = 0
     private let guideService: VideoLearningGuideService
@@ -442,6 +442,35 @@ final class LibraryDetailViewModel: ObservableObject {
                 continue
             }
 
+            // A persisted event cursor can legitimately be ahead of our last
+            // successful `/results` hydration. Retry the durable page here,
+            // independently of future SSE events; a terminal job may never
+            // emit another event after the failed request.
+            if managedHydrationPending {
+                setManagedConnection(.pollingFallback)
+                do {
+                    try await pollManagedAnalysisOnce(token: token)
+                    consecutiveStreamFailures = 0
+                } catch is CancellationError {
+                    return
+                } catch ManagedAnalysisClientError.unauthorized {
+                    handleManagedAnalysisUnauthorized()
+                    return
+                } catch {
+                    recordManagedProgressFailure()
+                    let delay = ManagedAnalysisPollPolicy.delay(
+                        status: managedProgress?.status ?? .running,
+                        failureCount: managedPollFailures
+                    ) ?? 5
+                    do {
+                        try await sleepManagedProgress(seconds: delay)
+                    } catch {
+                        return
+                    }
+                }
+                continue
+            }
+
             if let fallbackUntil = pollingFallbackUntil,
                fallbackUntil > Date() {
                 setManagedConnection(.pollingFallback)
@@ -550,7 +579,12 @@ final class LibraryDetailViewModel: ObservableObject {
     ) async {
         guard managedEventBelongsToCurrentJob(event) else { return }
         managedStreamState.apply(event)
-        managedStreamHealthRevision += 1
+        if case .connected = event {
+            // A TCP/SSE handshake followed by EOF is not evidence of a
+            // healthy stream. Let repeated connected->EOF loops fall back.
+        } else {
+            managedStreamHealthRevision += 1
+        }
         setManagedConnection(.streaming)
         publishManagedStreamState()
 

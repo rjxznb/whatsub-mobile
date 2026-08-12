@@ -213,6 +213,15 @@ final class PendingManagedAnalysisStoreTests: XCTestCase {
         XCTAssertEqual(entries.map(\.requestID), ["after-recovery"])
     }
 
+    func testLogoutPrimitiveRemovesSensitivePayloadSynchronously() throws {
+        try Data("private transcript and thumbnail".utf8).write(to: fileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+
+        PendingManagedAnalysisStore.removeFileSynchronously(at: fileURL)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     private func makeRequest(
         id: String,
         title: String = "Test video"

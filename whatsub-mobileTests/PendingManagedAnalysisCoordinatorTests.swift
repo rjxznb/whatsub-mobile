@@ -4,12 +4,21 @@ import XCTest
 final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
     private actor Client: ManagedAnalysisClientProtocol {
         private(set) var requestIDs: [String] = []
+        private(set) var cancelledJobIDs: [String] = []
+        private var createErrors: [ManagedAnalysisClientError]
+
+        init(createErrors: [ManagedAnalysisClientError] = []) {
+            self.createErrors = createErrors
+        }
 
         func createJob(
             _ request: ManagedAnalysisCreateRequest,
             token: String
         ) async throws -> ManagedAnalysisJob {
             requestIDs.append(request.idempotencyKey)
+            if !createErrors.isEmpty {
+                throw createErrors.removeFirst()
+            }
             return ManagedAnalysisJob(
                 jobId: "job-\(request.idempotencyKey)",
                 status: .queued,
@@ -33,7 +42,13 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
             throw ManagedAnalysisClientError.notFound
         }
         func cancel(id: String, token: String) async throws -> ManagedAnalysisJob {
-            throw ManagedAnalysisClientError.notFound
+            cancelledJobIDs.append(id)
+            return ManagedAnalysisJob(
+                jobId: id, status: .cancelled, tier: .pro,
+                createdAt: 1, updatedAt: 2, completedCues: 0, totalCues: 1,
+                tokensIn: 0, tokensOut: 0, errorCode: nil,
+                resultEntryId: nil
+            )
         }
         func resume(id: String, token: String) async throws -> ManagedAnalysisJob {
             throw ManagedAnalysisClientError.notFound
@@ -122,6 +137,86 @@ final class PendingManagedAnalysisCoordinatorTests: XCTestCase {
                 ownerEmail: "user@example.com"
             )
         )
+    }
+
+    func testCancellingPendingRowInvalidatesRunnerThatAlreadyReadIt() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let sleeper = GateSleeper()
+        let client = Client()
+        let coordinator = PendingManagedAnalysisCoordinator(
+            client: client,
+            store: fixture.store,
+            sleeper: { seconds in try await sleeper.sleep(seconds) }
+        )
+
+        _ = try await coordinator.enqueue(
+            request: request("cancel-before-submit"),
+            ownerEmail: "user@example.com",
+            retryAfterSeconds: 5,
+            token: "token"
+        )
+        await eventually { await sleeper.calls == 1 }
+        await coordinator.cancel(
+            requestID: "cancel-before-submit",
+            ownerEmail: "user@example.com"
+        )
+        await sleeper.release()
+        for _ in 0..<20 { await Task.yield() }
+
+        let submitted = await client.requestIDs
+        XCTAssertTrue(submitted.isEmpty)
+    }
+
+    func testTransientNetworkAndServerFailuresRemainQueuedUntilAccepted() async throws {
+        for transient in [
+            ManagedAnalysisClientError.network("offline"),
+            .server(
+                status: 503,
+                code: "temporary",
+                diagnosticCode: nil,
+                diagnosticId: nil
+            )
+        ] {
+            let fixture = try makeFixture()
+            defer { fixture.cleanup() }
+            let client = Client(createErrors: [transient])
+            let coordinator = PendingManagedAnalysisCoordinator(
+                client: client,
+                store: fixture.store,
+                sleeper: { _ in }
+            )
+
+            _ = try await coordinator.enqueue(
+                request: request("transient"),
+                ownerEmail: "user@example.com",
+                retryAfterSeconds: 0,
+                token: "token"
+            )
+            await eventually { await client.requestIDs.count == 2 }
+
+            let submitted = await client.requestIDs
+            XCTAssertEqual(submitted, ["transient", "transient"])
+            let remaining = try await fixture.store.all()
+            XCTAssertTrue(remaining.isEmpty)
+        }
+    }
+
+    private actor GateSleeper {
+        private(set) var calls = 0
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func sleep(_: TimeInterval) async throws {
+            calls += 1
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func release() {
+            continuation?.resume()
+            continuation = nil
+        }
     }
 
     private struct Fixture {
