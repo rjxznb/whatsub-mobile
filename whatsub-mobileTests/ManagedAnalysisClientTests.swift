@@ -338,14 +338,17 @@ final class ManagedAnalysisClientTests: XCTestCase {
             transport: { _ in self.response(500, json: "{}") },
             streamTransport: { request in
                 await recorder.append(request)
-                return self.streamingResponse(chunks: [frame.prefix(17), frame.dropFirst(17)].map(Data.init))
+                return self.streamingResponse(chunks: [
+                    Data(frame.prefix(17)),
+                    Data(frame.dropFirst(17)),
+                ])
             }
         )
 
         let events = try await collect(client.events(
             id: "job-1",
             afterEventID: 41,
-            mode: .replay,
+            mode: ManagedAnalysisStreamMode.replay,
             token: "session"
         ))
 
