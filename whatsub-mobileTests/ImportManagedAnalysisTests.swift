@@ -621,6 +621,34 @@ final class ImportManagedAnalysisTests: XCTestCase {
         XCTAssertEqual(keys[0], keys[1])
     }
 
+    func testClosingImportViewReleasesItsPendingObserver() async throws {
+        let fixture = try makePendingStoreFixture()
+        defer { fixture.cleanup() }
+        let client = ClientSpy()
+        await client.enqueueCreateError(.queueLimit)
+        weak var releasedViewModel: ImportViewModel?
+
+        do {
+            let viewModel = makeVM(
+                client: client,
+                analyzer: LocalAnalyzerSpy(),
+                entitlement: .freshPro,
+                duration: 60,
+                pendingStore: fixture.store
+            )
+            releasedViewModel = viewModel
+            await viewModel.run(
+                urlOrId: "abcdefghijk",
+                token: "t",
+                email: "user@example.com"
+            )
+            viewModel.cancelWork()
+        }
+
+        await eventually { releasedViewModel == nil }
+        XCTAssertNil(releasedViewModel)
+    }
+
     private struct PendingStoreFixture {
         let store: PendingManagedAnalysisStore
         let directory: URL
