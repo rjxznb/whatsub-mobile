@@ -580,16 +580,25 @@ struct YouTubeEmbedView: UIViewRepresentable {
                     ? Math.min(requestedRestoreTarget, Math.max(0, duration - 0.25))
                     : requestedRestoreTarget;
                   var restoreRevision = ++window.whatsubRestoreRevision;
+                  window.whatsubRestoreActive = true;
+                  window.whatsubRestoreHasPlayed = false;
                   var restoreAttempts = 0;
+                  if (window.player.mute) { window.player.mute(); }
                   window.player.seekTo(restoreTarget, true);
-                  if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                  if (window.player.playVideo) { window.player.playVideo(); }
+                  function finishRestore() {
+                    window.whatsubRestoreActive = false;
+                    if (window.player.pauseVideo) { window.player.pauseVideo(); }
+                    if (window.player.unMute) { window.player.unMute(); }
+                    window.whatsubSignalReady();
+                  }
                   function confirmRestore() {
                     if (restoreRevision !== window.whatsubRestoreRevision) { return; }
                     restoreAttempts += 1;
                     var currentTime = window.player.getCurrentTime();
-                    if (Math.abs(currentTime - restoreTarget) <= 2 || restoreAttempts >= 40) {
-                      if (window.player.pauseVideo) { window.player.pauseVideo(); }
-                      window.whatsubSignalReady();
+                    var targetReached = Math.abs(currentTime - restoreTarget) <= 2;
+                    if ((window.whatsubRestoreHasPlayed && targetReached) || restoreAttempts >= 40) {
+                      finishRestore();
                     } else {
                       setTimeout(confirmRestore, 100);
                     }
@@ -609,6 +618,8 @@ struct YouTubeEmbedView: UIViewRepresentable {
           window.whatsubClipEnd = null;
           window.whatsubClipNonce = null;
           window.whatsubRestoreRevision = 0;
+          window.whatsubRestoreActive = false;
+          window.whatsubRestoreHasPlayed = false;
           window.whatsubDidSignalReady = false;
           window.whatsubTimeInterval = null;
           window.whatsubStartTimeUpdates = function() {
@@ -641,7 +652,9 @@ struct YouTubeEmbedView: UIViewRepresentable {
           };
           window.whatsubExplicitSeek = function(seconds) {
             window.whatsubRestoreRevision += 1;
+            window.whatsubRestoreActive = false;
             if (!window.player || !window.player.seekTo || !Number.isFinite(seconds)) { return false; }
+            if (window.player.unMute) { window.player.unMute(); }
             window.player.seekTo(Math.max(0, seconds), true);
             if (window.player.playVideo) { window.player.playVideo(); }
             window.whatsubSignalReady();
@@ -659,9 +672,13 @@ struct YouTubeEmbedView: UIViewRepresentable {
                 },
                 onStateChange: function(event) {
                   if (event.data === YT.PlayerState.PLAYING) {
-                    window.whatsubRestoreRevision += 1;
-                    try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'playing' }); } catch (e) {}
-                    window.whatsubSignalReady();
+                    if (window.whatsubRestoreActive) {
+                      window.whatsubRestoreHasPlayed = true;
+                    } else {
+                      window.whatsubRestoreRevision += 1;
+                      try { window.webkit.messageHandlers.iosBridge.postMessage({ type: 'playing' }); } catch (e) {}
+                      window.whatsubSignalReady();
+                    }
                   }
                   if (event.data === YT.PlayerState.ENDED) {
                     var endedTime = null;

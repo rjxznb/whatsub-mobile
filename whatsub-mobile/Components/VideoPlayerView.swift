@@ -45,6 +45,7 @@ enum AVPlayerLifecycleDecision: Equatable {
 
 enum AVPlayerRestorePolicy {
     static let maximumSeconds: Double = 7 * 24 * 60 * 60
+    static let seekToleranceSeconds: Double = 1
 
     static func target(savedSeconds: Double, durationSeconds: Double?) -> Double? {
         guard savedSeconds.isFinite, savedSeconds >= 0 else { return nil }
@@ -341,7 +342,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             ) { [weak self] t in self?.onTime(t.seconds) }
             timeControlObs = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
                 if player.timeControlStatus == .playing {
-                    self?.onPlaying()
+                    self?.handlePlaying()
                 }
             }
             guard let item = player.currentItem else {
@@ -408,10 +409,14 @@ struct VideoPlayerView: UIViewControllerRepresentable {
                     return
                 }
                 let operationOwner = operationOwner
+                let tolerance = CMTime(
+                    seconds: AVPlayerRestorePolicy.seekToleranceSeconds,
+                    preferredTimescale: 600
+                )
                 player.seek(
                     to: time,
-                    toleranceBefore: .zero,
-                    toleranceAfter: .zero
+                    toleranceBefore: tolerance,
+                    toleranceAfter: tolerance
                 ) { [weak self, weak player, operationOwner] finished in
                     DispatchQueue.main.async {
                         guard finished,
@@ -429,6 +434,18 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             default:
                 break
             }
+        }
+
+        private func handlePlaying() {
+            // A user play tap can supersede an in-flight passive restore seek.
+            // Invalidate only that native operation so its late completion
+            // cannot pause the player after playback has already started.
+            if let activeOperationToken,
+               operationOwner.invalidate(activeOperationToken) {
+                self.activeOperationToken = nil
+            }
+            signalReadyOnce()
+            onPlaying()
         }
 
         func requestExplicitSeek(_ request: SeekRequest) {

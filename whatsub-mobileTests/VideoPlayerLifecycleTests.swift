@@ -132,6 +132,7 @@ final class VideoPlayerLifecycleTests: XCTestCase {
     }
 
     func testNativeRestoreClampsHugeAndPastDurationPositions() {
+        XCTAssertGreaterThan(AVPlayerRestorePolicy.seekToleranceSeconds, 0)
         XCTAssertEqual(
             AVPlayerRestorePolicy.target(
                 savedSeconds: .greatestFiniteMagnitude,

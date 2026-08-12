@@ -2,7 +2,7 @@ import XCTest
 @testable import whatsub_mobile
 
 final class YouTubeEmbedLifecycleTests: XCTestCase {
-    func testResumeHTMLSeeksAheadThenConfirmsPausedWithABound() throws {
+    func testResumeHTMLPrerollsMutedFrameThenConfirmsPausedWithABound() throws {
         let html = YouTubeEmbedView.html(
             videoId: "dQw4w9WgXcQ",
             startSeconds: nil,
@@ -10,12 +10,24 @@ final class YouTubeEmbedLifecycleTests: XCTestCase {
         )
 
         let seek = try XCTUnwrap(html.range(of: "window.player.seekTo(restoreTarget, true)"))
-        let pause = try XCTUnwrap(html.range(
-            of: "window.player.pauseVideo()",
+        let play = try XCTUnwrap(html.range(
+            of: "window.player.playVideo()",
             options: [],
             range: seek.upperBound..<html.endIndex
         ))
-        XCTAssertLessThan(seek.lowerBound, pause.lowerBound)
+        let pause = try XCTUnwrap(html.range(
+            of: "window.player.pauseVideo()",
+            options: [],
+            range: play.upperBound..<html.endIndex
+        ))
+        XCTAssertLessThan(seek.lowerBound, play.lowerBound)
+        XCTAssertLessThan(play.lowerBound, pause.lowerBound)
+        XCTAssertTrue(html.contains("window.player.mute()"))
+        XCTAssertTrue(html.contains("window.player.unMute()"))
+        XCTAssertTrue(html.contains("window.whatsubRestoreActive = true"))
+        XCTAssertTrue(html.contains("window.whatsubRestoreHasPlayed = true"))
+        XCTAssertTrue(html.contains("window.whatsubRestoreHasPlayed && targetReached"))
+        XCTAssertTrue(html.contains("if (window.whatsubRestoreActive)"))
         XCTAssertTrue(html.contains("restoreAttempts >= 40"))
         XCTAssertTrue(html.contains("Math.abs(currentTime - restoreTarget) <= 2"))
         XCTAssertFalse(html.contains("seekTo(42, false)"))

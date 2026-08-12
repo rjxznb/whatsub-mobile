@@ -444,6 +444,7 @@ struct LibraryDetailView: View {
                     },
                     operationOwner: avOperationOwner
                 )
+                .id("oss-\(entry.id)-\(generation)")
             } else if playbackPrepared,
                       source == .youtube,
                       VideoSource.isLikelyYouTubeId(entry.youtubeId) {
@@ -1005,6 +1006,12 @@ struct LibraryDetailView: View {
 
     private func handlePlayerPlaying(generation: Int) {
         guard playbackSession.isCurrent(generation: generation) else { return }
+        // A real playing transition is stronger evidence than a remote seek
+        // completion, so never leave a playing video covered by the loader.
+        playbackSession.markReady(generation: generation)
+        playerRestorePosition = nil
+        playerTimedOut = false
+        playerReady = true
         playbackSession.markPlaying()
     }
 
