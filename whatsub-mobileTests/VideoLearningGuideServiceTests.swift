@@ -94,26 +94,29 @@ final class VideoLearningGuideServiceTests: XCTestCase {
         XCTAssertEqual(result.learningGuide.verdict, .selectSegments)
     }
 
-    func testEmptyFingerprintStopsBeforeSummaryOrPatch() async {
-        let api = LearningGuideAPISpy([.accepted(makeGuideResponse(fingerprint: "unused"))])
+    func testEmptyServerFingerprintUsesLocalSourceFingerprint() async throws {
+        let entry = makeLearningGuideEntry(fingerprint: "")
+        let localFingerprint = LibraryAnalysisFingerprint.compute(
+            title: entry.title,
+            cues: entry.analysisJson.subtitles
+        )
+        let api = LearningGuideAPISpy([
+            .accepted(makeGuideResponse(fingerprint: localFingerprint))
+        ])
         let llm = SummaryProviderSpy([.summary(makeAnalysisSummary())])
         let service = VideoLearningGuideService(api: api, summaryProvider: llm.call)
 
-        do {
-            _ = try await service.generate(
-                entry: makeLearningGuideEntry(fingerprint: ""),
-                settings: LlmSettings(),
-                token: "token"
-            )
-            XCTFail("Expected a missing fingerprint error")
-        } catch {
-            XCTAssertEqual(error as? VideoLearningGuideServiceError, .missingAnalysisFingerprint)
-        }
+        let result = try await service.generate(
+            entry: entry,
+            settings: LlmSettings(),
+            token: "token"
+        )
 
         let callCount = await llm.callCount
         let fingerprints = await api.expectedFingerprints
-        XCTAssertEqual(callCount, 0)
-        XCTAssertEqual(fingerprints, [])
+        XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(fingerprints, [localFingerprint])
+        XCTAssertEqual(result.analysisFingerprint, localFingerprint)
     }
 
     func testCancellationStopsBeforePatch() async {
