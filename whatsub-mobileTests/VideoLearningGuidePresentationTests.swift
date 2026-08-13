@@ -83,56 +83,6 @@ private actor CancellationIgnoringGatedSummaryProviderSpy {
     }
 }
 
-private actor GatedGuideReloadDetailAPISpy: LibraryDesktopReplacementAPI {
-    private let initial: LibraryEntryDetail
-    private let staleGuideReload: LibraryEntryDetail
-    private let refreshedByUser: LibraryEntryDetail
-    private var reloadContinuation: CheckedContinuation<Void, Never>?
-    private(set) var detailCallCount = 0
-
-    init(
-        initial: LibraryEntryDetail,
-        staleGuideReload: LibraryEntryDetail,
-        refreshedByUser: LibraryEntryDetail
-    ) {
-        self.initial = initial
-        self.staleGuideReload = staleGuideReload
-        self.refreshedByUser = refreshedByUser
-    }
-
-    func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
-        detailCallCount += 1
-        switch detailCallCount {
-        case 1:
-            return initial
-        case 2:
-            await withCheckedContinuation { reloadContinuation = $0 }
-            return staleGuideReload
-        default:
-            return refreshedByUser
-        }
-    }
-
-    func listImportQueue(
-        token: String
-    ) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {
-        ([], nil)
-    }
-
-    func enqueueReplacement(
-        url: String,
-        targetLibraryEntryId: String,
-        token: String
-    ) async throws -> EnqueueImportResponse {
-        EnqueueImportResponse(id: "queue", desktopSeenSecondsAgo: nil, status: "pending")
-    }
-
-    func releaseGuideReload() {
-        reloadContinuation?.resume()
-        reloadContinuation = nil
-    }
-}
-
 private actor FailingRefreshDetailAPISpy: LibraryDesktopReplacementAPI {
     private let initial: LibraryEntryDetail
     private(set) var detailCallCount = 0
@@ -364,40 +314,6 @@ final class VideoLearningGuidePresentationTests: XCTestCase {
         XCTAssertEqual(fingerprints, ["f2"])
     }
 
-    func testStaleGuideReloadCannotPublishAfterNewerUserLoad() async {
-        let initial = makeLearningGuideEntry(fingerprint: "", title: "Initial")
-        let staleReload = makeLearningGuideEntry(fingerprint: "f1", title: "Stale guide reload")
-        let refreshed = makeLearningGuideEntry(fingerprint: "f2", title: "User refresh")
-        let detailAPI = GatedGuideReloadDetailAPISpy(
-            initial: initial,
-            staleGuideReload: staleReload,
-            refreshedByUser: refreshed
-        )
-        let patchAPI = LearningGuideAPISpy([.accepted(makeGuideResponse(fingerprint: "f1"))])
-        let llm = SummaryProviderSpy([.summary(makeAnalysisSummary())])
-        let service = VideoLearningGuideService(api: patchAPI, summaryProvider: llm.call)
-        let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
-        await vm.load(id: initial.id, token: "token")
-
-        let oldGeneration = Task {
-            await vm.generateGuide(settings: LlmSettings(), token: "token")
-        }
-        while await detailAPI.detailCallCount < 2 { await Task.yield() }
-
-        await vm.load(id: refreshed.id, token: "token")
-        await detailAPI.releaseGuideReload()
-        await oldGeneration.value
-
-        XCTAssertEqual(vm.entry?.title, "User refresh")
-        XCTAssertEqual(vm.entry?.analysisFingerprint, "f2")
-        XCTAssertNil(vm.entry?.analysisJson.learningGuide)
-        XCTAssertEqual(vm.guidePhase, .idle)
-        let llmCalls = await llm.callCount
-        let fingerprints = await patchAPI.expectedFingerprints
-        XCTAssertEqual(llmCalls, 0)
-        XCTAssertEqual(fingerprints, [])
-    }
-
     func testFailedLoadAfterSupersedingGuideRestoresIdleAndAllowsRetry() async {
         let entry = makeLearningGuideEntry(fingerprint: "f1", title: "Preserved entry")
         let detailAPI = FailingRefreshDetailAPISpy(initial: entry)
@@ -561,10 +477,16 @@ final class VideoLearningGuidePresentationTests: XCTestCase {
         XCTAssertEqual(vm.guidePhase, .ready)
     }
 
-    func testEmptyFingerprintRefreshesBeforeLLMAndShowsInlineRetryWhenStillMissing() async {
+    func testLegacyResponseUsesLocalSourceFingerprintWithoutRefreshing() async {
         let missing = makeLearningGuideEntry(fingerprint: "")
-        let detailAPI = LearningGuideDetailAPISpy([missing, missing])
-        let patchAPI = LearningGuideAPISpy([.accepted(makeGuideResponse(fingerprint: "unused"))])
+        let localFingerprint = LibraryAnalysisFingerprint.compute(
+            title: missing.title,
+            cues: missing.analysisJson.subtitles
+        )
+        let detailAPI = LearningGuideDetailAPISpy([missing])
+        let patchAPI = LearningGuideAPISpy([
+            .accepted(makeGuideResponse(fingerprint: localFingerprint))
+        ])
         let llm = SummaryProviderSpy([.summary(makeAnalysisSummary())])
         let service = VideoLearningGuideService(api: patchAPI, summaryProvider: llm.call)
         let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
@@ -575,11 +497,10 @@ final class VideoLearningGuidePresentationTests: XCTestCase {
         let detailCalls = await detailAPI.detailCallCount
         let callCount = await llm.callCount
         let fingerprints = await patchAPI.expectedFingerprints
-        XCTAssertEqual(detailCalls, 2)
-        XCTAssertEqual(callCount, 0)
-        XCTAssertEqual(fingerprints, [])
-        XCTAssertEqual(vm.guidePhase, .fingerprintUnavailable)
-        XCTAssertTrue(vm.guidePhase.showsInlineRetry)
+        XCTAssertEqual(detailCalls, 1)
+        XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(fingerprints, [localFingerprint])
+        XCTAssertEqual(vm.guidePhase, .ready)
     }
 
     func testSegmentSelectionSwitchesToSubtitlesCollapsesAndSeeks() async {

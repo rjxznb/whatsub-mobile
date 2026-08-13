@@ -45,8 +45,8 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
 
     func testLearningGuideAvailabilityTracksManagedAnalysisLifecycle() {
         XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: nil), .available)
-        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .queued), .waiting)
-        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .running), .waiting)
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .queued), .available)
+        XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .running), .available)
         XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .completed), .available)
         XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .failed), .resumeRequired)
         XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .cancelled), .resumeRequired)

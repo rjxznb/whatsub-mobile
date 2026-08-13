@@ -47,10 +47,9 @@ struct VideoLearningGuideService {
         settings: LlmSettings,
         token: String
     ) async throws -> LearningGuideUpdateResponse {
-        let fingerprint = entry.analysisFingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !fingerprint.isEmpty else {
-            throw VideoLearningGuideServiceError.missingAnalysisFingerprint
-        }
+        let fingerprint = entry.analysisFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? LibraryAnalysisFingerprint.compute(title: entry.title, cues: entry.analysisJson.subtitles)
+            : entry.analysisFingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
 
         try Task.checkCancellation()
         let summary = try await summaryProvider(entry, settings, token)
