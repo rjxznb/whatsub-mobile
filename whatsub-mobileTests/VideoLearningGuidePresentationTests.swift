@@ -561,10 +561,16 @@ final class VideoLearningGuidePresentationTests: XCTestCase {
         XCTAssertEqual(vm.guidePhase, .ready)
     }
 
-    func testEmptyFingerprintRefreshesBeforeLLMAndShowsInlineRetryWhenStillMissing() async {
+    func testLegacyResponseUsesLocalSourceFingerprintWithoutRefreshing() async {
         let missing = makeLearningGuideEntry(fingerprint: "")
-        let detailAPI = LearningGuideDetailAPISpy([missing, missing])
-        let patchAPI = LearningGuideAPISpy([.accepted(makeGuideResponse(fingerprint: "unused"))])
+        let localFingerprint = LibraryAnalysisFingerprint.compute(
+            title: missing.title,
+            cues: missing.analysisJson.subtitles
+        )
+        let detailAPI = LearningGuideDetailAPISpy([missing])
+        let patchAPI = LearningGuideAPISpy([
+            .accepted(makeGuideResponse(fingerprint: localFingerprint))
+        ])
         let llm = SummaryProviderSpy([.summary(makeAnalysisSummary())])
         let service = VideoLearningGuideService(api: patchAPI, summaryProvider: llm.call)
         let vm = LibraryDetailViewModel(api: detailAPI, guideService: service)
@@ -575,11 +581,10 @@ final class VideoLearningGuidePresentationTests: XCTestCase {
         let detailCalls = await detailAPI.detailCallCount
         let callCount = await llm.callCount
         let fingerprints = await patchAPI.expectedFingerprints
-        XCTAssertEqual(detailCalls, 2)
-        XCTAssertEqual(callCount, 0)
-        XCTAssertEqual(fingerprints, [])
-        XCTAssertEqual(vm.guidePhase, .fingerprintUnavailable)
-        XCTAssertTrue(vm.guidePhase.showsInlineRetry)
+        XCTAssertEqual(detailCalls, 1)
+        XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(fingerprints, [localFingerprint])
+        XCTAssertEqual(vm.guidePhase, .ready)
     }
 
     func testSegmentSelectionSwitchesToSubtitlesCollapsesAndSeeks() async {
