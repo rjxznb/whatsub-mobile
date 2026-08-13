@@ -116,20 +116,34 @@ jobs:
             build | xcbeautify || (echo "build failed"; exit 1)
 
       - name: Run unit tests
+        timeout-minutes: 12
         env:
           UDID: ${{ steps.pick-sim.outputs.udid }}
         run: |
           set -o pipefail
+          rm -rf TestResults.xcresult
           xcodebuild \
             -project whatsub-mobile.xcodeproj \
             -scheme whatsub-mobile \
             -configuration Debug \
             -destination "platform=iOS Simulator,id=${UDID}" \
             -derivedDataPath ./DerivedData \
+            -resultBundlePath ./TestResults.xcresult \
             -parallel-testing-enabled NO \
             -maximum-parallel-testing-workers 1 \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-            test | xcbeautify
+            test 2>&1 | tee xcode-test.log
+
+      - name: Upload unit-test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-diagnostics-${{ github.sha }}
+          path: |
+            xcode-test.log
+            TestResults.xcresult
+          retention-days: 3
+          if-no-files-found: warn
 
       - name: Boot simulator + install app
         env:
