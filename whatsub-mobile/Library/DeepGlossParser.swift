@@ -64,18 +64,19 @@ struct DeepGlossSection: Equatable {
 
 enum DeepGlossPresentation {
     static func visibleSections(for result: DeepGlossResult) -> [DeepGlossSection] {
-        var sections = [
-            DeepGlossSection(
-                kind: .contextualMeaning,
-                title: "此处含义",
-                content: result.contextualMeaning
-            ),
-            DeepGlossSection(
-                kind: .toneAndSubtext,
-                title: "语气与言外之意",
-                content: result.toneAndSubtext
-            ),
-        ]
+        var sections: [DeepGlossSection] = []
+        appendIfPresent(
+            result.contextualMeaning,
+            kind: .contextualMeaning,
+            title: "此处含义",
+            to: &sections
+        )
+        appendIfPresent(
+            result.toneAndSubtext,
+            kind: .toneAndSubtext,
+            title: "语气与言外之意",
+            to: &sections
+        )
         appendIfPresent(
             result.slangOrIdiom,
             kind: .slangOrIdiom,
@@ -88,11 +89,12 @@ enum DeepGlossPresentation {
             title: "文化语境",
             to: &sections
         )
-        if !result.naturalAlternatives.isEmpty {
+        let alternatives = result.naturalAlternatives.compactMap { normalized($0) }
+        if !alternatives.isEmpty {
             sections.append(DeepGlossSection(
                 kind: .naturalAlternatives,
                 title: "自然替换表达",
-                items: result.naturalAlternatives
+                items: alternatives
             ))
         }
         appendIfPresent(
@@ -110,8 +112,13 @@ enum DeepGlossPresentation {
         title: String,
         to sections: inout [DeepGlossSection]
     ) {
-        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let content = normalized(content) else { return }
         sections.append(DeepGlossSection(kind: kind, title: title, content: content))
+    }
+
+    private static func normalized(_ content: String) -> String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

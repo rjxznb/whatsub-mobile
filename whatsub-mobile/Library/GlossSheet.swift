@@ -199,6 +199,7 @@ struct GlossSheet: View {
                 .foregroundStyle(accent)
                 .frame(width: 28, height: 28)
                 .background(accent.opacity(0.12), in: Circle())
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 7) {
                 Text(section.title)
@@ -212,6 +213,7 @@ struct GlossSheet: View {
                                 .fill(Color.whatsubAccent)
                                 .frame(width: 5, height: 5)
                                 .padding(.top, 7)
+                                .accessibilityHidden(true)
                             Text(item)
                                 .font(.body)
                                 .foregroundStyle(.whatsubInkSoft)

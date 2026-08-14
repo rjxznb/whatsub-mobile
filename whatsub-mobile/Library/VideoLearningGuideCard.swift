@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 enum VideoLearningGuideLayout {
     static func maxExpandedHeight(for screenHeight: CGFloat) -> CGFloat {
@@ -73,6 +72,7 @@ struct VideoLearningGuideCard: View {
     let guide: LearningGuide?
     let phase: VideoLearningGuidePhase
     let analysisAvailability: VideoLearningGuideAnalysisAvailability
+    let availableHeight: CGFloat
     @Binding var isExpanded: Bool
     let onGenerate: () -> Void
     let onRetry: () -> Void
@@ -82,7 +82,7 @@ struct VideoLearningGuideCard: View {
     let onSelectSegment: (RecommendedSegment) -> Void
 
     private var expandedContentMaxHeight: CGFloat {
-        VideoLearningGuideLayout.maxExpandedHeight(for: UIScreen.main.bounds.height)
+        VideoLearningGuideLayout.maxExpandedHeight(for: availableHeight)
     }
 
     var body: some View {
