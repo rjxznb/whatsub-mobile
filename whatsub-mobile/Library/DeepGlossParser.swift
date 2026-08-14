@@ -29,10 +29,37 @@ enum DeepGlossSectionKind: Equatable {
     case usageWarning
 }
 
+extension DeepGlossSectionKind {
+    var iconName: String {
+        switch self {
+        case .contextualMeaning: return "text.quote"
+        case .toneAndSubtext: return "bubble.left.and.text.bubble.right"
+        case .slangOrIdiom: return "quote.bubble"
+        case .culturalContext: return "globe.asia.australia"
+        case .naturalAlternatives: return "list.bullet"
+        case .usageWarning: return "exclamationmark.triangle"
+        }
+    }
+
+    var usesWarningStyle: Bool { self == .usageWarning }
+}
+
 struct DeepGlossSection: Equatable {
     let kind: DeepGlossSectionKind
     let title: String
-    let content: String
+    let items: [String]
+
+    var content: String { items.joined(separator: "\n") }
+
+    init(kind: DeepGlossSectionKind, title: String, content: String) {
+        self.init(kind: kind, title: title, items: [content])
+    }
+
+    init(kind: DeepGlossSectionKind, title: String, items: [String]) {
+        self.kind = kind
+        self.title = title
+        self.items = items
+    }
 }
 
 enum DeepGlossPresentation {
@@ -65,7 +92,7 @@ enum DeepGlossPresentation {
             sections.append(DeepGlossSection(
                 kind: .naturalAlternatives,
                 title: "自然替换表达",
-                content: result.naturalAlternatives.joined(separator: "\n")
+                items: result.naturalAlternatives
             ))
         }
         appendIfPresent(

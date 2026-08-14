@@ -169,19 +169,12 @@ struct GlossSheet: View {
             loadingRow("正在深度解读…")
         case .loaded:
             if let result = deepGlossModel.result {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 10) {
                     ForEach(
                         Array(DeepGlossPresentation.visibleSections(for: result).enumerated()),
                         id: \.offset
                     ) { _, section in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(section.title)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.whatsubInk)
-                            Text(section.content)
-                                .font(.body)
-                                .foregroundStyle(.whatsubInkSoft)
-                        }
+                        deepGlossSectionCard(section)
                     }
                 }
             }
@@ -192,6 +185,50 @@ struct GlossSheet: View {
         case .failed(let failure):
             retryBlock(failure.message)
         }
+    }
+
+    private func deepGlossSectionCard(_ section: DeepGlossSection) -> some View {
+        let accent = section.kind.usesWarningStyle ? Color.orange : Color.whatsubAccent
+        let background = section.kind.usesWarningStyle
+            ? Color.orange.opacity(0.07)
+            : Color.whatsubBgElev
+
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: section.kind.iconName)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(accent)
+                .frame(width: 28, height: 28)
+                .background(accent.opacity(0.12), in: Circle())
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(section.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.whatsubInk)
+
+                if section.kind == .naturalAlternatives {
+                    ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
+                        HStack(alignment: .top, spacing: 8) {
+                            Circle()
+                                .fill(Color.whatsubAccent)
+                                .frame(width: 5, height: 5)
+                                .padding(.top, 7)
+                            Text(item)
+                                .font(.body)
+                                .foregroundStyle(.whatsubInkSoft)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                } else {
+                    Text(section.content)
+                        .font(.body)
+                        .foregroundStyle(.whatsubInkSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background(background, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func deepGlossButton(title: String, systemImage: String) -> some View {
