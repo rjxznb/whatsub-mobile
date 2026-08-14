@@ -1,4 +1,11 @@
 import SwiftUI
+import UIKit
+
+enum VideoLearningGuideLayout {
+    static func maxExpandedHeight(for screenHeight: CGFloat) -> CGFloat {
+        min(max(screenHeight * 0.32, 220), 340)
+    }
+}
 
 struct VideoLearningGuidePresentation {
     struct Section: Equatable {
@@ -74,6 +81,10 @@ struct VideoLearningGuideCard: View {
     let onConfigureLLM: () -> Void
     let onSelectSegment: (RecommendedSegment) -> Void
 
+    private var expandedContentMaxHeight: CGFloat {
+        VideoLearningGuideLayout.maxExpandedHeight(for: UIScreen.main.bounds.height)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let guide {
@@ -129,8 +140,12 @@ struct VideoLearningGuideCard: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                expandedContent(guide, presentation: presentation)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                ScrollView(.vertical, showsIndicators: true) {
+                    expandedContent(guide, presentation: presentation)
+                        .padding(.trailing, 2)
+                }
+                .frame(maxHeight: expandedContentMaxHeight)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
