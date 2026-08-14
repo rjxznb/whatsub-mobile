@@ -27,5 +27,9 @@ final class VideoLearningGuideLayoutTests: XCTestCase {
         XCTAssertTrue(source.contains(
             ".frame(maxHeight: expandedContentMaxHeight)"
         ))
+        XCTAssertTrue(source.contains(
+            "maxExpandedHeight(for: availableHeight)"
+        ))
+        XCTAssertFalse(source.contains("UIScreen.main.bounds.height"))
     }
 }

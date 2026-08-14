@@ -95,6 +95,27 @@ final class DeepGlossParserTests: XCTestCase {
         XCTAssertFalse(DeepGlossSectionKind.contextualMeaning.usesWarningStyle)
     }
 
+    func testPresentationTrimsCachedWhitespaceAndDropsEmptyItems() {
+        let result = DeepGlossResult(
+            contextualMeaning: "   ",
+            toneAndSubtext: "  语气直接。  ",
+            slangOrIdiom: "\n",
+            culturalContext: "",
+            naturalAlternatives: [" ", "  right now  ", "\n"],
+            usageWarning: "  正式写作中谨慎使用。  "
+        )
+
+        let sections = DeepGlossPresentation.visibleSections(for: result)
+
+        XCTAssertEqual(
+            sections.map(\.kind),
+            [.toneAndSubtext, .naturalAlternatives, .usageWarning]
+        )
+        XCTAssertEqual(sections[0].items, ["语气直接。"])
+        XCTAssertEqual(sections[1].items, ["right now"])
+        XCTAssertEqual(sections[2].items, ["正式写作中谨慎使用。"])
+    }
+
     func testParserRejectsMissingExactKey() throws {
         var object = try validDeepGlossObject()
         object.removeValue(forKey: "usageWarning")

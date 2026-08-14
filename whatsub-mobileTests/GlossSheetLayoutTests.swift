@@ -24,4 +24,17 @@ final class GlossSheetLayoutTests: XCTestCase {
         ))
         XCTAssertTrue(source.contains("selectedDetent = .large"))
     }
+
+    func testDeepGlossDecorationsAreHiddenFromVoiceOver() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = tests.deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "whatsub-mobile/Library/GlossSheet.swift"
+        ), encoding: .utf8)
+
+        let hiddenDecorationCount = source
+            .components(separatedBy: ".accessibilityHidden(true)")
+            .count - 1
+        XCTAssertGreaterThanOrEqual(hiddenDecorationCount, 2)
+    }
 }
