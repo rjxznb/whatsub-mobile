@@ -38,14 +38,14 @@ struct WordGloss: Identifiable {
 /// bottom sheet with pronunciation and one-tap pending collection.
 struct GlossSheet: View {
     typealias EnsureProfile = DeepGlossViewModel.EnsureProfile
-    static let compactDetent: PresentationDetent = .height(340)
+    static let defaultDetent: PresentationDetent = .fraction(0.65)
 
     let gloss: WordGloss
     let ensureProfile: EnsureProfile?
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: HighlightWordCardModel
     @StateObject private var deepGlossModel: DeepGlossViewModel
-    @State private var selectedDetent: PresentationDetent = Self.compactDetent
+    @State private var selectedDetent: PresentationDetent = Self.defaultDetent
 
     init(
         gloss: WordGloss,
@@ -121,7 +121,7 @@ struct GlossSheet: View {
             model.disappear()
             deepGlossModel.cancel()
         }
-        .presentationDetents([Self.compactDetent, .large], selection: $selectedDetent)
+        .presentationDetents([Self.defaultDetent, .large], selection: $selectedDetent)
         .presentationDragIndicator(.visible)
     }
 
