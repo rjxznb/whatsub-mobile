@@ -63,6 +63,38 @@ final class DeepGlossParserTests: XCTestCase {
         )
     }
 
+    func testPresentationPreservesNaturalAlternativesAsSeparateItems() throws {
+        let result = DeepGlossResult(
+            contextualMeaning: "此处表示立刻。",
+            toneAndSubtext: "语气直接。",
+            slangOrIdiom: "",
+            culturalContext: "",
+            naturalAlternatives: ["right now", "at the moment"],
+            usageWarning: "正式写作中谨慎使用。"
+        )
+
+        let sections = DeepGlossPresentation.visibleSections(for: result)
+        let alternatives = try XCTUnwrap(sections.first {
+            $0.kind == .naturalAlternatives
+        })
+        XCTAssertEqual(alternatives.items, ["right now", "at the moment"])
+        XCTAssertEqual(alternatives.content, "right now\nat the moment")
+    }
+
+    func testEveryDeepGlossSectionHasStableIconMetadata() {
+        XCTAssertEqual(DeepGlossSectionKind.contextualMeaning.iconName, "text.quote")
+        XCTAssertEqual(
+            DeepGlossSectionKind.toneAndSubtext.iconName,
+            "bubble.left.and.text.bubble.right"
+        )
+        XCTAssertEqual(DeepGlossSectionKind.slangOrIdiom.iconName, "quote.bubble")
+        XCTAssertEqual(DeepGlossSectionKind.culturalContext.iconName, "globe.asia.australia")
+        XCTAssertEqual(DeepGlossSectionKind.naturalAlternatives.iconName, "list.bullet")
+        XCTAssertEqual(DeepGlossSectionKind.usageWarning.iconName, "exclamationmark.triangle")
+        XCTAssertTrue(DeepGlossSectionKind.usageWarning.usesWarningStyle)
+        XCTAssertFalse(DeepGlossSectionKind.contextualMeaning.usesWarningStyle)
+    }
+
     func testParserRejectsMissingExactKey() throws {
         var object = try validDeepGlossObject()
         object.removeValue(forKey: "usageWarning")
