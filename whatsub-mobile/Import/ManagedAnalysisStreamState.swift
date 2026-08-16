@@ -152,7 +152,15 @@ struct ManagedAnalysisStreamState {
 
     private mutating func applyReset(_ event: ManagedAnalysisBatchResetStreamEvent) {
         guard let batchIndex = event.batchIndex else { return }
-        removePreviews(batchIndex: batchIndex, attempt: event.abandonedAttempt)
+        if let nextAttempt = event.nextAttempt {
+            rebasePreviews(
+                batchIndex: batchIndex,
+                fromAttempt: event.abandonedAttempt,
+                toAttempt: nextAttempt
+            )
+        } else {
+            removePreviews(batchIndex: batchIndex, attempt: event.abandonedAttempt)
+        }
 
         let current = currentAttemptByBatch[batchIndex]
         if current == nil || current == event.abandonedAttempt {
@@ -160,6 +168,27 @@ struct ManagedAnalysisStreamState {
                 currentAttemptByBatch[batchIndex] = nextAttempt
             } else {
                 currentAttemptByBatch.removeValue(forKey: batchIndex)
+            }
+        }
+    }
+
+    private mutating func rebasePreviews(
+        batchIndex: Int,
+        fromAttempt: Int,
+        toAttempt: Int
+    ) {
+        let retained = previews.filter {
+            $0.key.batchIndex == batchIndex && $0.key.attempt == fromAttempt
+        }
+        removePreviews(batchIndex: batchIndex, attempt: fromAttempt)
+        for (key, cue) in retained {
+            let rebased = ManagedAnalysisPreviewKey(
+                batchIndex: batchIndex,
+                attempt: toAttempt,
+                cueIndex: key.cueIndex
+            )
+            if previews[rebased] == nil {
+                previews[rebased] = cue
             }
         }
     }

@@ -65,17 +65,35 @@ final class ManagedAnalysisStreamStateTests: XCTestCase {
         XCTAssertEqual(state.previews.values.first?.translation, "new")
     }
 
-    func testResetRemovesOnlyAbandonedAttemptAndRejectsLateCue() {
+    func testRetryResetRebasesValidatedPreviewsAndReplacesOnlyOneCue() {
         var state = ManagedAnalysisStreamState()
-        state.apply(.cue(cueEvent(id: 1, attempt: 1, translation: "attempt one")))
-        state.apply(.batchReset(resetEvent(id: 2, abandoned: 1, next: 2)))
-        state.apply(.cue(cueEvent(id: 3, attempt: 1, translation: "late stale")))
-        state.apply(.cue(cueEvent(id: 4, attempt: 2, translation: "attempt two")))
+        state.apply(.cue(cueEvent(id: 1, attempt: 1, index: 0, translation: "retained zero")))
+        state.apply(.cue(cueEvent(id: 2, attempt: 1, index: 1, translation: "retained one")))
+        state.apply(.batchReset(resetEvent(id: 3, abandoned: 1, next: 2)))
 
-        XCTAssertEqual(state.lastEventID, 4)
         XCTAssertEqual(state.currentAttemptByBatch[0], 2)
-        XCTAssertEqual(state.previews.count, 1)
-        XCTAssertEqual(state.previews.values.first?.translation, "attempt two")
+        XCTAssertEqual(state.previews.count, 2)
+        XCTAssertEqual(Set(state.previews.keys.map(\.attempt)), [2])
+        XCTAssertEqual(Set(state.previews.values.map(\.translation)), ["retained zero", "retained one"])
+
+        state.apply(.cue(cueEvent(id: 4, attempt: 1, index: 0, translation: "late stale")))
+        state.apply(.cue(cueEvent(id: 5, attempt: 2, index: 1, translation: "replacement one")))
+
+        XCTAssertEqual(state.lastEventID, 5)
+        XCTAssertEqual(state.currentAttemptByBatch[0], 2)
+        XCTAssertEqual(state.previews.count, 2)
+        XCTAssertEqual(Set(state.previews.values.map(\.translation)), ["retained zero", "replacement one"])
+    }
+
+    func testTerminalResetStillRemovesAbandonedPreviews() {
+        var state = ManagedAnalysisStreamState()
+        state.apply(.cue(cueEvent(id: 1, attempt: 1, index: 0)))
+        state.apply(.cue(cueEvent(id: 2, attempt: 1, index: 1)))
+
+        state.apply(.batchReset(resetEvent(id: 3, abandoned: 1, next: nil)))
+
+        XCTAssertTrue(state.previews.isEmpty)
+        XCTAssertNil(state.currentAttemptByBatch[0])
     }
 
     func testHigherAttemptCueRecoversWhenResetWasMissed() {
