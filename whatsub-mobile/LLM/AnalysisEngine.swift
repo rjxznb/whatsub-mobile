@@ -139,7 +139,7 @@ struct AnalysisEngine {
         onCueAccepted: (Int, Int, Cue, Bool) throws -> Void,
         shouldBeginRequest: () -> Bool, totalCues: Int,
         onProgress: (Int, Int) -> Void,
-        onDiagnostic: (AnalysisStreamEvent) -> Void
+        onDiagnostic: @escaping (AnalysisStreamEvent) -> Void
     ) async throws -> [Cue] {
         var resolved: [Int: Cue] = [:]
         var needsRepair = Set<Int>()
@@ -228,7 +228,7 @@ struct AnalysisEngine {
         onCueAccepted: (Int, Int, Cue, Bool) throws -> Void,
         shouldBeginRequest: () -> Bool, totalCues: Int,
         onProgress: (Int, Int) -> Void,
-        onDiagnostic: (AnalysisStreamEvent) -> Void
+        onDiagnostic: @escaping (AnalysisStreamEvent) -> Void
     ) async throws {
         var workingResolved = resolved
         var workingNeedsRepair = needsRepair
