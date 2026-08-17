@@ -138,7 +138,7 @@ final class AnalysisCheckpointStoreTests: XCTestCase {
         XCTAssertNil(try store.load(sourceID: "youtube-1", cues: source))
     }
 
-    func testPersistedEmptyPlaceholderSummaryRetriesAndCompletes() async throws {
+    func testPersistedEmptySummaryResumesWithoutProviderRequest() async throws {
         let store = AnalysisCheckpointStore(directory: directory)
         let source = cues(1)
         var checkpoint = store.makeCheckpoint(sourceID: "youtube-1", cues: source)
@@ -152,24 +152,23 @@ final class AnalysisCheckpointStoreTests: XCTestCase {
         ))
         try store.save(checkpoint)
         let loaded = try XCTUnwrap(store.load(sourceID: "youtube-1", cues: source))
-        let script = StreamScript([validSummaryJSON()])
+        let script = StreamScript([])
         let engine = AnalysisEngine(streamProvider: script.stream)
-        var completedSummary: AnalysisSummary?
 
         let result = try await engine.analyze(
             source,
             completedBatches: loaded.completedBatches,
             completedSummary: loaded.completedSummary,
             onBatchCompleted: { _, _ in XCTFail("completed cue batch must not repeat") },
-            onSummaryCompleted: { completedSummary = $0 },
+            onSummaryCompleted: { _ in XCTFail("completed summary must not repeat") },
             shouldBeginRequest: { true },
             onProgress: { _, _ in }
         )
 
-        XCTAssertEqual(script.requestCount, 1)
-        XCTAssertEqual(completedSummary?.keyPhrases.first?.expression, "wrap up")
-        XCTAssertEqual(result.learningGuide?.verdict, .selectSegments)
-        XCTAssertEqual(result.contextProfile?.theme, "Closing a discussion")
+        XCTAssertEqual(script.requestCount, 0)
+        XCTAssertTrue(result.keyPhrases.isEmpty)
+        XCTAssertNil(result.learningGuide)
+        XCTAssertNil(result.contextProfile)
     }
 
     func testPersistedLegacyEmptyRawArraySummaryResumesWithoutProviderRequest() async throws {
