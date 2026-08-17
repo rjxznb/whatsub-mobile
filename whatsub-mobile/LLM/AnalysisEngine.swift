@@ -78,7 +78,7 @@ struct AnalysisEngine {
             resultsByBatch[index] = result
         }
         var completedCount = resultsByBatch.values.reduce(0) { $0 + $1.count }
-        onProgress(completedCount + (partialBatch?.entries.count ?? 0), totalCues + 1)
+        onProgress(completedCount + (partialBatch?.entries.count ?? 0), totalCues)
 
         for (batchIndex, batch) in batched.enumerated() {
             if resultsByBatch[batchIndex] != nil { continue }
@@ -99,31 +99,14 @@ struct AnalysisEngine {
         var subtitles = batched.indices.flatMap { resultsByBatch[$0] ?? [] }
         for index in subtitles.indices { subtitles[index].index = index }
         var parsedSummary = completedSummary
-        if completedSummary == nil, !subtitles.isEmpty {
+        if completedSummary == nil {
             try Task.checkCancellation()
-            guard shouldBeginRequest() else { throw AnalysisPausedError() }
-            do {
-                let parser = JsonLineParser()
-                let summaryBatch = batched.count
-                onDiagnostic(.init(stage: .preparingRequest, batch: summaryBatch, parsedCues: totalCues))
-                let stream = streamProvider(try AnalysisPrompts.boundedSummaryMessages(subtitles)) { stage in
-                    onDiagnostic(.init(stage: stage, batch: summaryBatch, parsedCues: totalCues))
-                }
-                for try await chunk in stream {
-                    parser.feed(chunk) { object in
-                        if let value = Self.parseSummary(object, durationSec: durationSec, cues: subtitles) { parsedSummary = value }
-                    }
-                }
-                parser.flush { object in
-                    if let value = Self.parseSummary(object, durationSec: durationSec, cues: subtitles) { parsedSummary = value }
-                }
-                try Task.checkCancellation()
-            } catch is CancellationError { throw CancellationError() }
-            catch { /* Summary is fail-open. */ }
-            if let parsedSummary { try onSummaryCompleted(parsedSummary) }
+            let localSummary = Self.localSummary(from: subtitles)
+            try onSummaryCompleted(localSummary)
+            parsedSummary = localSummary
         }
 
-        onProgress(totalCues + 1, totalCues + 1)
+        onProgress(totalCues, totalCues)
         let generatedAt = Int64((Date().timeIntervalSince1970 * 1_000).rounded())
         let summary = parsedSummary ?? AnalysisSummary(keyPhrases: [], learningGuide: nil, contextProfile: nil)
         return AnalysisJson.assembled(
@@ -185,7 +168,7 @@ struct AnalysisEngine {
                         resolved[offset] = accepted.cue
                         if accepted.needsAnnotationRepair { needsRepair.insert(offset) }
                         onDiagnostic(.init(stage: .parsing, batch: batchIndex, parsedCues: completedBefore + resolved.count))
-                        onProgress(completedBefore + resolved.count, totalCues + 1)
+                        onProgress(completedBefore + resolved.count, totalCues)
                     } catch { callbackError = error }
                 }
                 for try await chunk in stream {
@@ -279,7 +262,7 @@ struct AnalysisEngine {
                 workingResolved[offset] = accepted
                 workingNeedsRepair.remove(offset)
                 repaired.insert(offset)
-                onProgress(completedBefore + workingResolved.count, totalCues + 1)
+                onProgress(completedBefore + workingResolved.count, totalCues)
             }
             if repaired.count == repairOffsets.count { break }
             let pendingIndexes = pending
@@ -317,6 +300,26 @@ struct AnalysisEngine {
         if let value = value as? Int { return value }
         if let value = value as? NSNumber { return value.intValue }
         return nil
+    }
+
+    private static func localSummary(from cues: [Cue]) -> AnalysisSummary {
+        var seen = Set<String>()
+        var keyPhrases: [KeyPhrase] = []
+        for cue in cues {
+            for rawExpression in cue.highlightWords {
+                let expression = rawExpression.trimmingCharacters(in: .whitespacesAndNewlines)
+                let dedupeKey = expression.lowercased()
+                guard !expression.isEmpty, !seen.contains(dedupeKey),
+                      let rawMeaning = cue.highlightTranslations[rawExpression],
+                      let rawUsage = cue.keyNotes[rawExpression] else { continue }
+                let meaning = rawMeaning.trimmingCharacters(in: .whitespacesAndNewlines)
+                let usage = rawUsage.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !meaning.isEmpty, !usage.isEmpty else { continue }
+                seen.insert(dedupeKey)
+                keyPhrases.append(KeyPhrase(expression: expression, meaningZh: meaning, usage: usage))
+            }
+        }
+        return AnalysisSummary(keyPhrases: keyPhrases, learningGuide: nil, contextProfile: nil)
     }
 
     private static func validateBatch(index: Int, result: [Cue], sourceCues: [Cue]) throws {
