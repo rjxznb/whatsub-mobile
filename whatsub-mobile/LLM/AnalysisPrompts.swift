@@ -46,11 +46,19 @@ enum AnalysisPrompts {
         expression must be an exact source substring containing one to four English words.
         meaningZh must be an exact substring of zh.
         usage must contain 25 to 90 Chinese Unicode code points and substantively explain meaning and context.
-        Choose only phrasal verbs, fixed collocations, idioms, pragmatic spoken expressions, or easily misunderstood uses.
+        Choose reusable learner-worthy chunks: phrasal verbs, fixed collocations, common collocations, idioms, pragmatic spoken expressions, discourse expressions, or easily misunderstood uses. A familiar expression still qualifies when its combination or conversational use is worth reusing.
         Omit greetings, fillers, names, numbers, function words, ordinary literal noun phrases, and simple compositional sentences.
         p=[] is normal and preferred to a low-value annotation.
-        At most \(maxHighlightedCues) cues in this request may have a non-empty p array. The limit is a ceiling, not a target.
+        At most \(maxHighlightedCues) cues in this request may have a non-empty p array. This is a hard ceiling, not a quota.
+        \(compactDensityGuidance(maxHighlightedCues: maxHighlightedCues))
         """
+    }
+
+    private static func compactDensityGuidance(maxHighlightedCues: Int) -> String {
+        guard maxHighlightedCues > 0 else {
+            return "No highlight slots remain, so return p=[] for every cue."
+        }
+        return "Actively scan every cue for reusable learning expressions. When enough genuinely useful candidates exist, use most of the available allowance (roughly 60% to 100%; with an allowance of 10, usually select 6 to 10 cues). Do not leave an obvious reusable phrase unannotated merely to be conservative, but never invent or lower quality to fill the allowance."
     }
 
     private static func compactCueInput(_ cues: [Cue]) -> String {

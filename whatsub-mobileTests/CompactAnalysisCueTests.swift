@@ -63,4 +63,17 @@ final class CompactAnalysisCueTests: XCTestCase {
         }
         XCTAssertEqual(budget.remaining, 0)
     }
+
+    func testCompactPromptEncouragesBalancedDensityWithoutChangingTheCeiling() {
+        let source = Cue(index: 0, time: 0, endTime: 1, text: "give it a shot")
+        let prompt = AnalysisPrompts.compactCueMessages(
+            [source],
+            maxHighlightedCues: 10
+        ).map(\.content).joined(separator: "\n")
+
+        XCTAssertTrue(prompt.contains("At most 10 cues"))
+        XCTAssertTrue(prompt.contains("hard ceiling, not a quota"))
+        XCTAssertTrue(prompt.contains("roughly 60% to 100%"))
+        XCTAssertTrue(prompt.contains("usually select 6 to 10 cues"))
+    }
 }
