@@ -128,7 +128,11 @@ struct ChatCompletionsClient {
                 throw policy
             }
             let bodyText = String(data: data, encoding: .utf8)?.prefix(400).description ?? ""
-            throw LlmError.api(http.statusCode, bodyText)
+            throw LlmError.api(
+                http.statusCode,
+                bodyText,
+                retryAfterMilliseconds: Self.retryAfterMilliseconds(from: http)
+            )
         }
 
         if r.usesRelaySSE {
@@ -146,7 +150,7 @@ struct ChatCompletionsClient {
               let choices = obj["choices"] as? [[String: Any]],
               let msg = choices.first?["message"] as? [String: Any] else {
             let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
-            throw LlmError.api(http.statusCode, "返回结构异常 · body=\(body)")
+            throw LlmError.api(http.statusCode, "返回结构异常 · body=\(body)", retryAfterMilliseconds: nil)
         }
         // DeepSeek v4 reasoning models (v4-flash, v4-pro) ALWAYS emit
         // `content: ""` and put the actual output in `reasoning_content`.
@@ -164,7 +168,7 @@ struct ChatCompletionsClient {
         // showed "服务端返回空内容" with no diagnostic body).
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let body = String(data: data, encoding: .utf8)?.prefix(400) ?? "<binary>"
-            throw LlmError.api(http.statusCode, "content 字段为空或仅空白 · body=\(body)")
+            throw LlmError.api(http.statusCode, "content 字段为空或仅空白 · body=\(body)", retryAfterMilliseconds: nil)
         }
         return content
     }
@@ -197,7 +201,7 @@ struct ChatCompletionsClient {
         let trimmed = collected.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             let head = text.prefix(400)
-            throw LlmError.api(status, "SSE 空内容 · sawTerminator=\(sawTerminator) head=\(head)")
+            throw LlmError.api(status, "SSE 空内容 · sawTerminator=\(sawTerminator) head=\(head)", retryAfterMilliseconds: nil)
         }
         return collected
     }
@@ -275,7 +279,11 @@ struct ChatCompletionsClient {
                         if let policy = Self.parsePolicy(body: Data(head.utf8), status: http.statusCode) {
                             throw policy
                         }
-                        throw LlmError.api(http.statusCode, head)
+                        throw LlmError.api(
+                            http.statusCode,
+                            head,
+                            retryAfterMilliseconds: Self.retryAfterMilliseconds(from: http)
+                        )
                     }
                     onLifecycle(.responseOpen)
 
@@ -311,7 +319,7 @@ struct ChatCompletionsClient {
                         }
                     }
                     if !emitted {
-                        throw LlmError.api(0, "SSE stream produced no content chunks")
+                        throw LlmError.api(0, "SSE stream produced no content chunks", retryAfterMilliseconds: nil)
                     }
                     continuation.finish()
                 } catch is CancellationError {
@@ -380,7 +388,7 @@ struct ChatCompletionsClient {
         /// of the body for engineer-side debugging. The user-facing string
         /// from `errorDescription` does NOT include `detail` (the cryptic JSON
         /// dump was the original "用户看不懂" complaint).
-        case api(Int, String)
+        case api(Int, String, retryAfterMilliseconds: Int?)
         case badResponse
         /// Backend policy error with a known shape: `{error, message}`. The
         /// `message` is the friendly Chinese string we WANT to show; `code`
@@ -413,7 +421,7 @@ struct ChatCompletionsClient {
                 // glance: -1001 timeout, -1003 host not found, -1004 cannot
                 // connect, -1009 offline, -1200 TLS handshake.
                 return "网络出错：\(d)（开着 VPN 的话试试关掉、或换个网络）"
-            case .api(let c, let detail):
+            case .api(let c, let detail, _):
                 // Earlier decision was to hide the detail because a 403 +
                 // raw JSON looked like garbage. But "服务返回了错误（200）"
                 // with no body context is impossible to debug — 200 with
@@ -433,6 +441,33 @@ struct ChatCompletionsClient {
                 return "请先阅读并同意 AI 功能的数据使用说明，再继续使用 AI。"
             }
         }
+    }
+
+    static func retryAfterMilliseconds(
+        from response: HTTPURLResponse,
+        now: Date = Date()
+    ) -> Int? {
+        guard let raw = response.value(forHTTPHeaderField: "Retry-After")?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        if let seconds = Double(raw), seconds >= 0 {
+            return Int((seconds * 1_000).rounded(.up))
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        for format in [
+            "EEE',' dd MMM yyyy HH':'mm':'ss z",
+            "EEEE',' dd-MMM-yy HH':'mm':'ss z",
+            "EEE MMM d HH':'mm':'ss yyyy",
+        ] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: raw) {
+                return max(0, Int((date.timeIntervalSince(now) * 1_000).rounded(.up)))
+            }
+        }
+        return nil
     }
 
     // MARK: - policy parsing
