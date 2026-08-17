@@ -1,6 +1,81 @@
 import Foundation
 
 enum AnalysisPrompts {
+    static func compactCueMessages(
+        _ cues: [Cue],
+        maxHighlightedCues: Int
+    ) -> [ChatMessage] {
+        return [
+            ChatMessage(role: "system", content: compactSystem(maxHighlightedCues: maxHighlightedCues)),
+            ChatMessage(role: "user", content: compactCueInput(cues)),
+        ]
+    }
+
+    static func compactRepairMessages(
+        _ cues: [Cue],
+        maxHighlightedCues: Int
+    ) -> [ChatMessage] {
+        let inputs = cues.map { cue in
+            let object: [String: Any] = [
+                "i": cue.index,
+                "text": cue.text,
+                "zh": cue.translation,
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+                  let line = String(data: data, encoding: .utf8) else { return "{}" }
+            return line
+        }.joined(separator: "\n")
+        return [
+            ChatMessage(role: "system", content: compactSystem(maxHighlightedCues: maxHighlightedCues)),
+            ChatMessage(
+                role: "user",
+                content: "Repair these unresolved or annotation-only cues. Keep the supplied zh unchanged and return one compact JSON line for every supplied index and no other indexes.\n\(inputs)"
+            ),
+        ]
+    }
+
+    private static func compactSystem(maxHighlightedCues: Int) -> String {
+        """
+        You are an English subtitle analyst for a learning app. Translate into natural conversational Chinese.
+
+        Output only JSON Lines, one single-line object for every requested cue in request order:
+        {"i":7,"zh":"我得赶上进度","p":[["catch up","赶上进度","表示补回落下的进度，常用于工作、学习或消息积压后追赶进度的自然语境。"]]}
+
+        Do not output markdown, prose, source text, timestamps, or additional fields.
+        p must contain zero or one [expression, meaningZh, usage] tuple.
+        expression must be an exact source substring containing one to four English words.
+        meaningZh must be an exact substring of zh.
+        usage must contain 25 to 90 Chinese Unicode code points and substantively explain meaning and context.
+        Choose reusable learner-worthy chunks: phrasal verbs, fixed collocations, common collocations, idioms, pragmatic spoken expressions, discourse expressions, or easily misunderstood uses. A familiar expression still qualifies when its combination or conversational use is worth reusing.
+        Omit greetings, fillers, names, numbers, function words, ordinary literal noun phrases, and simple compositional sentences.
+        p=[] is normal and preferred to a low-value annotation.
+        At most \(maxHighlightedCues) cues in this request may have a non-empty p array. This is a hard ceiling, not a quota.
+        \(compactDensityGuidance(maxHighlightedCues: maxHighlightedCues))
+        """
+    }
+
+    private static func compactDensityGuidance(maxHighlightedCues: Int) -> String {
+        guard maxHighlightedCues > 0 else {
+            return "No highlight slots remain, so return p=[] for every cue."
+        }
+        return "Actively scan every cue for reusable learning expressions. When enough genuinely useful candidates exist, use most of the available allowance (roughly 60% to 100%; with an allowance of 10, usually select 6 to 10 cues). Do not leave an obvious reusable phrase unannotated merely to be conservative, but never invent or lower quality to fill the allowance."
+    }
+
+    private static func compactCueInput(_ cues: [Cue]) -> String {
+        cues.map { cue in
+            let encoded: String
+            if let data = try? JSONSerialization.data(
+                withJSONObject: cue.text,
+                options: .fragmentsAllowed
+            ), let text = String(data: data, encoding: .utf8) {
+                encoded = text
+            } else {
+                encoded = "\"\(cue.text.replacingOccurrences(of: "\"", with: "\\\""))\""
+            }
+            return "\(cue.index)\t\(encoded)"
+        }.joined(separator: "\n")
+    }
+
     // VERBATIM from llm-core/prompts.ts SYSTEM_PROMPT_TEMPLATE with
     // {{STYLE_GUIDANCE}} resolved to the `colloquial` block. Do not paraphrase.
     static let system = #"""
@@ -147,7 +222,8 @@ them.
 
         Rules:
         - Deduplicate keyPhrases by expression (case-insensitive). Drop trivial fillers, greetings, and function words.
-        - keyPhrases meaningZh: 8-25 Chinese characters; usage: 30-80 Chinese characters.
+        - keyPhrases expressions contain one to four English words.
+        - keyPhrases meaningZh: 8-25 Chinese characters; usage: 25-90 Unicode code points with substantive context.
         - learningGuide.topSegments: choose at most 3. Each startTime/endTime MUST overlap a supplied cue time/endTime; do not invent timestamps or evidence.
         - cultureNotes, culturalContext, and recurringConcepts may be empty when unsupported by the transcript.
         - Do NOT output scores or ratings, percentages, rankings, generatedAt, or learningGuideSourceFingerprint.

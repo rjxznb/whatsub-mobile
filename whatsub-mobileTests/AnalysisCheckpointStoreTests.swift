@@ -138,7 +138,7 @@ final class AnalysisCheckpointStoreTests: XCTestCase {
         XCTAssertNil(try store.load(sourceID: "youtube-1", cues: source))
     }
 
-    func testPersistedEmptyPlaceholderSummaryRetriesAndCompletes() async throws {
+    func testPersistedEmptyPlaceholderSummaryIsRebuiltLocally() async throws {
         let store = AnalysisCheckpointStore(directory: directory)
         let source = cues(1)
         var checkpoint = store.makeCheckpoint(sourceID: "youtube-1", cues: source)
@@ -152,7 +152,7 @@ final class AnalysisCheckpointStoreTests: XCTestCase {
         ))
         try store.save(checkpoint)
         let loaded = try XCTUnwrap(store.load(sourceID: "youtube-1", cues: source))
-        let script = StreamScript([validSummaryJSON()])
+        let script = StreamScript([])
         let engine = AnalysisEngine(streamProvider: script.stream)
         var completedSummary: AnalysisSummary?
 
@@ -166,10 +166,12 @@ final class AnalysisCheckpointStoreTests: XCTestCase {
             onProgress: { _, _ in }
         )
 
-        XCTAssertEqual(script.requestCount, 1)
-        XCTAssertEqual(completedSummary?.keyPhrases.first?.expression, "wrap up")
-        XCTAssertEqual(result.learningGuide?.verdict, .selectSegments)
-        XCTAssertEqual(result.contextProfile?.theme, "Closing a discussion")
+        XCTAssertEqual(script.requestCount, 0)
+        XCTAssertNotNil(completedSummary)
+        XCTAssertTrue(completedSummary?.keyPhrases.isEmpty == true)
+        XCTAssertTrue(result.keyPhrases.isEmpty)
+        XCTAssertNil(result.learningGuide)
+        XCTAssertNil(result.contextProfile)
     }
 
     func testPersistedLegacyEmptyRawArraySummaryResumesWithoutProviderRequest() async throws {

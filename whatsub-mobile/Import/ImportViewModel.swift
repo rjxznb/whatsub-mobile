@@ -125,6 +125,8 @@ final class ImportViewModel: ObservableObject {
                 durationSec: durationSec,
                 completedBatches: resume.completedBatches,
                 completedSummary: resume.completedSummary,
+                partialBatch: resume.partialBatch,
+                onCueAccepted: resume.onCueAccepted,
                 onBatchCompleted: resume.onBatchCompleted,
                 onSummaryCompleted: resume.onSummaryCompleted,
                 shouldBeginRequest: resume.shouldBeginRequest,
@@ -672,9 +674,26 @@ final class ImportViewModel: ObservableObject {
             let resume = AnalysisResumeContext(
                 completedBatches: checkpoint.completedBatches,
                 completedSummary: checkpoint.completedSummary,
+                partialBatch: checkpoint.partialBatch,
+                onCueAccepted: { [checkpointStore] batchIndex, cueOffset, cue, needsRepair in
+                    try checkpointLease.withValid {
+                        try checkpoint.recordCue(
+                            batchIndex: batchIndex,
+                            cueOffset: cueOffset,
+                            cue: cue,
+                            needsAnnotationRepair: needsRepair,
+                            sourceCues: cues
+                        )
+                        try checkpointStore.save(checkpoint)
+                    }
+                },
                 onBatchCompleted: { [checkpointStore] index, result in
                     try checkpointLease.withValid {
-                        try checkpoint.recordBatch(index: index, result: result, sourceCues: cues)
+                        try checkpoint.commitPartialBatch(
+                            index: index,
+                            result: result,
+                            sourceCues: cues
+                        )
                         try checkpointStore.save(checkpoint)
                     }
                 },
@@ -724,6 +743,13 @@ final class ImportViewModel: ObservableObject {
                     case .timeout:
                         let latest = diagnosticTracker.snapshot()
                         if latest.parsedCues == 0 {
+                            if latest.stage == .retryBackoff {
+                                group.addTask { [noProgressWait] in
+                                    try await noProgressWait()
+                                    return .timeout
+                                }
+                                continue
+                            }
                             group.cancelAll()
                             throw BYOKNoProgressTimeoutError(event: latest)
                         }

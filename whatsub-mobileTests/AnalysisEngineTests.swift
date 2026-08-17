@@ -218,14 +218,13 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertTrue(err is CancellationError, "expected CancellationError, got \(err)")
     }
 
-    func testResumeSkipsCompletedBatchAndReportsNewBatchBeforeSummary() async throws {
+    func testResumeSkipsCompletedBatchAndCheckpointsLocalSummary() async throws {
         let source = (0..<60).map { cueFixture(index: $0) }
         let first = Array(source[0..<50])
         let secondJSON = source[50..<60].map { cue in
             "{\"index\":\(cue.index),\"time\":\(cue.time),\"endTime\":\(cue.endTime),\"text\":\"\(cue.text)\",\"translation\":\"译\",\"isKeyPoint\":false,\"highlightWords\":[],\"keyNotes\":{},\"highlightTranslations\":{}}"
         }.joined(separator: "\n")
-        let summaryJSON = validSummaryJSON()
-        let script = StreamScript([secondJSON, summaryJSON])
+        let script = StreamScript([secondJSON])
         let engine = AnalysisEngine(streamProvider: script.stream)
         var completed: [Int] = []
 
@@ -239,36 +238,63 @@ final class AnalysisEngineTests: XCTestCase {
             onProgress: { _, _ in }
         )
 
-        XCTAssertEqual(script.requestCount, 2)
+        XCTAssertEqual(script.requestCount, 1)
         XCTAssertEqual(completed, [1, 99])
         XCTAssertEqual(result.subtitles.count, 60)
     }
 
-    func testAnalyzeUsesKnownVideoDurationForSegmentExtendingPastLastCue() async throws {
-        let source = [Cue(index: 0, time: 55, endTime: 58, text: "Closing thought")]
-        let analyzedCue = #"{"index":0,"time":55,"endTime":58,"text":"Closing thought","translation":"结尾想法","isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}"#
-        let segment = #"{"startTime":57,"endTime":60,"title":"结尾重点片段","reason":"该片段与最后一条字幕在时间上有重叠，并且持续到视频结尾。","focusExpressions":[]}"#
-        let summary = validSummaryJSON().replacingOccurrences(
-            of: #""topSegments":[]"#,
-            with: #""topSegments":[\#(segment)]"#
-        )
-        let script = StreamScript([analyzedCue, summary])
+    func testLocalSummaryDeduplicatesPhrasesAndMapsValidatedAnnotations() async throws {
+        let source = [
+            Cue(index: 0, time: 0, endTime: 2, text: "Catch up on the news"),
+            Cue(index: 1, time: 2, endTime: 4, text: "We can catch up later"),
+            Cue(index: 2, time: 4, endTime: 6, text: "Missing fields")
+        ]
+        var completed = source
+        completed[0].translation = "补看新闻"
+        completed[0].isKeyPoint = true
+        completed[0].highlightWords = ["Catch up"]
+        completed[0].highlightTranslations = ["Catch up": "补看"]
+        completed[0].keyNotes = ["Catch up": "表示补上之前错过的内容，也可用于赶上进度或与熟人叙旧。"]
+        completed[1].translation = "我们之后可以聊聊"
+        completed[1].isKeyPoint = true
+        completed[1].highlightWords = ["catch up"]
+        completed[1].highlightTranslations = ["catch up": "聊聊"]
+        completed[1].keyNotes = ["catch up": "这里表示一段时间没见之后交换近况，常用于朋友之间的非正式交流。"]
+        completed[2].translation = "缺少字段"
+        completed[2].isKeyPoint = true
+        completed[2].highlightWords = ["Missing"]
+        completed[2].highlightTranslations = ["Missing": "缺少"]
+        let script = StreamScript([])
         let engine = AnalysisEngine(streamProvider: script.stream)
+        var checkpoint: AnalysisSummary?
+        var progress: [(Int, Int)] = []
 
         let result = try await engine.analyze(
             source,
-            durationSec: 60,
-            onProgress: { _, _ in }
+            completedBatches: [0: completed],
+            completedSummary: nil,
+            onBatchCompleted: { _, _ in XCTFail("completed batch must not repeat") },
+            onSummaryCompleted: { checkpoint = $0 },
+            shouldBeginRequest: { true },
+            onProgress: { progress.append(($0, $1)) }
         )
 
-        XCTAssertEqual(result.learningGuide?.topSegments.first?.startTime, 57)
-        XCTAssertEqual(result.learningGuide?.topSegments.first?.endTime, 60)
+        XCTAssertEqual(script.requestCount, 0)
+        XCTAssertEqual(result.keyPhrases.count, 1)
+        XCTAssertEqual(result.keyPhrases[0].expression, "Catch up")
+        XCTAssertEqual(result.keyPhrases[0].meaningZh, "补看")
+        XCTAssertEqual(result.keyPhrases[0].usage, "表示补上之前错过的内容，也可用于赶上进度或与熟人叙旧。")
+        XCTAssertEqual(checkpoint?.keyPhrases.count, 1)
+        XCTAssertNil(result.learningGuide)
+        XCTAssertNil(result.contextProfile)
+        XCTAssertEqual(progress.last?.0, source.count)
+        XCTAssertEqual(progress.last?.1, source.count)
     }
 
-    func testInvalidSummaryDoesNotCheckpointEmptyCompletion() async throws {
+    func testLocalEmptySummaryIsCheckpointedWithoutProviderRequest() async throws {
         let source = [cueFixture(index: 0)]
         let analyzedCue = #"{"index":0,"time":0,"endTime":1.5,"text":"word 0","translation":"译文","isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}"#
-        let script = StreamScript([analyzedCue, #"{"type":"summary","keyPhrases":[]}"#])
+        let script = StreamScript([analyzedCue])
         let engine = AnalysisEngine(streamProvider: script.stream)
         var checkpointed = false
 
@@ -283,7 +309,9 @@ final class AnalysisEngineTests: XCTestCase {
             onProgress: { _, _ in }
         )
 
-        XCTAssertFalse(checkpointed)
+        XCTAssertTrue(checkpointed)
+        XCTAssertEqual(script.requestCount, 1)
+        XCTAssertTrue(result.keyPhrases.isEmpty)
         XCTAssertNil(result.learningGuide)
         XCTAssertNil(result.contextProfile)
     }
@@ -327,10 +355,10 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertEqual(result.contextProfile?.theme, profile.theme)
     }
 
-    func testAnalyzeRejectsPartialBatchBeforeCheckpointCallback() async {
+    func testAnalyzeRetriesPartialBatchBeforeCheckpointCallback() async {
         let source = (0..<2).map { cueFixture(index: $0) }
         let partial = "{\"index\":0,\"time\":0,\"endTime\":1.5,\"text\":\"word 0\",\"translation\":\"译\",\"isKeyPoint\":false,\"highlightWords\":[],\"keyNotes\":{},\"highlightTranslations\":{}}"
-        let script = StreamScript([partial])
+        let script = StreamScript([partial, partial, partial, partial])
         let engine = AnalysisEngine(streamProvider: script.stream)
         var checkpointed = false
 
@@ -345,8 +373,9 @@ final class AnalysisEngineTests: XCTestCase {
                 onProgress: { _, _ in }
             )
             XCTFail("partial batch must fail")
-        } catch is AnalysisCheckpointError {
+        } catch is AnalysisContentError {
             XCTAssertFalse(checkpointed)
+            XCTAssertEqual(script.requestCount, 4)
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -385,16 +414,12 @@ final class AnalysisEngineTests: XCTestCase {
         {"index":0,"time":0,"endTime":1.5,"text":"word 0","translation":"译",\
         "isKeyPoint":false,"highlightWords":[],"keyNotes":{},"highlightTranslations":{}}
         """
-        let summaryJSON = validSummaryJSON()
-        var requestIndex = 0
         let engine = AnalysisEngine(diagnosticStreamProvider: { _, lifecycle in
             lifecycle(.connecting)
             lifecycle(.responseOpen)
             lifecycle(.firstContent)
-            let response = requestIndex == 0 ? cueJSON : summaryJSON
-            requestIndex += 1
             return AsyncThrowingStream { continuation in
-                continuation.yield(response)
+                continuation.yield(cueJSON)
                 continuation.finish()
             }
         })
@@ -414,7 +439,6 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertEqual(events.map(\.stage), [
             .preparingRequest, .connecting, .responseOpen, .firstContent,
             .parsing, .batchComplete,
-            .preparingRequest, .connecting, .responseOpen, .firstContent,
         ])
         XCTAssertEqual(events.first(where: { $0.stage == .parsing })?.parsedCues, 1)
         XCTAssertEqual(events.first(where: { $0.stage == .batchComplete })?.batch, 0)
