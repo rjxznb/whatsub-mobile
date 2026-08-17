@@ -497,6 +497,13 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: req)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            // URLSession commonly surfaces Swift task cancellation as
+            // NSURLErrorCancelled (-999). It is lifecycle/control flow, not a
+            // connectivity failure, so callers must be able to ignore it.
+            throw CancellationError()
         } catch {
             throw APIError.network(error.localizedDescription)
         }
@@ -602,6 +609,12 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: req)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            // Preserve cancellation semantics for SwiftUI task lifecycles.
+            // Treating -999 as a network outage produces a false error banner.
+            throw CancellationError()
         } catch {
             throw APIError.network(error.localizedDescription)
         }

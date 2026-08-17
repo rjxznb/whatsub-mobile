@@ -52,6 +52,7 @@ struct LibraryView: View {
                 .padding(.top, 4)
                 .padding(.bottom, 8)
                 content
+                    .refreshable { await reload() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Color.whatsubBg.ignoresSafeArea())
@@ -70,7 +71,6 @@ struct LibraryView: View {
             .onChange(of: appState.pendingLibraryEntryID) { _ in
                 openPendingEntryIfNeeded()
             }
-            .refreshable { await reload() }
             .sheet(isPresented: $showVPNHelp) {
                 VPNRuleHelpSheet()
             }
