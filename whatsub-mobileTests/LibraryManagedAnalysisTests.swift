@@ -481,7 +481,7 @@ final class LibraryManagedAnalysisTests: XCTestCase {
     }
 
     @MainActor
-    func testStreamCueAppearsImmediatelyAndResetRemovesAbandonedAttempt() async throws {
+    func testStreamCueAppearsImmediatelyAndRetryResetRetainsValidatedPreview() async throws {
         let api = API(
             details: [entry(translations: ["", ""])],
             jobs: [job()],
@@ -510,7 +510,7 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             )),
             token: "token"
         )
-        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["", ""])
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["即时翻译", ""])
     }
 
     @MainActor
