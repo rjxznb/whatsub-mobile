@@ -6,6 +6,7 @@ enum AnalysisCheckpointError: LocalizedError {
     case incompleteBatch(index: Int, expected: Int, actual: Int)
     case mismatchedCueIndex(batch: Int, expected: Int, actual: Int)
     case mismatchedSourceCue(batch: Int, index: Int)
+    case conflictingPartialCue(batch: Int, offset: Int)
     case corruptCheckpoint
 
     var errorDescription: String? {
@@ -14,12 +15,23 @@ enum AnalysisCheckpointError: LocalizedError {
             return "解析断点包含无效批次。"
         case .incompleteBatch:
             return "AI 返回的字幕批次不完整，未保存该断点。"
-        case .mismatchedCueIndex, .mismatchedSourceCue:
+        case .mismatchedCueIndex, .mismatchedSourceCue, .conflictingPartialCue:
             return "AI 返回的字幕顺序异常，未保存该断点。"
         case .corruptCheckpoint:
             return "解析断点已损坏。"
         }
     }
+}
+
+struct AnalysisPartialBatch: Codable {
+    struct Entry: Codable {
+        let cueOffset: Int
+        let cue: Cue
+        let needsAnnotationRepair: Bool
+    }
+
+    let batchIndex: Int
+    var entries: [Entry]
 }
 
 struct AnalysisCheckpoint: Codable {
@@ -28,16 +40,17 @@ struct AnalysisCheckpoint: Codable {
         let cues: [Cue]
     }
 
-    static let schemaVersion = 1
+    static let schemaVersion = 2
 
     let version: Int
     let fingerprint: String
     private var batches: [CompletedBatch]
     private(set) var completedSummary: AnalysisSummary?
+    private(set) var partialBatch: AnalysisPartialBatch?
     var updatedAt: Date
 
     private enum CodingKeys: String, CodingKey {
-        case version, fingerprint, batches, completedSummary, updatedAt
+        case version, fingerprint, batches, completedSummary, partialBatch, updatedAt
     }
 
     init(fingerprint: String, updatedAt: Date = Date()) {
@@ -45,15 +58,23 @@ struct AnalysisCheckpoint: Codable {
         self.fingerprint = fingerprint
         batches = []
         completedSummary = nil
+        partialBatch = nil
         self.updatedAt = updatedAt
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        version = try container.decode(Int.self, forKey: .version)
+        let decodedVersion = try container.decode(Int.self, forKey: .version)
+        guard decodedVersion == 1 || decodedVersion == Self.schemaVersion else {
+            throw AnalysisCheckpointError.corruptCheckpoint
+        }
+        version = Self.schemaVersion
         fingerprint = try container.decode(String.self, forKey: .fingerprint)
         batches = try container.decode([CompletedBatch].self, forKey: .batches)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        partialBatch = decodedVersion >= 2
+            ? try container.decodeIfPresent(AnalysisPartialBatch.self, forKey: .partialBatch)
+            : nil
 
         guard container.contains(.completedSummary),
               !(try container.decodeNil(forKey: .completedSummary)) else {
@@ -83,6 +104,7 @@ struct AnalysisCheckpoint: Codable {
         try container.encode(fingerprint, forKey: .fingerprint)
         try container.encode(batches, forKey: .batches)
         try container.encodeIfPresent(completedSummary, forKey: .completedSummary)
+        try container.encodeIfPresent(partialBatch, forKey: .partialBatch)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 
@@ -101,9 +123,8 @@ struct AnalysisCheckpoint: Codable {
                 index: index, expected: expected.count, actual: result.count
             )
         }
-        let start = index * 50
         for offset in result.indices {
-            let expectedIndex = start + offset
+            let expectedIndex = expected[offset].index
             guard result[offset].index == expectedIndex else {
                 throw AnalysisCheckpointError.mismatchedCueIndex(
                     batch: index, expected: expectedIndex, actual: result[offset].index
@@ -116,6 +137,100 @@ struct AnalysisCheckpoint: Codable {
         batches.removeAll { $0.index == index }
         batches.append(CompletedBatch(index: index, cues: result))
         batches.sort { $0.index < $1.index }
+        updatedAt = Date()
+    }
+
+    mutating func recordCue(
+        batchIndex: Int,
+        cueOffset: Int,
+        cue: Cue,
+        needsAnnotationRepair: Bool,
+        sourceCues: [Cue]
+    ) throws {
+        let allBatches = AnalysisEngine.batches(sourceCues)
+        guard allBatches.indices.contains(batchIndex) else {
+            throw AnalysisCheckpointError.invalidBatchIndex(batchIndex)
+        }
+        let sourceBatch = allBatches[batchIndex]
+        guard sourceBatch.indices.contains(cueOffset) else {
+            throw AnalysisCheckpointError.conflictingPartialCue(
+                batch: batchIndex,
+                offset: cueOffset
+            )
+        }
+        let source = sourceBatch[cueOffset]
+        guard cue.index == source.index, Self.sameSource(cue, source), !cue.translation.isEmpty else {
+            throw AnalysisCheckpointError.mismatchedSourceCue(
+                batch: batchIndex,
+                index: source.index
+            )
+        }
+        if let existingBatch = partialBatch, existingBatch.batchIndex != batchIndex {
+            throw AnalysisCheckpointError.conflictingPartialCue(
+                batch: batchIndex,
+                offset: cueOffset
+            )
+        }
+
+        var active = partialBatch ?? AnalysisPartialBatch(batchIndex: batchIndex, entries: [])
+        if let existingIndex = active.entries.firstIndex(where: { $0.cueOffset == cueOffset }) {
+            let existing = active.entries[existingIndex]
+            if existing.needsAnnotationRepair == needsAnnotationRepair {
+                guard Self.sameAnalyzedCue(existing.cue, cue) else {
+                    throw AnalysisCheckpointError.conflictingPartialCue(
+                        batch: batchIndex,
+                        offset: cueOffset
+                    )
+                }
+                return
+            }
+            guard existing.needsAnnotationRepair, !needsAnnotationRepair,
+                  Self.sameSource(existing.cue, cue),
+                  existing.cue.index == cue.index,
+                  existing.cue.translation == cue.translation else {
+                throw AnalysisCheckpointError.conflictingPartialCue(
+                    batch: batchIndex,
+                    offset: cueOffset
+                )
+            }
+            active.entries[existingIndex] = .init(
+                cueOffset: cueOffset,
+                cue: cue,
+                needsAnnotationRepair: false
+            )
+        } else {
+            active.entries.append(.init(
+                cueOffset: cueOffset,
+                cue: cue,
+                needsAnnotationRepair: needsAnnotationRepair
+            ))
+        }
+        active.entries.sort { $0.cueOffset < $1.cueOffset }
+        partialBatch = active
+        updatedAt = Date()
+    }
+
+    mutating func commitPartialBatch(
+        index: Int,
+        result: [Cue],
+        sourceCues: [Cue]
+    ) throws {
+        guard let partialBatch, partialBatch.batchIndex == index else {
+            try recordBatch(index: index, result: result, sourceCues: sourceCues)
+            return
+        }
+        guard partialBatch.entries.count == result.count,
+              partialBatch.entries.enumerated().allSatisfy({ position, entry in
+                  entry.cueOffset == position && Self.sameAnalyzedCue(entry.cue, result[position])
+              }) else {
+            throw AnalysisCheckpointError.incompleteBatch(
+                index: index,
+                expected: result.count,
+                actual: partialBatch.entries.count
+            )
+        }
+        try recordBatch(index: index, result: result, sourceCues: sourceCues)
+        self.partialBatch = nil
         updatedAt = Date()
     }
 
@@ -134,6 +249,21 @@ struct AnalysisCheckpoint: Codable {
             var validator = AnalysisCheckpoint(fingerprint: fingerprint)
             try validator.recordBatch(index: batch.index, result: batch.cues, sourceCues: sourceCues)
         }
+        if let partialBatch {
+            guard !seen.contains(partialBatch.batchIndex) else {
+                throw AnalysisCheckpointError.corruptCheckpoint
+            }
+            var validator = AnalysisCheckpoint(fingerprint: fingerprint)
+            for entry in partialBatch.entries {
+                try validator.recordCue(
+                    batchIndex: partialBatch.batchIndex,
+                    cueOffset: entry.cueOffset,
+                    cue: entry.cue,
+                    needsAnnotationRepair: entry.needsAnnotationRepair,
+                    sourceCues: sourceCues
+                )
+            }
+        }
         if completedSummary != nil {
             let expected = Set(AnalysisEngine.batches(sourceCues).indices)
             guard seen == expected else { throw AnalysisCheckpointError.corruptCheckpoint }
@@ -147,6 +277,16 @@ struct AnalysisCheckpoint: Codable {
         lhs.text == rhs.text
             && abs(lhs.time - rhs.time) <= 0.0051
             && abs(lhs.endTime - rhs.endTime) <= 0.0051
+    }
+
+    private static func sameAnalyzedCue(_ lhs: Cue, _ rhs: Cue) -> Bool {
+        lhs.index == rhs.index
+            && sameSource(lhs, rhs)
+            && lhs.translation == rhs.translation
+            && lhs.isKeyPoint == rhs.isKeyPoint
+            && lhs.highlightWords == rhs.highlightWords
+            && lhs.keyNotes == rhs.keyNotes
+            && lhs.highlightTranslations == rhs.highlightTranslations
     }
 }
 

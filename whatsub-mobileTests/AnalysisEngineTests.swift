@@ -327,10 +327,10 @@ final class AnalysisEngineTests: XCTestCase {
         XCTAssertEqual(result.contextProfile?.theme, profile.theme)
     }
 
-    func testAnalyzeRejectsPartialBatchBeforeCheckpointCallback() async {
+    func testAnalyzeRetriesPartialBatchBeforeCheckpointCallback() async {
         let source = (0..<2).map { cueFixture(index: $0) }
         let partial = "{\"index\":0,\"time\":0,\"endTime\":1.5,\"text\":\"word 0\",\"translation\":\"译\",\"isKeyPoint\":false,\"highlightWords\":[],\"keyNotes\":{},\"highlightTranslations\":{}}"
-        let script = StreamScript([partial])
+        let script = StreamScript([partial, partial, partial, partial])
         let engine = AnalysisEngine(streamProvider: script.stream)
         var checkpointed = false
 
@@ -345,8 +345,9 @@ final class AnalysisEngineTests: XCTestCase {
                 onProgress: { _, _ in }
             )
             XCTFail("partial batch must fail")
-        } catch is AnalysisCheckpointError {
+        } catch is AnalysisContentError {
             XCTAssertFalse(checkpointed)
+            XCTAssertEqual(script.requestCount, 4)
         } catch {
             XCTFail("unexpected error: \(error)")
         }

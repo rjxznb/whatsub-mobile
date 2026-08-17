@@ -6,6 +6,7 @@ enum AnalysisStreamStage: String, Codable, Equatable {
     case responseOpen = "response_open"
     case firstContent = "first_content"
     case parsing
+    case retryBackoff = "retry_backoff"
     case batchComplete = "batch_complete"
 }
 
