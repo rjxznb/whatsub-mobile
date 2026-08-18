@@ -648,7 +648,7 @@ final class LibraryDetailViewModel: ObservableObject {
         managedProgress = ManagedAnalysisProgressState(
             jobID: progress.jobID,
             status: managedStreamState.status ?? progress.status,
-            completedCues: managedStreamState.completedCues,
+            completedCues: managedStreamState.displayedCompletedCues,
             totalCues: managedStreamState.totalCues > 0
                 ? managedStreamState.totalCues
                 : progress.totalCues,

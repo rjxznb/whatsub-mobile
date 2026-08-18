@@ -65,6 +65,57 @@ final class ManagedAnalysisStreamStateTests: XCTestCase {
         XCTAssertEqual(state.previews.values.first?.translation, "new")
     }
 
+    func testDisplayedProgressAdvancesPerReceivedCueBeforeBatchCommit() {
+        var state = ManagedAnalysisStreamState()
+        state.apply(.snapshot(.init(
+            jobId: "job",
+            status: .running,
+            totalCues: 100,
+            completedCues: 0,
+            completedBatchCursor: -1,
+            latestEventId: nil,
+            errorCode: nil,
+            jobsAhead: nil,
+            estimatedStartSeconds: nil,
+            currentAttempt: nil
+        )))
+
+        state.apply(.cue(cueEvent(id: 1, index: 0)))
+        state.apply(.cue(cueEvent(id: 2, index: 1)))
+
+        XCTAssertEqual(state.completedCues, 0)
+        XCTAssertEqual(state.displayedCompletedCues, 2)
+    }
+
+    func testDisplayedProgressDoesNotDoubleCountCommittedBatchPreviews() {
+        var state = ManagedAnalysisStreamState()
+        state.apply(.snapshot(.init(
+            jobId: "job",
+            status: .running,
+            totalCues: 100,
+            completedCues: 0,
+            completedBatchCursor: -1,
+            latestEventId: nil,
+            errorCode: nil,
+            jobsAhead: nil,
+            estimatedStartSeconds: nil,
+            currentAttempt: nil
+        )))
+        state.apply(.cue(cueEvent(id: 1, index: 0)))
+        state.apply(.batchCommitted(.init(
+            eventId: 2,
+            jobId: "job",
+            eventType: "batch_committed",
+            batchIndex: 0,
+            attempt: 1,
+            cueIndex: nil,
+            payload: .init(batchIndex: 0, attempt: 1, completedCues: 50),
+            createdAt: 2
+        )))
+
+        XCTAssertEqual(state.displayedCompletedCues, 50)
+    }
+
     func testRetryResetRebasesValidatedPreviewsAndReplacesOnlyOneCue() {
         var state = ManagedAnalysisStreamState()
         state.apply(.cue(cueEvent(id: 1, attempt: 1, index: 0, translation: "retained zero")))

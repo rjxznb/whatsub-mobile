@@ -22,6 +22,14 @@ struct ManagedAnalysisStreamState {
     private(set) var estimatedStartSeconds: Int?
     private(set) var needsDurableResync = false
 
+    /// User-facing progress includes cues already received in the active
+    /// attempt. The server's completedCues remains batch-commit based for
+    /// durable recovery.
+    var displayedCompletedCues: Int {
+        let inFlight = previews.keys.filter { $0.batchIndex > completedBatchCursor }.count
+        return min(totalCues, completedCues + inFlight)
+    }
+
     mutating func apply(_ event: ManagedAnalysisStreamEvent) {
         switch event {
         case .connected:
@@ -43,6 +51,7 @@ struct ManagedAnalysisStreamState {
         case let .batchCommitted(event):
             guard shouldApply(event.eventId) else { return }
             completedCues = max(completedCues, event.completedCues)
+            completedBatchCursor = max(completedBatchCursor, event.payload.batchIndex)
             lastEventID = event.eventId
         case let .phase(event):
             guard shouldApply(event.eventId) else { return }
