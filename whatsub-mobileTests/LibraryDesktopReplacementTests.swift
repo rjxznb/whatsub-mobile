@@ -75,8 +75,39 @@ private actor LibraryDesktopReplacementAPISpy: LibraryDesktopReplacementAPI {
     }
 }
 
+private actor CancelledLibraryDetailAPI: LibraryDesktopReplacementAPI {
+    func libraryEntry(id: String, token: String) async throws -> LibraryEntryDetail {
+        throw CancellationError()
+    }
+
+    func listImportQueue(
+        token: String
+    ) async throws -> (items: [ImportQueueItem], desktopSeenSecondsAgo: Int?) {
+        XCTFail("cancelled detail load must not query replacement status")
+        return ([], nil)
+    }
+
+    func enqueueReplacement(
+        url: String,
+        targetLibraryEntryId: String,
+        token: String
+    ) async throws -> EnqueueImportResponse {
+        XCTFail("cancelled detail load must not enqueue a replacement")
+        throw CancellationError()
+    }
+}
+
 @MainActor
 final class LibraryDesktopReplacementTests: XCTestCase {
+    func testCancelledDetailRefreshDoesNotSurfaceNetworkError() async {
+        let viewModel = LibraryDetailViewModel(api: CancelledLibraryDetailAPI())
+
+        await viewModel.load(id: "library-entry-1", token: "token")
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertFalse(viewModel.loading)
+    }
+
     func testToolbarIndicatorReflectsReplacementProgressAndFailure() {
         XCTAssertEqual(
             DesktopReplacementToolbarPresentation.indicator(

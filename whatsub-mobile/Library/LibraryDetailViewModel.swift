@@ -248,6 +248,12 @@ final class LibraryDetailViewModel: ObservableObject {
                 )
             }
             return
+        } catch is CancellationError {
+            guard revision == loadRevision else { return }
+            // Pull-to-refresh tasks can be cancelled when SwiftUI replaces the
+            // scroll container. Keep the already displayed detail and do not
+            // misreport that lifecycle event as a network failure.
+            errorMessage = nil
         } catch APIError.unauthorized {
             guard revision == loadRevision else { return }
             errorMessage = "登录已过期，请到「我的」重新登录"
