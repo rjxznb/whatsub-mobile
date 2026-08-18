@@ -48,7 +48,7 @@ enum CompactAnalysisCue {
 
     static func capacity(for cueCount: Int) -> Int {
         guard cueCount > 0 else { return 0 }
-        return min(10, Int(ceil(Double(cueCount) / 5.0)))
+        return min(20, Int(ceil(Double(cueCount) / 2.5)))
     }
 
     static func validate(

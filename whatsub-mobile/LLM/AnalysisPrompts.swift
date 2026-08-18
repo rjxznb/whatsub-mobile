@@ -58,7 +58,7 @@ enum AnalysisPrompts {
         guard maxHighlightedCues > 0 else {
             return "No highlight slots remain, so return p=[] for every cue."
         }
-        return "Actively scan every cue for reusable learning expressions. When enough genuinely useful candidates exist, use most of the available allowance (roughly 60% to 100%; with an allowance of 10, usually select 6 to 10 cues). Do not leave an obvious reusable phrase unannotated merely to be conservative, but never invent or lower quality to fill the allowance."
+        return "Actively scan every cue for reusable learning expressions. When enough genuinely useful candidates exist, use most of the available allowance (roughly 60% to 100%; with an allowance of 20, usually select 12 to 20 cues). Do not leave an obvious reusable phrase unannotated merely to be conservative, but never invent or lower quality to fill the allowance."
     }
 
     private static func compactCueInput(_ cues: [Cue]) -> String {

@@ -15,7 +15,7 @@ final class CompactAnalysisCueTests: XCTestCase {
         ]
 
         let result = try CompactAnalysisCue.validate(output, requested: [7: source])
-        let accepted = CompactHighlightBudget(limit: 10).apply(to: result)
+        let accepted = CompactHighlightBudget(limit: 20).apply(to: result)
 
         XCTAssertEqual(accepted.cue.text, source.text)
         XCTAssertEqual(accepted.cue.time, source.time)
@@ -47,10 +47,10 @@ final class CompactAnalysisCueTests: XCTestCase {
     }
 
     func testHighlightCapacityAndSharedBudget() throws {
-        XCTAssertEqual(CompactAnalysisCue.capacity(for: 50), 10)
-        XCTAssertEqual(CompactAnalysisCue.capacity(for: 13), 3)
-        let budget = CompactHighlightBudget(limit: 10)
-        for index in 0..<11 {
+        XCTAssertEqual(CompactAnalysisCue.capacity(for: 50), 20)
+        XCTAssertEqual(CompactAnalysisCue.capacity(for: 13), 6)
+        let budget = CompactHighlightBudget(limit: 20)
+        for index in 0..<21 {
             let text = "catch up \(index)"
             let source = Cue(index: index, time: 0, endTime: 1, text: text)
             let result = try CompactAnalysisCue.validate([
@@ -59,7 +59,7 @@ final class CompactAnalysisCueTests: XCTestCase {
                 "p": [["catch up", "赶上进度", usage]],
             ], requested: [index: source])
             let accepted = budget.apply(to: result)
-            XCTAssertEqual(accepted.cue.isKeyPoint, index < 10)
+            XCTAssertEqual(accepted.cue.isKeyPoint, index < 20)
         }
         XCTAssertEqual(budget.remaining, 0)
     }
@@ -68,12 +68,12 @@ final class CompactAnalysisCueTests: XCTestCase {
         let source = Cue(index: 0, time: 0, endTime: 1, text: "give it a shot")
         let prompt = AnalysisPrompts.compactCueMessages(
             [source],
-            maxHighlightedCues: 10
+            maxHighlightedCues: 20
         ).map(\.content).joined(separator: "\n")
 
-        XCTAssertTrue(prompt.contains("At most 10 cues"))
+        XCTAssertTrue(prompt.contains("At most 20 cues"))
         XCTAssertTrue(prompt.contains("hard ceiling, not a quota"))
         XCTAssertTrue(prompt.contains("roughly 60% to 100%"))
-        XCTAssertTrue(prompt.contains("usually select 6 to 10 cues"))
+        XCTAssertTrue(prompt.contains("usually select 12 to 20 cues"))
     }
 }
