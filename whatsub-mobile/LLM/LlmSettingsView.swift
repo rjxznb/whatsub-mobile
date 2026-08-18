@@ -146,6 +146,27 @@ struct LlmSettingsView: View {
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
                         .foregroundStyle(.whatsubInk)
+                    Menu {
+                        ForEach(LlmModelCatalog.vendors, id: \.name) { vendor in
+                            Section(vendor.name) {
+                                ForEach(vendor.models, id: \.self) { suggestedModel in
+                                    Button(suggestedModel) {
+                                        model = suggestedModel
+                                        if !vendor.baseURL.isEmpty {
+                                            baseUrl = vendor.baseURL
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("从官方推荐列表选择", systemImage: "list.bullet.rectangle")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.whatsubAccent)
+                    }
+                    Text("列表按厂商官网 2026-08-18 文档核对；也可以直接输入服务商自定义模型 ID。")
+                        .font(.caption2)
+                        .foregroundStyle(.whatsubInkFaint)
                 }
                 Section {
                     Button(action: save) {

@@ -811,7 +811,7 @@ final class ImportViewModel: ObservableObject {
             if settings.useManagedRelay {
                 hint = "\n\n字幕仍在内存里，点「重试 AI 解析」会跳过字幕抓取直接重跑 AI。最快恢复：关 VPN 后点重试。一劳永逸：见底部「VPN 规则」。"
             } else {
-                hint = "\n\n字幕仍在内存里，点「重试 AI 解析」可以重试。报「200」通常是 baseUrl 或 model 名不对——检查「我的 → LLM 设置」里 baseUrl 是否带 `/v1` 后缀（DeepSeek 是 `https://api.deepseek.com/v1`）、model 是 `deepseek-chat` 之类厂商支持的型号。"
+                hint = "\n\n字幕仍在内存里，点「重试 AI 解析」可以重试。报「200」通常是 baseUrl 或 model 名不对——检查「我的 → LLM 设置」里 baseUrl 是否带 `/v1` 后缀（DeepSeek 是 `https://api.deepseek.com/v1`）、model 是 `deepseek-v4-flash` 之类厂商支持的型号。"
             }
             if isCurrent(generation) { state = .error(base + hint) }
         }
