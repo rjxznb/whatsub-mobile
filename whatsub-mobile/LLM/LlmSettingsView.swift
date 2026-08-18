@@ -6,8 +6,8 @@ import SwiftUI
 ///    `/chat/completions` to `whatsub.eversay.cc/api/llm/v1` with the
 ///    user's session bearer; the relay enforces tier-based monthly /
 ///    lifetime budgets and forces the cheap DeepSeek model server-side.
-///    The "quota" section shows used/limit/tier so the user knows how
-///    much they have left without leaving the screen.
+///    Monthly managed-relay quota is shown in 我的 → 云端同步 so it is
+///    visible alongside the other cloud allowances.
 ///
 /// 2. **BYOK 高级** (collapsed when relay is on). Lets a power user paste
 ///    their own provider config — survives the relay being down, lets
@@ -20,10 +20,6 @@ struct LlmSettingsView: View {
     @State private var apiKey: String = ""
     @State private var model: String = ""
     @State private var saved: Bool = false
-
-    @State private var quota: LlmQuota?
-    @State private var quotaError: String?
-    @State private var quotaLoading: Bool = false
 
     /// Manual re-entry for the AI 数据使用说明 sheet — see same field +
     /// pattern in MeView. Convenient here too since LLM 设置 is exactly
@@ -113,15 +109,6 @@ struct LlmSettingsView: View {
                     .foregroundStyle(.whatsubInkFaint)
             }
 
-            // ---- Quota panel (only when relay is on) ----
-            if useManagedRelay {
-                Section {
-                    quotaBody
-                } header: {
-                    Text("本月额度").foregroundStyle(.whatsubInkMuted)
-                }
-            }
-
             // ---- BYOK fields — collapse when relay is on ----
             // 2026-06-09 — placeholders changed from specific provider names /
             // model strings ("https://api.deepseek.com/v1", "deepseek-v4-flash")
@@ -185,11 +172,7 @@ struct LlmSettingsView: View {
         .background(Color.whatsubBg)
         .navigationTitle("LLM 设置")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            load()
-            Task { await reloadQuota() }
-        }
-        .refreshable { await reloadQuota() }
+        .onAppear { load() }
         // Re-read AI consent disclosure — same view the app auto-presents
         // on first launch. Idempotent re-accept.
         .sheet(isPresented: $showAIConsent) {
@@ -197,102 +180,8 @@ struct LlmSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var quotaBody: some View {
-        if quotaLoading && quota == nil {
-            HStack { Spacer(); ProgressView().tint(.whatsubAccent); Spacer() }
-                .padding(.vertical, 6)
-        } else if let q = quota {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(tierLabel(q.tier))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.whatsubInk)
-                    Spacer()
-                    Text(formatUsage(q))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.whatsubInkMuted)
-                }
-                ProgressView(value: usagePct(q))
-                    .tint(usagePct(q) > 0.9 ? .red : .whatsubAccent)
-                Text(footerNote(for: q))
-                    .font(.caption2)
-                    .foregroundStyle(.whatsubInkMuted)
-            }
-            .padding(.vertical, 2)
-        } else if let err = quotaError {
-            // 403 license_blocked / free_used_up / etc all surface as
-            // friendly server-supplied Chinese here. The body is long-
-            // form, so let it wrap rather than truncating.
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.yellow)
-                    Text(err)
-                        .font(.footnote)
-                        .foregroundStyle(.whatsubInkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Button {
-                    useManagedRelay = false
-                    autosave()
-                } label: {
-                    Label("关闭托管 · 改用自己的 API key", systemImage: "wrench.adjustable")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.whatsubAccent)
-                }
-            }
-        } else if appState.session == nil {
-            Text("请先登录后查看额度")
-                .font(.footnote)
-                .foregroundStyle(.whatsubInkMuted)
-        } else {
-            Text("—")
-                .font(.footnote)
-                .foregroundStyle(.whatsubInkFaint)
-        }
-    }
-
     // ---- formatting helpers ----
 
-    private func tierLabel(_ tier: String) -> String {
-        switch tier {
-        case "pro": return "已订阅 Pro"
-        case "trial": return "桌面试用"
-        case "free": return "免费体验"
-        default: return tier
-        }
-    }
-
-    /// "1.2k / 5.0M tokens" — friendly summed read of used/limit.
-    private func formatUsage(_ q: LlmQuota) -> String {
-        "\(short(q.used)) / \(short(q.limit)) tokens"
-    }
-
-    private func short(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
-        if n >= 1_000 { return String(format: "%.1fk", Double(n) / 1_000) }
-        return "\(n)"
-    }
-
-    private func usagePct(_ q: LlmQuota) -> Double {
-        guard q.limit > 0 else { return 0 }
-        return min(1.0, Double(q.used) / Double(q.limit))
-    }
-
-    private func footerNote(for q: LlmQuota) -> String {
-        if q.tier == "free" {
-            return "免费体验包 LIFETIME,用完后请升级 Pro 或开启 BYOK"
-        }
-        if q.tier == "pro", q.periodResetAt > 0 {
-            let date = Date(timeIntervalSince1970: Double(q.periodResetAt) / 1_000)
-            let fmt = DateFormatter()
-            fmt.locale = Locale(identifier: "zh_CN")
-            fmt.dateStyle = .medium
-            return "下次重置:\(fmt.string(from: date))"
-        }
-        return ""
-    }
 
     // ---- I/O ----
 
@@ -322,25 +211,8 @@ struct LlmSettingsView: View {
         var s = LlmSettingsStore.load()
         s.useManagedRelay = useManagedRelay
         LlmSettingsStore.save(s)
-        if useManagedRelay {
-            Task { await reloadQuota() }
-        }
     }
 
-    @MainActor
-    private func reloadQuota() async {
-        guard let token = appState.session?.sessionToken else { return }
-        quotaLoading = true
-        quotaError = nil
-        do {
-            quota = try await WhatsubAPI.shared.llmQuota(token: token)
-        } catch let e as APIError {
-            quotaError = e.chinese
-        } catch {
-            quotaError = "额度查询失败:\(error.localizedDescription)"
-        }
-        quotaLoading = false
-    }
 }
 
 #Preview {

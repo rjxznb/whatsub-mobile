@@ -5,6 +5,10 @@ struct MeView: View {
     @EnvironmentObject var appState: AppState
     @State private var quota: LibraryQuota?
     @State private var corpusQ: CorpusQuota?
+    @State private var llmQuota: LlmQuota?
+    @State private var llmQuotaLoading = false
+    @State private var llmQuotaError: String?
+    @State private var useManagedRelay = true
     @EnvironmentObject var store: StoreManager
     @EnvironmentObject var featureAccess: FeatureAccessStore
     @State private var showManageSubscriptions = false
@@ -58,9 +62,27 @@ struct MeView: View {
     private func reloadQuota() async {
         await store.reportCurrentEntitlements()
         await appState.refreshMe()
+        useManagedRelay = LlmSettingsStore.load().useManagedRelay
         if let t = appState.session?.sessionToken {
             quota = try? await WhatsubAPI.shared.libraryQuota(token: t)
             corpusQ = try? await WhatsubAPI.shared.corpusQuota(token: t)
+            if useManagedRelay {
+                llmQuotaLoading = true
+                llmQuotaError = nil
+                do {
+                    llmQuota = try await WhatsubAPI.shared.llmQuota(token: t)
+                } catch let e as APIError {
+                    llmQuota = nil
+                    llmQuotaError = e.chinese
+                } catch {
+                    llmQuota = nil
+                    llmQuotaError = "额度查询失败"
+                }
+                llmQuotaLoading = false
+            } else {
+                llmQuota = nil
+                llmQuotaError = nil
+            }
         }
     }
 
@@ -92,6 +114,7 @@ struct MeView: View {
                             LabeledContent("个人语料库", value: "\(cq.used)/\(cq.limit)")
                                 .foregroundStyle(.whatsubInk)
                         }
+                        managedLlmQuotaRow
                         // 2026-06-11 — was "if currentUser.hasActiveSubscription ==
                         // true". Apple Guideline 2.1(b) rejected build 299:
                         // reviewer purchased via StoreKit but the /verify
@@ -321,6 +344,72 @@ struct MeView: View {
             // (photo + live-scene sheets moved to CameraTabView 2026-06-05;
             //  待同步暂存 sheet removed 2026-06-07.)
         }
+    }
+
+    @ViewBuilder
+    private var managedLlmQuotaRow: some View {
+        if useManagedRelay {
+            if llmQuotaLoading && llmQuota == nil {
+                HStack {
+                    Label("本月 AI 额度", systemImage: "sparkles")
+                    Spacer()
+                    ProgressView().controlSize(.small).tint(.whatsubAccent)
+                }
+                .foregroundStyle(.whatsubInk)
+            } else if let q = llmQuota {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label("本月 AI 额度", systemImage: "sparkles")
+                            .foregroundStyle(.whatsubInk)
+                        Spacer()
+                        Text("\(shortQuota(q.used))/\(shortQuota(q.limit)) tokens")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.whatsubInkMuted)
+                    }
+                    ProgressView(value: quotaUsage(q))
+                        .tint(quotaUsage(q) > 0.9 ? .red : .whatsubAccent)
+                    Text(quotaFooter(q))
+                        .font(.caption2)
+                        .foregroundStyle(.whatsubInkMuted)
+                }
+                .padding(.vertical, 2)
+            } else if let llmQuotaError {
+                VStack(alignment: .leading, spacing: 3) {
+                    LabeledContent("本月 AI 额度", value: "暂不可用")
+                        .foregroundStyle(.whatsubInk)
+                    Text(llmQuotaError)
+                        .font(.caption2)
+                        .foregroundStyle(.whatsubInkMuted)
+                }
+            } else if appState.session == nil {
+                LabeledContent("本月 AI 额度", value: "请先登录")
+                    .foregroundStyle(.whatsubInkMuted)
+            }
+        } else {
+            LabeledContent("AI 模式", value: "BYOK")
+                .foregroundStyle(.whatsubInk)
+        }
+    }
+
+    private func shortQuota(_ value: Int) -> String {
+        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
+        if value >= 1_000 { return String(format: "%.1fk", Double(value) / 1_000) }
+        return "\(value)"
+    }
+
+    private func quotaUsage(_ quota: LlmQuota) -> Double {
+        guard quota.limit > 0 else { return 0 }
+        return min(1, Double(quota.used) / Double(quota.limit))
+    }
+
+    private func quotaFooter(_ quota: LlmQuota) -> String {
+        if quota.tier == "free" { return "免费体验包，用完后可订阅 Pro 或切换 BYOK" }
+        guard quota.periodResetAt > 0 else { return "本月托管 AI 配额" }
+        let date = Date(timeIntervalSince1970: Double(quota.periodResetAt) / 1_000)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateStyle = .medium
+        return "下次重置：\(formatter.string(from: date))"
     }
 
     // Reflects the user's Pro entitlement source: website license / iOS 订阅 /
