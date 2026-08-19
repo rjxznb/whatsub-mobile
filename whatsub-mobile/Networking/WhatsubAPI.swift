@@ -27,6 +27,24 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
         self.session = session
     }
 
+    /// Best-effort conversion-funnel telemetry. It must never affect an import,
+    /// transcript, analysis, or purchase flow when the network is unavailable.
+    func trackFunnel(_ eventName: String, metadata: [String: String] = [:], token: String) async {
+        guard let body = try? JSONSerialization.data(withJSONObject: [
+            "eventName": eventName,
+            "occurredAt": Int(Date().timeIntervalSince1970 * 1000),
+            "metadata": metadata,
+        ]) else { return }
+        var req = URLRequest(url: Endpoints.analytics("funnel"))
+        req.httpMethod = "POST"
+        req.httpBody = body
+        req.timeoutInterval = 8
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("ios", forHTTPHeaderField: "X-Whatsub-Client")
+        _ = try? await session.data(for: req)
+    }
+
     // ----- Auth -----
 
     func sendCode(email: String) async throws {
@@ -73,6 +91,7 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysi
     func verifyPurchase(token: String, signedTransactionInfo: String) async throws {
         let body = try JSONEncoder().encode(VerifyPurchaseRequest(signedTransactionInfo: signedTransactionInfo))
         _ = try await post(Endpoints.iap("verify"), body: body, bearer: token)
+        await trackFunnel("purchase_success", token: token)
     }
 
     // ----- Pro AI feature trials -----

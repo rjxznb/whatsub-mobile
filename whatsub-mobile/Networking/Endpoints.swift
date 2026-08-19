@@ -23,6 +23,7 @@ enum Endpoints {
     /// to APNs whenever the import-queue progress changes for that user.
     /// See docs/superpowers/plans/2026-06-18-ios-live-activity-import-queue.md.
     static let liveActivityBase = "https://whatsub.eversay.cc/api/live-activity"
+    static let analyticsBase = "https://whatsub.eversay.cc/api/license/analytics"
 
     static func auth(_ path: String) -> URL { URL(string: "\(authBase)/\(path)")! }
     static func iap(_ path: String) -> URL { URL(string: "\(iapBase)/\(path)")! }
@@ -31,4 +32,5 @@ enum Endpoints {
     static func library(_ path: String) -> URL { URL(string: "\(libraryBase)/\(path)")! }
     static func llm(_ path: String) -> URL { URL(string: "\(llmBase)/\(path)")! }
     static func liveActivity(_ path: String) -> URL { URL(string: "\(liveActivityBase)/\(path)")! }
+    static func analytics(_ path: String) -> URL { URL(string: "\(analyticsBase)/\(path)")! }
 }

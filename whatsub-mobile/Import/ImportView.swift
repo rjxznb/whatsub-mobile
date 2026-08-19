@@ -18,6 +18,7 @@ struct ImportView: View {
     @State private var showLLMSettings = false
     @State private var showAnalysisDiagnostics = false
     @State private var routedManagedJobID: String?
+    @State private var trackedFunnelStates = Set<String>()
 
     private let initialURL: String?
 
@@ -108,6 +109,7 @@ struct ImportView: View {
             )
         }
         .onReceive(vm.$state) { state in
+            trackFunnelState(state)
             guard case .managedJob(let job) = state,
                   let entryID = job.provisionalEntryID,
                   routedManagedJobID != job.jobId else { return }
@@ -737,7 +739,24 @@ struct ImportView: View {
         // run() now auto-flows extract → analyze → sync → done; needs the
         // token + email up front so it can chain into sync without
         // bouncing through a manual "同步到云库" confirmation.
+        Task {
+            await WhatsubAPI.shared.trackFunnel("video_import_started", token: token)
+        }
         vm.start(urlOrId: urlInput, token: token, email: appState.session?.email)
+    }
+
+    private func trackFunnelState(_ state: ImportViewModel.State) {
+        let event: String?
+        switch state {
+        case .extracting: event = "transcript_started"
+        case .analyzing: event = "analysis_started"
+        case .done: event = "analysis_completed"
+        case .extractFailed(_, _), .error(_): event = "analysis_failed"
+        default: event = nil
+        }
+        guard let event, !trackedFunnelStates.contains(event), let token = appState.session?.sessionToken else { return }
+        trackedFunnelStates.insert(event)
+        Task { await WhatsubAPI.shared.trackFunnel(event, token: token) }
     }
 
     /// Coarse time estimate for the streaming analyze stage. ~1s per cue
