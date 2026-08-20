@@ -187,14 +187,15 @@ final class ImportViewModel: ObservableObject {
 
     /// Cancel whatever is running. Safe to call when nothing is.
     /// The extracted captions stay in the on-disk cache — that's harmless and
-    /// makes a later re-import instant; only the network work stops.
+    /// makes a later re-import instant; only the network work stops. Any
+    /// already accepted analysis cues stay in the checkpoint too, so stopping
+    /// during a batch never discards work that was already persisted.
     func cancelWork() {
         runGeneration += 1
         workTask?.cancel()
         workTask = nil
         cancelPendingRetryTask()
         byokPaused = false
-        deleteCurrentCheckpoint()
     }
 
     /// Backgrounding does not cancel an in-flight BYOK request. The engine
