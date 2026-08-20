@@ -15,9 +15,18 @@ protocol LibraryDesktopReplacementAPI {
     ) async throws -> EnqueueImportResponse
 }
 
+protocol LibraryCueSyncAPI {
+    func updateLibraryEntryCues(
+        entryId: String,
+        analysis: AnalysisJson,
+        transcriptSrt: String,
+        token: String
+    ) async throws
+}
+
 /// All backend HTTP lives here. An actor so concurrent calls serialize their
 /// access to the (rare) shared state and so the type is Sendable-safe.
-actor WhatsubAPI: LibraryDesktopReplacementAPI, FeatureAccessAPI, ManagedAnalysisClientProtocol,
+actor WhatsubAPI: LibraryDesktopReplacementAPI, LibraryCueSyncAPI, FeatureAccessAPI, ManagedAnalysisClientProtocol,
     LearningGuidePersisting {
     static let shared = WhatsubAPI()
 

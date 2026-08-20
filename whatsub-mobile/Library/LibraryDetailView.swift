@@ -197,6 +197,10 @@ struct LibraryDetailView: View {
                 EmptyView()
             }
         }
+        .appleTranslationFallback(
+            viewModel: vm,
+            token: appState.session?.sessionToken
+        )
         .navigationTitle(vm.entry?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         // Landscape = fullscreen: hide the nav bar + tab bar + status bar so the
@@ -721,7 +725,7 @@ struct LibraryDetailView: View {
         if let progress = vm.managedProgress, let label = vm.managedBannerLabel {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    if progress.isPolling {
+                    if vm.managedBannerIsActive {
                         ManagedAnalysisSparkleIcon(isActive: true)
                     } else {
                         Image(systemName: "exclamationmark.circle")
@@ -736,7 +740,7 @@ struct LibraryDetailView: View {
                             guard let token = appState.session?.sessionToken else { return }
                             Task { await vm.cancelManagedAnalysis(token: token) }
                         }
-                    } else if progress.canResume {
+                    } else if vm.managedCanResume {
                         Button(vm.managedResuming ? "正在继续…" : "继续 AI 解析") {
                             guard let token = appState.session?.sessionToken else { return }
                             Task { await vm.resumeManagedAnalysis(token: token) }
@@ -747,8 +751,8 @@ struct LibraryDetailView: View {
                     }
                 }
 
-                if progress.isPolling {
-                    ProgressView(value: progress.fraction)
+                if vm.managedBannerIsActive, let fraction = vm.managedBannerFraction {
+                    ProgressView(value: fraction)
                         .tint(.whatsubAccent)
                 }
 
@@ -759,7 +763,11 @@ struct LibraryDetailView: View {
                         .accessibilityLabel(vm.managedQueuePresentation.accessibilityLabel)
                 }
 
-                if let error = vm.managedProgressError {
+                if let detail = vm.appleTranslationDetail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.whatsubInkMuted)
+                } else if let error = vm.managedProgressError {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.whatsubInkMuted)

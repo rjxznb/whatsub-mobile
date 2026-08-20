@@ -1,0 +1,76 @@
+import SwiftUI
+import Translation
+
+@available(iOS 18.0, *)
+private struct AppleTranslationFallbackModifier: ViewModifier {
+    @ObservedObject var viewModel: LibraryDetailViewModel
+    let token: String?
+    @State private var configuration: TranslationSession.Configuration?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { scheduleIfNeeded() }
+            .onChange(of: viewModel.appleTranslationRequestRevision) { _ in
+                scheduleIfNeeded()
+            }
+            .translationTask(configuration) { session in
+                guard let token else {
+                    await viewModel.failAppleTranslation()
+                    return
+                }
+                let items = await viewModel.appleTranslationRequests
+                await viewModel.beginAppleTranslation()
+                do {
+                    let requests = items.map {
+                        TranslationSession.Request(
+                            sourceText: $0.sourceText,
+                            clientIdentifier: String($0.cueIndex)
+                        )
+                    }
+                    for try await response in session.translate(batch: requests) {
+                        try Task.checkCancellation()
+                        guard let identifier = response.clientIdentifier,
+                              let cueIndex = Int(identifier) else { continue }
+                        try await viewModel.acceptAppleTranslation(
+                            cueIndex: cueIndex,
+                            translation: response.targetText
+                        )
+                    }
+                    try Task.checkCancellation()
+                    await viewModel.finishAppleTranslation(token: token)
+                } catch is CancellationError {
+                    // SwiftUI cancels translationTask when the detail view goes
+                    // away. Per-response checkpoints make the next visit resume.
+                } catch {
+                    await viewModel.failAppleTranslation()
+                }
+            }
+    }
+
+    private func scheduleIfNeeded() {
+        guard viewModel.appleTranslationPhase.shouldRunTranslationTask else { return }
+        if configuration == nil {
+            configuration = TranslationSession.Configuration(
+                source: Locale.Language(identifier: "en"),
+                target: Locale.Language(identifier: "zh-Hans")
+            )
+        } else {
+            configuration?.invalidate()
+        }
+    }
+}
+
+extension View {
+    @MainActor
+    @ViewBuilder
+    func appleTranslationFallback(
+        viewModel: LibraryDetailViewModel,
+        token: String?
+    ) -> some View {
+        if #available(iOS 18.0, *) {
+            modifier(AppleTranslationFallbackModifier(viewModel: viewModel, token: token))
+        } else {
+            self
+        }
+    }
+}

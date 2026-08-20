@@ -235,7 +235,15 @@ struct ManagedAnalysisProgressState: Equatable {
         case .queued: return "等待服务器"
         case .running: return "AI 解析中 · \(completedCues)/\(totalCues)"
         case .pausedQuota: return "仅英文 · 解析已暂停"
-        case .failed: return "仅英文 · AI 解析失败"
+        case .failed:
+            switch errorCode {
+            case .upstreamUnavailable:
+                return "AI 服务不可用 · 准备设备端翻译"
+            case .invalidAnalysisCue, .invalidSSE:
+                return "AI 返回异常 · 准备设备端翻译"
+            case .freeUsedUp, .quotaExceeded, .videoTooLong, .durationUnknown, nil:
+                return "仅英文 · AI 解析失败"
+            }
         case .cancelled:
             return completedCues > 0 ? "部分解析 · 已停止" : "仅英文 · 已停止"
         case .completed: return nil

@@ -103,7 +103,7 @@ final class ImportBYOKResumeTests: XCTestCase {
         await fulfillment(of: [resumed], timeout: 1)
     }
 
-    func testExplicitCancelDeletesCheckpointAfterFailedRun() async throws {
+    func testExplicitCancelPreservesPerCueCheckpointAfterFailedRun() async throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = AnalysisCheckpointStore(directory: directory)
@@ -130,7 +130,7 @@ final class ImportBYOKResumeTests: XCTestCase {
 
         vm.cancelWork()
 
-        XCTAssertNil(try store.load(sourceID: "abcdefghijk", cues: [cue]))
+        XCTAssertNotNil(try store.load(sourceID: "abcdefghijk", cues: [cue]))
     }
 
     func testZeroProgressTimeoutStopsStalledBYOKAndBuildsDiagnostic() async {

@@ -118,6 +118,8 @@ final class LibraryDetailViewModel: ObservableObject {
     @Published var contentTab: LibraryDetailContentTab = .subtitles
     private(set) var managedHydrationPending = false
     @Published private(set) var managedDiscoveryPending = false
+    @Published private(set) var appleTranslationPhase: AppleTranslationFallbackPhase = .idle
+    @Published private(set) var appleTranslationRequestRevision = 0
 
     // Popup for a tapped highlight.
     @Published var popupWord: String?
@@ -145,6 +147,8 @@ final class LibraryDetailViewModel: ObservableObject {
 
     private let replacementAPI: any LibraryDesktopReplacementAPI
     private let managedAPI: any ManagedAnalysisClientProtocol
+    private let cueSyncAPI: any LibraryCueSyncAPI
+    private let appleTranslationStore: AppleTranslationCheckpointStore
     private var replacementStatusTask: Task<Void, Never>?
     private var managedProgressTask: Task<Void, Never>?
     private var progressiveOverlay: ProgressiveAnalysisOverlay?
@@ -153,6 +157,7 @@ final class LibraryDetailViewModel: ObservableObject {
     private var managedPollFailures = 0
     private(set) var managedStreamHealthRevision = 0
     private var managedStreamMustReconnect = false
+    private var appleTranslationJobID: String?
     private var loadRevision = 0
     private let guideService: VideoLearningGuideService
     private var guideTask: Task<Void, Never>?
@@ -169,10 +174,14 @@ final class LibraryDetailViewModel: ObservableObject {
     init(
         api: any LibraryDesktopReplacementAPI = WhatsubAPI.shared,
         managedAPI: any ManagedAnalysisClientProtocol = WhatsubAPI.shared,
+        cueSyncAPI: any LibraryCueSyncAPI = WhatsubAPI.shared,
+        appleTranslationStore: AppleTranslationCheckpointStore = AppleTranslationCheckpointStore(),
         guideService: VideoLearningGuideService = VideoLearningGuideService()
     ) {
         replacementAPI = api
         self.managedAPI = managedAPI
+        self.cueSyncAPI = cueSyncAPI
+        self.appleTranslationStore = appleTranslationStore
         self.guideService = guideService
     }
 
@@ -183,18 +192,56 @@ final class LibraryDetailViewModel: ObservableObject {
     }
 
     func isWaitingForAI(_ cue: Cue) -> Bool {
+        switch appleTranslationPhase {
+        case .completed, .unavailable, .syncFailed:
+            return false
+        case .preparing, .translating, .syncing:
+            return cue.translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .idle:
+            break
+        }
         guard managedProgress?.status != .completed else { return false }
         return managedProgress != nil
             && progressiveOverlay?.resolvedIndexes.contains(cue.index) != true
     }
 
     var managedEditingBlocked: Bool {
-        managedFinalSyncPending || managedProgress?.blocksEditing == true
+        if appleTranslationPhase.isActive { return true }
+        if AppleTranslationFallback.isEligible(
+            status: managedProgress?.status ?? .completed,
+            errorCode: managedProgress?.errorCode
+        ) {
+            return false
+        }
+        return managedFinalSyncPending || managedProgress?.blocksEditing == true
     }
 
     var managedBannerLabel: String? {
         if managedFinalSyncPending { return "AI 解析完成 · 正在同步最终结果" }
+        if case .preparing = appleTranslationPhase { return managedProgress?.label }
+        if let label = appleTranslationPhase.label { return label }
+        if appleTranslationPhase == .completed { return nil }
         return managedProgress?.label
+    }
+
+    var managedBannerIsActive: Bool {
+        managedProgress?.isPolling == true || appleTranslationPhase.isActive
+    }
+
+    var managedBannerFraction: Double? {
+        appleTranslationPhase.fraction ?? managedProgress.map(\.fraction)
+    }
+
+    var managedCanResume: Bool {
+        guard appleTranslationPhase != .completed,
+              !appleTranslationPhase.isActive else { return false }
+        return managedProgress?.canResume == true
+    }
+
+    var appleTranslationDetail: String? { appleTranslationPhase.detail }
+
+    var appleTranslationRequests: [AppleTranslationRequestItem] {
+        AppleTranslationFallback.requests(from: displayedCues)
     }
 
     var managedQueuePresentation: ManagedAnalysisQueuePresentation {
@@ -240,6 +287,8 @@ final class LibraryDetailViewModel: ObservableObject {
             managedHydrationPending = false
             managedDiscoveryPending = false
             managedProgressError = nil
+            appleTranslationPhase = .idle
+            appleTranslationJobID = nil
             loading = false
             replacementStatusTask = Task { [weak self] in
                 await self?.refreshDesktopReplacementStatus(
@@ -297,6 +346,8 @@ final class LibraryDetailViewModel: ObservableObject {
                 .max(by: { $0.updatedAt < $1.updatedAt }) else {
                 managedProgress = nil
                 managedHydrationPending = false
+                appleTranslationPhase = .idle
+                appleTranslationJobID = nil
                 return
             }
             let isNewJob = managedProgress?.jobID != job.jobId
@@ -372,7 +423,121 @@ final class LibraryDetailViewModel: ObservableObject {
         managedProgressError = nil
         if page.status == .completed {
             managedFinalSyncPending = !(await reloadFinalEntry(id: entry.id, token: token))
+        } else {
+            prepareAppleTranslationFallbackIfNeeded()
         }
+    }
+
+    private func prepareAppleTranslationFallbackIfNeeded() {
+        guard let progress = managedProgress,
+              let entry,
+              AppleTranslationFallback.isEligible(
+                status: progress.status,
+                errorCode: progress.errorCode
+              ),
+              appleTranslationJobID != progress.jobID else { return }
+        appleTranslationJobID = progress.jobID
+
+        guard #available(iOS 18.0, *) else {
+            appleTranslationPhase = .unavailable("需要 iOS 18 或更高版本；英文字幕仍可正常播放。")
+            return
+        }
+
+        if let restored = try? appleTranslationStore.load(
+            entryID: entry.id,
+            sourceCues: entry.analysisJson.subtitles
+        ) {
+            for (index, translation) in restored {
+                displayedCues = AppleTranslationFallback.applying(
+                    translation: translation,
+                    toCueIndex: index,
+                    in: displayedCues
+                )
+            }
+        }
+
+        appleTranslationPhase = .preparing(total: appleTranslationRequests.count)
+        appleTranslationRequestRevision += 1
+    }
+
+    func beginAppleTranslation() {
+        guard case let .preparing(total) = appleTranslationPhase else { return }
+        appleTranslationPhase = .translating(completed: 0, total: total)
+    }
+
+    func acceptAppleTranslation(cueIndex: Int, translation: String) throws {
+        guard let entry else { return }
+        let before = appleTranslationRequests.count
+        displayedCues = AppleTranslationFallback.applying(
+            translation: translation,
+            toCueIndex: cueIndex,
+            in: displayedCues
+        )
+        try appleTranslationStore.save(
+            entryID: entry.id,
+            sourceCues: entry.analysisJson.subtitles,
+            translatedCues: displayedCues
+        )
+        let remaining = appleTranslationRequests.count
+        let total: Int
+        switch appleTranslationPhase {
+        case let .translating(_, value), let .preparing(value): total = value
+        default: total = max(before, remaining)
+        }
+        appleTranslationPhase = .translating(
+            completed: max(0, total - remaining),
+            total: total
+        )
+    }
+
+    func finishAppleTranslation(token: String) async {
+        guard let currentEntry = entry else { return }
+        guard appleTranslationRequests.isEmpty else {
+            appleTranslationPhase = .unavailable("部分字幕未能完成系统翻译；已完成的内容会保留。")
+            return
+        }
+        appleTranslationPhase = .syncing
+        let analysis = AnalysisJson.assembled(
+            subtitles: displayedCues,
+            keyPhrases: currentEntry.analysisJson.keyPhrases,
+            learningGuide: currentEntry.analysisJson.learningGuide,
+            contextProfile: currentEntry.analysisJson.contextProfile,
+            learningGuideSourceFingerprint: currentEntry.analysisJson.learningGuideSourceFingerprint
+        )
+        let srt = SRTGenerator.generate(from: displayedCues)
+        do {
+            try await cueSyncAPI.updateLibraryEntryCues(
+                entryId: currentEntry.id,
+                analysis: analysis,
+                transcriptSrt: srt,
+                token: token
+            )
+            guard entry?.id == currentEntry.id else { return }
+            entry = LibraryEntryDetail(
+                id: currentEntry.id,
+                youtubeId: currentEntry.youtubeId,
+                sourceUrl: currentEntry.sourceUrl,
+                title: currentEntry.title,
+                durationSec: currentEntry.durationSec,
+                transcriptSrt: srt,
+                analysisJson: analysis,
+                videoUrl: currentEntry.videoUrl,
+                audioUrl: currentEntry.audioUrl,
+                analysisFingerprint: ""
+            )
+            progressiveOverlay = nil
+            appleTranslationStore.delete(entryID: currentEntry.id)
+            appleTranslationPhase = .completed
+            managedProgressError = nil
+        } catch APIError.unauthorized {
+            appleTranslationPhase = .syncFailed("登录已过期；翻译已保存在本机，重新登录后可再次同步。")
+        } catch {
+            appleTranslationPhase = .syncFailed("翻译已保存在本机；网络恢复后重新进入视频会自动重试同步。")
+        }
+    }
+
+    func failAppleTranslation() {
+        appleTranslationPhase = .unavailable("未能启用系统翻译语言包；已完成的翻译会保留，英文字幕仍可播放。")
     }
 
     func resumeManagedAnalysis(token: String) async {
@@ -1141,7 +1306,7 @@ final class LibraryDetailViewModel: ObservableObject {
         let srt = SRTGenerator.generate(from: sorted)
         saving = true; saveError = nil
         do {
-            try await WhatsubAPI.shared.updateLibraryEntryCues(
+            try await cueSyncAPI.updateLibraryEntryCues(
                 entryId: e.id,
                 analysis: newAnalysis,
                 transcriptSrt: srt,
