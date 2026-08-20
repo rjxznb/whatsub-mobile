@@ -25,11 +25,11 @@ final class LibraryViewModel: ObservableObject {
     init(
         cache: LibraryCache = .shared,
         managedAPI: any ManagedAnalysisClientProtocol = WhatsubAPI.shared,
-        thumbnailRepairService: LibraryThumbnailRepairService = LibraryThumbnailRepairService()
+        thumbnailRepairService: LibraryThumbnailRepairService? = nil
     ) {
         self.cache = cache
         self.managedAPI = managedAPI
-        self.thumbnailRepairService = thumbnailRepairService
+        self.thumbnailRepairService = thumbnailRepairService ?? LibraryThumbnailRepairService()
     }
 
     func managedJob(for entryID: String) -> ManagedAnalysisJob? {
