@@ -1,7 +1,9 @@
 import Foundation
 
+private let libraryCacheFormatVersion = 2
+
 struct LibraryCacheFile: Codable {
-    var version = 1
+    var version = libraryCacheFormatVersion
     /// Whose library this is. Checked on every read so a logout → login with
     /// a different account can never render the previous user's list.
     /// (CorpusCache predates this concern; corpus data is less sensitive.)
@@ -52,6 +54,7 @@ final class LibraryCache {
     /// same owner + fingerprint matches the server's + within TTL.
     func isFresh(for email: String, serverVersion: Int, now: Date) -> Bool {
         file.fetchedAt > 0
+            && file.version == libraryCacheFormatVersion
             && file.ownerEmail == email
             && file.serverVersion == serverVersion
             && now.timeIntervalSince1970 - file.fetchedAt < ttl
