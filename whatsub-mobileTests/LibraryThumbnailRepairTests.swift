@@ -97,10 +97,12 @@ final class LibraryThumbnailRepairTests: XCTestCase {
             upload: { _, _, _ in XCTFail("upload must not run") }
         )
 
-        XCTAssertTrue((await service.repair(
+        let repaired = await service.repair(
             entries: [entry("missing", youtubeID: "video000001")],
             token: "TOKEN"
-        )).isEmpty)
+        )
+
+        XCTAssertTrue(repaired.isEmpty)
         XCTAssertFalse(cooldown.shouldAttempt(entryID: "missing", at: now.addingTimeInterval(60)))
         XCTAssertTrue(cooldown.shouldAttempt(entryID: "missing", at: now.addingTimeInterval(6 * 3600 + 1)))
     }
