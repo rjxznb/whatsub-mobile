@@ -123,7 +123,7 @@ final class LibraryThumbnailRepairService {
         let candidates = entries.lazy.filter {
             $0.thumbUrl == nil
                 && YouTubeThumbnailFetcher.isYouTubeVideoID($0.youtubeId)
-                && cooldown.shouldAttempt(entryID: $0.id, at: attemptTime)
+                && self.cooldown.shouldAttempt(entryID: $0.id, at: attemptTime)
         }.prefix(5)
         var repaired = Set<String>()
         for entry in candidates {
