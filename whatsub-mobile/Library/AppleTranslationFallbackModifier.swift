@@ -14,13 +14,13 @@ private struct AppleTranslationFallbackModifier: ViewModifier {
                 scheduleIfNeeded()
             }
             .translationTask(configuration) { session in
-                guard let operation = await viewModel.appleTranslationOperation else { return }
+                guard let operation = viewModel.appleTranslationOperation else { return }
                 guard let token else {
-                    await viewModel.failAppleTranslation(operationID: operation.id)
+                    viewModel.failAppleTranslation(operationID: operation.id)
                     return
                 }
                 let items = operation.requests
-                await viewModel.beginAppleTranslation(operationID: operation.id)
+                viewModel.beginAppleTranslation(operationID: operation.id)
                 do {
                     let sourceByIndex = Dictionary(
                         uniqueKeysWithValues: items.map { ($0.cueIndex, $0.sourceText) }
@@ -56,9 +56,9 @@ private struct AppleTranslationFallbackModifier: ViewModifier {
                 } catch is CancellationError {
                     // SwiftUI cancels translationTask when the detail view goes
                     // away. Per-response checkpoints make the next visit resume.
-                    await viewModel.pauseAppleTranslationForRetry(operationID: operation.id)
+                    viewModel.pauseAppleTranslationForRetry(operationID: operation.id)
                 } catch {
-                    await viewModel.failAppleTranslation(operationID: operation.id)
+                    viewModel.failAppleTranslation(operationID: operation.id)
                 }
             }
     }
