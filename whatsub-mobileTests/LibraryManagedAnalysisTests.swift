@@ -2,7 +2,7 @@ import XCTest
 @testable import whatsub_mobile
 
 final class LibraryManagedAnalysisTests: XCTestCase {
-    private actor API: LibraryDesktopReplacementAPI, ManagedAnalysisClientProtocol {
+    private actor API: LibraryDesktopReplacementAPI, ManagedAnalysisClientProtocol, LibraryCueSyncAPI {
         private var detailQueue: [LibraryEntryDetail]
         private var resultQueue: [ManagedAnalysisResultsPage]
         private var detailCallCount = 0
@@ -17,6 +17,7 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         private var jobListCallCount = 0
         private let failingJobListCalls: Set<Int>
         var listedJobs: [ManagedAnalysisJob]
+        private(set) var syncedAnalyses: [AnalysisJson] = []
 
         init(
             details: [LibraryEntryDetail],
@@ -110,6 +111,19 @@ final class LibraryManagedAnalysisTests: XCTestCase {
                 throw ManagedAnalysisClientError.invalidResponse("missing cancel response")
             }
             return cancelResponse
+        }
+
+        func updateLibraryEntryCues(
+            entryId: String,
+            analysis: AnalysisJson,
+            transcriptSrt: String,
+            token: String
+        ) async throws {
+            syncedAnalyses.append(analysis)
+        }
+
+        func syncedTranslations() -> [[String]] {
+            syncedAnalyses.map { $0.subtitles.map(\.translation) }
         }
 
         func resume(id: String, token: String) async throws -> ManagedAnalysisJob {
@@ -237,6 +251,77 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         XCTAssertEqual(viewModel.managedProgress?.completedCues, 1)
         let cursors = await api.cursors()
         XCTAssertEqual(cursors, [-1])
+    }
+
+    @MainActor
+    func testAppleFallbackPreservesManagedCueAndSyncsEveryCompletedTranslation() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AppleTranslationCheckpointStore(directory: directory)
+        var managedCue = cue(0, translation: "模型翻译")
+        managedCue.isKeyPoint = true
+        managedCue.highlightWords = ["Cue"]
+        managedCue.keyNotes = ["Cue": "模型重点"]
+        let failedJob = ManagedAnalysisJob(
+            jobId: "job-1", status: .failed, tier: .pro,
+            createdAt: 1, updatedAt: 2, completedCues: 1, totalCues: 2,
+            tokensIn: 0, tokensOut: 0, errorCode: .upstreamUnavailable,
+            resultEntryId: "entry-1"
+        )
+        let failedPage = ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .failed,
+            completedCues: 1, totalCues: 2, nextBatchCursor: 0,
+            batches: [ManagedAnalysisCompletedBatch(
+                batchIndex: 0,
+                subtitles: [managedCue]
+            )],
+            errorCode: .upstreamUnavailable
+        )
+        let api = API(
+            details: [entry(translations: ["", ""])],
+            jobs: [failedJob],
+            results: [failedPage]
+        )
+        let viewModel = LibraryDetailViewModel(
+            api: api,
+            managedAPI: api,
+            cueSyncAPI: api,
+            appleTranslationStore: store
+        )
+
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["模型翻译", ""])
+        XCTAssertEqual(viewModel.displayedCues[0].highlightWords, ["Cue"])
+        XCTAssertEqual(viewModel.appleTranslationRequests.map(\.cueIndex), [1])
+        XCTAssertEqual(viewModel.appleTranslationPhase, .preparing(total: 1))
+
+        viewModel.beginAppleTranslation()
+        try viewModel.acceptAppleTranslation(cueIndex: 1, translation: "苹果翻译")
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["模型翻译", "苹果翻译"])
+        XCTAssertEqual(
+            try store.load(
+                entryID: "entry-1",
+                sourceCues: viewModel.entry?.analysisJson.subtitles ?? []
+            ),
+            [0: "模型翻译", 1: "苹果翻译"]
+        )
+
+        await viewModel.finishAppleTranslation(token: "token")
+
+        let syncedTranslations = await api.syncedTranslations()
+        XCTAssertEqual(syncedTranslations, [["模型翻译", "苹果翻译"]])
+        XCTAssertEqual(viewModel.appleTranslationPhase, .completed)
+        XCTAssertNil(viewModel.managedBannerLabel)
+        XCTAssertFalse(viewModel.managedEditingBlocked)
+        XCTAssertThrowsError(
+            try store.load(
+                entryID: "entry-1",
+                sourceCues: viewModel.entry?.analysisJson.subtitles ?? []
+            )
+        )
     }
 
     @MainActor

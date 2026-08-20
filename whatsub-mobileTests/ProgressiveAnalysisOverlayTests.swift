@@ -157,7 +157,7 @@ final class ProgressiveAnalysisOverlayTests: XCTestCase {
             tokensIn: 0, tokensOut: 0, errorCode: .upstreamUnavailable, resultEntryId: "entry"
         )
         let presentation = ManagedAnalysisProgressState(job: failed)
-        XCTAssertEqual(presentation.label, "仅英文 · AI 解析失败")
+        XCTAssertEqual(presentation.label, "AI 服务不可用 · 准备设备端翻译")
         XCTAssertTrue(presentation.canResume)
         XCTAssertTrue(presentation.blocksEditing)
     }

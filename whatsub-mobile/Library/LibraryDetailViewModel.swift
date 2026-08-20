@@ -540,6 +540,11 @@ final class LibraryDetailViewModel: ObservableObject {
         appleTranslationPhase = .unavailable("未能启用系统翻译语言包；已完成的翻译会保留，英文字幕仍可播放。")
     }
 
+    func pauseAppleTranslationForRetry() {
+        guard appleTranslationPhase.isActive else { return }
+        appleTranslationPhase = .preparing(total: appleTranslationRequests.count)
+    }
+
     func resumeManagedAnalysis(token: String) async {
         guard let jobID = managedProgress?.jobID else { return }
         managedResuming = true

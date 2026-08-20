@@ -41,6 +41,7 @@ private struct AppleTranslationFallbackModifier: ViewModifier {
                 } catch is CancellationError {
                     // SwiftUI cancels translationTask when the detail view goes
                     // away. Per-response checkpoints make the next visit resume.
+                    await viewModel.pauseAppleTranslationForRetry()
                 } catch {
                     await viewModel.failAppleTranslation()
                 }
