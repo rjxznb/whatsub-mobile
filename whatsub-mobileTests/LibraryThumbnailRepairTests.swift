@@ -9,37 +9,6 @@ private actor RequestedHostRecorder {
     func snapshot() -> [String] { hosts }
 }
 
-private actor ThumbnailFetchGate {
-    private var callCount = 0
-    private var firstStarted = false
-    private var startWaiter: CheckedContinuation<Void, Never>?
-    private var releaseWaiter: CheckedContinuation<Void, Never>?
-
-    func fetchResult() async -> String? {
-        callCount += 1
-        guard callCount == 1 else {
-            return Data([0xff, 0xd8, 0xff, 0xd9]).base64EncodedString()
-        }
-        firstStarted = true
-        startWaiter?.resume()
-        startWaiter = nil
-        await withCheckedContinuation { releaseWaiter = $0 }
-        return Data([0xff, 0xd8, 0xff, 0xd9]).base64EncodedString()
-    }
-
-    func waitUntilFirstStarted() async {
-        if firstStarted { return }
-        await withCheckedContinuation { startWaiter = $0 }
-    }
-
-    func releaseFirst() {
-        releaseWaiter?.resume()
-        releaseWaiter = nil
-    }
-
-    func calls() -> Int { callCount }
-}
-
 final class LibraryThumbnailRepairTests: XCTestCase {
     private func entry(
         _ id: String,
@@ -160,11 +129,15 @@ final class LibraryThumbnailRepairTests: XCTestCase {
         let suite = "thumbnail-repair-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let gate = ThumbnailFetchGate()
+        var fetchCalls = 0
         var uploaded: [String] = []
         let service = LibraryThumbnailRepairService(
             cooldown: ThumbnailRepairCooldownStore(defaults: defaults),
-            fetch: { _ in await gate.fetchResult() },
+            fetch: { _ in
+                fetchCalls += 1
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return Data([0xff, 0xd8, 0xff, 0xd9]).base64EncodedString()
+            },
             upload: { entryID, _, _ in uploaded.append(entryID) }
         )
         let item = entry(
@@ -176,12 +149,10 @@ final class LibraryThumbnailRepairTests: XCTestCase {
         let first = Task { @MainActor in
             await service.repair(entries: [item], token: "TOKEN")
         }
-        await gate.waitUntilFirstStarted()
+        try? await Task.sleep(nanoseconds: 50_000_000)
 
         let duplicate = await service.repair(entries: [item], token: "TOKEN")
-        await gate.releaseFirst()
         let initial = await first.value
-        let fetchCalls = await gate.calls()
 
         XCTAssertTrue(duplicate.isEmpty)
         XCTAssertEqual(initial, ["missing"])
