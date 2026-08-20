@@ -295,7 +295,10 @@ final class VideoLearningModelsTests: XCTestCase {
 
         let request = try XCTUnwrap(RequestCaptureProtocol.request())
         XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertEqual(request.url?.percentEncodedPath, "/api/library/sync/entry%20id/thumb")
+        let components = request.url.flatMap {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)
+        }
+        XCTAssertEqual(components?.percentEncodedPath, "/api/library/sync/entry%20id/thumb")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer TOKEN")
         let body = try XCTUnwrap(
             JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: String]

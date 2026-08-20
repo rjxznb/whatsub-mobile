@@ -40,7 +40,8 @@ final class LibraryThumbnailRepairTests: XCTestCase {
         let result = await fetcher.fetchBase64(videoID: "abcdefghijk")
 
         XCTAssertNotNil(result)
-        XCTAssertEqual(await requestedHosts.snapshot(), ["i.ytimg.com", "img.youtube.com"])
+        let hosts = await requestedHosts.snapshot()
+        XCTAssertEqual(hosts, ["i.ytimg.com", "img.youtube.com"])
         let decoded = result.flatMap { Data(base64Encoded: $0) }
         XCTAssertNotNil(decoded.flatMap { UIImage(data: $0) })
     }
@@ -65,14 +66,19 @@ final class LibraryThumbnailRepairTests: XCTestCase {
             upload: { entryID, _, _ in uploaded.append(entryID) }
         )
         let entries = [
-            entry("covered", thumbURL: "https://example.com/cover.jpg"),
-            entry("missing-1"), entry("missing-2"), entry("missing-3"),
-            entry("missing-4"), entry("missing-5"), entry("missing-6"), entry("missing-7"),
+            entry("covered", youtubeID: "covered0001", thumbURL: "https://example.com/cover.jpg"),
+            entry("missing-1", youtubeID: "video000001"),
+            entry("missing-2", youtubeID: "video000002"),
+            entry("missing-3", youtubeID: "video000003"),
+            entry("missing-4", youtubeID: "video000004"),
+            entry("missing-5", youtubeID: "video000005"),
+            entry("missing-6", youtubeID: "video000006"),
+            entry("missing-7", youtubeID: "video000007"),
         ]
 
         let repaired = await service.repair(entries: entries, token: "TOKEN")
 
-        XCTAssertEqual(fetched, ["missing-1", "missing-3", "missing-4", "missing-5", "missing-6"])
+        XCTAssertEqual(fetched, ["video000001", "video000003", "video000004", "video000005", "video000006"])
         XCTAssertEqual(uploaded, ["missing-1", "missing-3", "missing-4", "missing-5", "missing-6"])
         XCTAssertEqual(repaired, Set(uploaded))
     }
@@ -91,7 +97,10 @@ final class LibraryThumbnailRepairTests: XCTestCase {
             upload: { _, _, _ in XCTFail("upload must not run") }
         )
 
-        XCTAssertTrue((await service.repair(entries: [entry("missing")], token: "TOKEN")).isEmpty)
+        XCTAssertTrue((await service.repair(
+            entries: [entry("missing", youtubeID: "video000001")],
+            token: "TOKEN"
+        )).isEmpty)
         XCTAssertFalse(cooldown.shouldAttempt(entryID: "missing", at: now.addingTimeInterval(60)))
         XCTAssertTrue(cooldown.shouldAttempt(entryID: "missing", at: now.addingTimeInterval(6 * 3600 + 1)))
     }
