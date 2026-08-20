@@ -933,14 +933,7 @@ final class ImportViewModel: ObservableObject {
     /// Best-effort: fetch the YouTube cover (mqdefault.jpg) + base64. Returns nil
     /// on any failure (entry falls back to the i.ytimg URL, VPN-only).
     private static func fetchThumbBase64(videoId: String) async -> String? {
-        guard let url = URL(string: "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg") else { return nil }
-        do {
-            let (data, resp) = try await URLSession.shared.data(from: url)
-            guard let http = resp as? HTTPURLResponse, http.statusCode == 200, !data.isEmpty else { return nil }
-            return data.base64EncodedString()
-        } catch {
-            return nil
-        }
+        await YouTubeThumbnailFetcher.shared.fetchBase64(videoID: videoId)
     }
 
     // MARK: - Helpers

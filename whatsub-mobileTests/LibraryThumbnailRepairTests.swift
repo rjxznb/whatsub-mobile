@@ -2,6 +2,13 @@ import XCTest
 import UIKit
 @testable import whatsub_mobile
 
+private actor RequestedHostRecorder {
+    private var hosts: [String] = []
+
+    func append(_ host: String) { hosts.append(host) }
+    func snapshot() -> [String] { hosts }
+}
+
 final class LibraryThumbnailRepairTests: XCTestCase {
     private func entry(_ id: String, youtubeID: String? = nil, thumbURL: String? = nil) -> LibraryListItem {
         let encodedThumb = thumbURL.map { "\"\($0)\"" } ?? "null"
@@ -16,17 +23,14 @@ final class LibraryThumbnailRepairTests: XCTestCase {
     }
 
     func testFetcherFallsBackToAlternateThumbnailHost() async throws {
-        let lock = NSLock()
-        var requestedHosts: [String] = []
+        let requestedHosts = RequestedHostRecorder()
         let jpeg = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { context in
             context.cgContext.setFillColor(UIColor.red.cgColor)
             context.cgContext.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
         }.jpegData(compressionQuality: 0.8)!
         let fetcher = YouTubeThumbnailFetcher(
             fetch: { url in
-                lock.lock()
-                requestedHosts.append(url.host ?? "")
-                lock.unlock()
+                await requestedHosts.append(url.host ?? "")
                 if url.host == "i.ytimg.com" { throw URLError(.timedOut) }
                 return jpeg
             },
@@ -36,8 +40,9 @@ final class LibraryThumbnailRepairTests: XCTestCase {
         let result = await fetcher.fetchBase64(videoID: "abcdefghijk")
 
         XCTAssertNotNil(result)
-        XCTAssertEqual(requestedHosts, ["i.ytimg.com", "img.youtube.com"])
-        XCTAssertNotNil(result.flatMap(Data.init(base64Encoded:)).flatMap(UIImage.init(data:)))
+        XCTAssertEqual(await requestedHosts.snapshot(), ["i.ytimg.com", "img.youtube.com"])
+        let decoded = result.flatMap { Data(base64Encoded: $0) }
+        XCTAssertNotNil(decoded.flatMap { UIImage(data: $0) })
     }
 
     @MainActor

@@ -337,6 +337,21 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, LibraryCueSyncAPI, FeatureAccess
         _ = try await postExpectingOk(Endpoints.library("sync"), body: data, bearer: token)
     }
 
+    /// Repairs only the stored cover for an existing owner-scoped Library
+    /// entry. Used after a transient i.ytimg failure; it deliberately avoids
+    /// resending or replacing subtitles, analysis, or media metadata.
+    func repairLibraryThumbnail(entryID: String, thumbData: String, token: String) async throws {
+        let pathSegmentCharacters = CharacterSet.urlPathAllowed
+            .subtracting(CharacterSet(charactersIn: "/"))
+        let encodedID = entryID.addingPercentEncoding(withAllowedCharacters: pathSegmentCharacters) ?? entryID
+        let body = try JSONSerialization.data(withJSONObject: ["thumbData": thumbData])
+        _ = try await postExpectingOk(
+            Endpoints.library("sync/\(encodedID)/thumb"),
+            body: body,
+            bearer: token
+        )
+    }
+
     /// PATCH the cue payload (analysisJson + transcriptSrt) for an existing
     /// library entry. Used by the iOS subtitle editor — POST `/sync/:id/cues`
     /// is a thin, idempotent endpoint that doesn't require the heavy

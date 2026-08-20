@@ -18,14 +18,18 @@ final class LibraryViewModel: ObservableObject {
     /// Injectable for tests; production uses the shared on-disk cache.
     private let cache: LibraryCache
     private let managedAPI: any ManagedAnalysisClientProtocol
+    private let thumbnailRepairService: LibraryThumbnailRepairService
     private var managedPollingTask: Task<Void, Never>?
+    private var thumbnailRepairTask: Task<Void, Never>?
 
     init(
         cache: LibraryCache = .shared,
-        managedAPI: any ManagedAnalysisClientProtocol = WhatsubAPI.shared
+        managedAPI: any ManagedAnalysisClientProtocol = WhatsubAPI.shared,
+        thumbnailRepairService: LibraryThumbnailRepairService = LibraryThumbnailRepairService()
     ) {
         self.cache = cache
         self.managedAPI = managedAPI
+        self.thumbnailRepairService = thumbnailRepairService
     }
 
     func managedJob(for entryID: String) -> ManagedAnalysisJob? {
@@ -131,5 +135,23 @@ final class LibraryViewModel: ObservableObject {
         loading = false
         loadedOnce = true
         thumbRefreshNonce &+= 1
+        startThumbnailRepair(token: token)
+    }
+
+    private func startThumbnailRepair(token: String) {
+        thumbnailRepairTask?.cancel()
+        let snapshot = entries
+        thumbnailRepairTask = Task { [weak self] in
+            guard let self else { return }
+            let repaired = await thumbnailRepairService.repair(entries: snapshot, token: token)
+            guard !Task.isCancelled, !repaired.isEmpty else { return }
+            entries = entries.map { entry in
+                guard repaired.contains(entry.id) else { return entry }
+                return entry.replacingThumbnailURL(
+                    Endpoints.library("thumb/\(entry.id)").absoluteString
+                )
+            }
+            thumbRefreshNonce &+= 1
+        }
     }
 }
