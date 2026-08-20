@@ -139,10 +139,11 @@ final class LibraryViewModel: ObservableObject {
     }
 
     private func startThumbnailRepair(token: String) {
-        thumbnailRepairTask?.cancel()
+        guard thumbnailRepairTask == nil else { return }
         let snapshot = entries
         thumbnailRepairTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.thumbnailRepairTask = nil }
             let repaired = await thumbnailRepairService.repair(entries: snapshot, token: token)
             guard !Task.isCancelled, !repaired.isEmpty else { return }
             entries = entries.map { entry in

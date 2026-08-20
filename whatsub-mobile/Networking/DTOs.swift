@@ -123,6 +123,9 @@ struct LibraryListItem: Codable, Identifiable {
     let title: String
     let durationSec: Int?
     let thumbUrl: String?
+    /// True only when the backend owns thumbnail bytes. Optional keeps old
+    /// on-disk Library caches decodable across this wire-format addition.
+    let hasStoredThumbnail: Bool?
     let syncedAt: Int64
     /// Present (signed CDN URL) when the video is self-hosted on OSS → plays
     /// in-app via AVPlayer with NO VPN. nil = YouTube-embed-only → needs VPN.

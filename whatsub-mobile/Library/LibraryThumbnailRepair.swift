@@ -97,6 +97,7 @@ final class LibraryThumbnailRepairService {
     private let now: () -> Date
     private let fetch: Fetch
     private let upload: Upload
+    private var inFlightEntryIDs = Set<String>()
 
     init(
         cooldown: ThumbnailRepairCooldownStore = ThumbnailRepairCooldownStore(),
@@ -120,11 +121,17 @@ final class LibraryThumbnailRepairService {
 
     func repair(entries: [LibraryListItem], token: String) async -> Set<String> {
         let attemptTime = now()
-        let candidates = entries.lazy.filter {
-            $0.thumbUrl == nil
+        let candidates = Array(entries.lazy.filter {
+            let isMissing = $0.hasStoredThumbnail == false
+                || ($0.hasStoredThumbnail == nil && $0.thumbUrl == nil)
+            return isMissing
                 && YouTubeThumbnailFetcher.isYouTubeVideoID($0.youtubeId)
                 && self.cooldown.shouldAttempt(entryID: $0.id, at: attemptTime)
-        }.prefix(5)
+                && !self.inFlightEntryIDs.contains($0.id)
+        }.prefix(5))
+        let candidateIDs = Set(candidates.map(\.id))
+        inFlightEntryIDs.formUnion(candidateIDs)
+        defer { inFlightEntryIDs.subtract(candidateIDs) }
         var repaired = Set<String>()
         for entry in candidates {
             guard !Task.isCancelled else { break }
@@ -155,6 +162,7 @@ extension LibraryListItem {
             title: title,
             durationSec: durationSec,
             thumbUrl: thumbURL,
+            hasStoredThumbnail: true,
             syncedAt: syncedAt,
             videoUrl: videoUrl,
             audioUrl: audioUrl
