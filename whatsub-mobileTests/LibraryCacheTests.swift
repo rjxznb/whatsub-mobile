@@ -52,6 +52,36 @@ final class LibraryCacheTests: XCTestCase {
         try? FileManager.default.removeItem(at: url)
     }
 
+    func testLegacyCacheCanPaintButCannotSkipFormatRefresh() throws {
+        let url = tempURL()
+        let now = Date()
+        let legacyJSON = """
+        {
+          "version": 1,
+          "ownerEmail": "alice@x.com",
+          "serverVersion": 7002,
+          "entries": [{
+            "id": "legacy",
+            "youtubeId": "abcdefghijk",
+            "sourceUrl": "https://youtu.be/abcdefghijk",
+            "title": "Legacy",
+            "durationSec": 120,
+            "thumbUrl": "https://i.ytimg.com/vi/abcdefghijk/mqdefault.jpg",
+            "syncedAt": 1700000000000,
+            "videoUrl": null,
+            "audioUrl": null
+          }],
+          "fetchedAt": \(now.timeIntervalSince1970)
+        }
+        """
+        try Data(legacyJSON.utf8).write(to: url, options: .atomic)
+        let cache = LibraryCache(fileURL: url)
+
+        XCTAssertEqual(cache.cached(for: "alice@x.com")?.entries.first?.id, "legacy")
+        XCTAssertFalse(cache.isFresh(for: "alice@x.com", serverVersion: 7002, now: now))
+        try? FileManager.default.removeItem(at: url)
+    }
+
     func testCrossAccountIsolation() {
         // Logout → login with a different email must never see the previous
         // user's library from disk.
