@@ -6,6 +6,14 @@ struct AppleTranslationRequestItem: Equatable {
     let sourceText: String
 }
 
+struct AppleTranslationFallbackOperation: Equatable {
+    let id: UUID
+    let entryID: String
+    let jobID: String
+    let detailRevision: Int
+    let requests: [AppleTranslationRequestItem]
+}
+
 enum AppleTranslationFallback {
     static func isEligible(
         status: ManagedAnalysisJobStatus,
@@ -113,7 +121,7 @@ private struct AppleTranslationCheckpoint: Codable {
 /// Crash-safe, per-response persistence for Apple Translation. The file is
 /// validated against the immutable English cue/timing fingerprint before use,
 /// so an edited/replaced transcript can never inherit stale translations.
-final class AppleTranslationCheckpointStore {
+actor AppleTranslationCheckpointStore {
     private let directory: URL
     private let fileManager: FileManager
 

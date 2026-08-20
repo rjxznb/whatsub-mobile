@@ -119,7 +119,7 @@ final class LibraryDetailViewModel: ObservableObject {
     private(set) var managedHydrationPending = false
     @Published private(set) var managedDiscoveryPending = false
     @Published private(set) var appleTranslationPhase: AppleTranslationFallbackPhase = .idle
-    @Published private(set) var appleTranslationRequestRevision = 0
+    @Published private(set) var appleTranslationOperation: AppleTranslationFallbackOperation?
 
     // Popup for a tapped highlight.
     @Published var popupWord: String?
@@ -288,6 +288,7 @@ final class LibraryDetailViewModel: ObservableObject {
             managedDiscoveryPending = false
             managedProgressError = nil
             appleTranslationPhase = .idle
+            appleTranslationOperation = nil
             appleTranslationJobID = nil
             loading = false
             replacementStatusTask = Task { [weak self] in
@@ -347,6 +348,7 @@ final class LibraryDetailViewModel: ObservableObject {
                 managedProgress = nil
                 managedHydrationPending = false
                 appleTranslationPhase = .idle
+                appleTranslationOperation = nil
                 appleTranslationJobID = nil
                 return
             }
@@ -424,11 +426,11 @@ final class LibraryDetailViewModel: ObservableObject {
         if page.status == .completed {
             managedFinalSyncPending = !(await reloadFinalEntry(id: entry.id, token: token))
         } else {
-            prepareAppleTranslationFallbackIfNeeded()
+            await prepareAppleTranslationFallbackIfNeeded()
         }
     }
 
-    private func prepareAppleTranslationFallbackIfNeeded() {
+    private func prepareAppleTranslationFallbackIfNeeded() async {
         guard let progress = managedProgress,
               let entry,
               AppleTranslationFallback.isEligible(
@@ -437,13 +439,14 @@ final class LibraryDetailViewModel: ObservableObject {
               ),
               appleTranslationJobID != progress.jobID else { return }
         appleTranslationJobID = progress.jobID
+        let expectedLoadRevision = loadRevision
 
         guard #available(iOS 18.0, *) else {
             appleTranslationPhase = .unavailable("需要 iOS 18 或更高版本；英文字幕仍可正常播放。")
             return
         }
 
-        if let restored = try? appleTranslationStore.load(
+        if let restored = try? await appleTranslationStore.load(
             entryID: entry.id,
             sourceCues: entry.analysisJson.subtitles
         ) {
@@ -456,29 +459,70 @@ final class LibraryDetailViewModel: ObservableObject {
             }
         }
 
-        appleTranslationPhase = .preparing(total: appleTranslationRequests.count)
-        appleTranslationRequestRevision += 1
+        guard loadRevision == expectedLoadRevision,
+              self.entry?.id == entry.id,
+              managedProgress?.jobID == progress.jobID else { return }
+
+        let requests = appleTranslationRequests
+        appleTranslationOperation = AppleTranslationFallbackOperation(
+            id: UUID(),
+            entryID: entry.id,
+            jobID: progress.jobID,
+            detailRevision: expectedLoadRevision,
+            requests: requests
+        )
+        appleTranslationPhase = .preparing(total: requests.count)
     }
 
-    func beginAppleTranslation() {
+    func beginAppleTranslation(operationID: UUID) {
+        guard appleTranslationOperation?.id == operationID else { return }
         guard case let .preparing(total) = appleTranslationPhase else { return }
         appleTranslationPhase = .translating(completed: 0, total: total)
     }
 
-    func acceptAppleTranslation(cueIndex: Int, translation: String) throws {
-        guard let entry else { return }
+    /// Returns false when the owning operation was superseded or persistence
+    /// failed. The Translation task must stop in either case.
+    func acceptAppleTranslation(
+        operationID: UUID,
+        cueIndex: Int,
+        sourceText: String,
+        translation: String
+    ) async -> Bool {
+        guard let operation = appleTranslationOperation,
+              operation.id == operationID,
+              let entry,
+              operation.entryID == entry.id,
+              operation.jobID == managedProgress?.jobID,
+              operation.detailRevision == loadRevision,
+              let currentCue = displayedCues.first(where: { $0.index == cueIndex }),
+              currentCue.text == sourceText else { return false }
+        // Out-of-order duplicate responses and a managed result that landed
+        // during fallback must never overwrite the first authoritative value.
+        guard currentCue.translation
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
         let before = appleTranslationRequests.count
-        displayedCues = AppleTranslationFallback.applying(
+        let candidate = AppleTranslationFallback.applying(
             translation: translation,
             toCueIndex: cueIndex,
             in: displayedCues
         )
-        try appleTranslationStore.save(
-            entryID: entry.id,
-            sourceCues: entry.analysisJson.subtitles,
-            translatedCues: displayedCues
-        )
-        let remaining = appleTranslationRequests.count
+        do {
+            try await appleTranslationStore.save(
+                entryID: entry.id,
+                sourceCues: entry.analysisJson.subtitles,
+                translatedCues: candidate
+            )
+        } catch {
+            guard appleTranslationOperation?.id == operationID else { return false }
+            appleTranslationPhase = .syncFailed("设备存储空间或文件保护导致翻译无法保存；请释放空间或解锁后重试。")
+            return false
+        }
+        // `await` above permits a refresh to supersede us. A stale checkpoint
+        // is fingerprint-isolated on disk, but it must never reach current UI.
+        guard appleTranslationOperation?.id == operationID,
+              self.entry?.id == operation.entryID else { return false }
+        displayedCues = candidate
+        let remaining = AppleTranslationFallback.requests(from: candidate).count
         let total: Int
         switch appleTranslationPhase {
         case let .translating(_, value), let .preparing(value): total = value
@@ -488,9 +532,13 @@ final class LibraryDetailViewModel: ObservableObject {
             completed: max(0, total - remaining),
             total: total
         )
+        return true
     }
 
-    func finishAppleTranslation(token: String) async {
+    func finishAppleTranslation(operationID: UUID, token: String) async {
+        guard let operation = appleTranslationOperation,
+              operation.id == operationID,
+              operation.detailRevision == loadRevision else { return }
         guard let currentEntry = entry else { return }
         guard appleTranslationRequests.isEmpty else {
             appleTranslationPhase = .unavailable("部分字幕未能完成系统翻译；已完成的内容会保留。")
@@ -512,7 +560,8 @@ final class LibraryDetailViewModel: ObservableObject {
                 transcriptSrt: srt,
                 token: token
             )
-            guard entry?.id == currentEntry.id else { return }
+            guard appleTranslationOperation?.id == operationID,
+                  entry?.id == currentEntry.id else { return }
             entry = LibraryEntryDetail(
                 id: currentEntry.id,
                 youtubeId: currentEntry.youtubeId,
@@ -523,24 +572,30 @@ final class LibraryDetailViewModel: ObservableObject {
                 analysisJson: analysis,
                 videoUrl: currentEntry.videoUrl,
                 audioUrl: currentEntry.audioUrl,
-                analysisFingerprint: ""
+                // Backend fingerprints only immutable English timing/text, so
+                // filling Chinese translations leaves this stamp valid.
+                analysisFingerprint: currentEntry.analysisFingerprint
             )
             progressiveOverlay = nil
-            appleTranslationStore.delete(entryID: currentEntry.id)
+            await appleTranslationStore.delete(entryID: currentEntry.id)
             appleTranslationPhase = .completed
             managedProgressError = nil
         } catch APIError.unauthorized {
+            guard appleTranslationOperation?.id == operationID else { return }
             appleTranslationPhase = .syncFailed("登录已过期；翻译已保存在本机，重新登录后可再次同步。")
         } catch {
+            guard appleTranslationOperation?.id == operationID else { return }
             appleTranslationPhase = .syncFailed("翻译已保存在本机；网络恢复后重新进入视频会自动重试同步。")
         }
     }
 
-    func failAppleTranslation() {
+    func failAppleTranslation(operationID: UUID) {
+        guard appleTranslationOperation?.id == operationID else { return }
         appleTranslationPhase = .unavailable("未能启用系统翻译语言包；已完成的翻译会保留，英文字幕仍可播放。")
     }
 
-    func pauseAppleTranslationForRetry() {
+    func pauseAppleTranslationForRetry(operationID: UUID) {
+        guard appleTranslationOperation?.id == operationID else { return }
         guard appleTranslationPhase.isActive else { return }
         appleTranslationPhase = .preparing(total: appleTranslationRequests.count)
     }

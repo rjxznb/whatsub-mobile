@@ -58,7 +58,7 @@ final class AppleTranslationFallbackTests: XCTestCase {
         XCTAssertEqual(filled[1].translation, "苹果翻译")
     }
 
-    func testCheckpointRoundTripsAndRejectsChangedEnglishTranscript() throws {
+    func testCheckpointRoundTripsAndRejectsChangedEnglishTranscript() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -66,10 +66,12 @@ final class AppleTranslationFallbackTests: XCTestCase {
         let source = [Cue(index: 0, time: 0, endTime: 1, text: "Hello")]
         let translated = [Cue(index: 0, time: 0, endTime: 1, text: "Hello", translation: "你好")]
 
-        try store.save(entryID: "entry", sourceCues: source, translatedCues: translated)
-        XCTAssertEqual(try store.load(entryID: "entry", sourceCues: source), [0: "你好"])
+        try await store.save(entryID: "entry", sourceCues: source, translatedCues: translated)
+        let restored = try await store.load(entryID: "entry", sourceCues: source)
+        XCTAssertEqual(restored, [0: "你好"])
 
         let changed = [Cue(index: 0, time: 0, endTime: 1, text: "Changed")]
-        XCTAssertEqual(try store.load(entryID: "entry", sourceCues: changed), [:])
+        let stale = try await store.load(entryID: "entry", sourceCues: changed)
+        XCTAssertEqual(stale, [:])
     }
 }

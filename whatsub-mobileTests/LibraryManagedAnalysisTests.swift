@@ -161,7 +161,8 @@ final class LibraryManagedAnalysisTests: XCTestCase {
             transcriptSrt: "captions",
             analysisJson: .assembled(subtitles: cues, keyPhrases: []),
             videoUrl: nil,
-            audioUrl: nil
+            audioUrl: nil,
+            analysisFingerprint: "source-fingerprint"
         )
     }
 
@@ -297,31 +298,98 @@ final class LibraryManagedAnalysisTests: XCTestCase {
         XCTAssertEqual(viewModel.displayedCues[0].highlightWords, ["Cue"])
         XCTAssertEqual(viewModel.appleTranslationRequests.map(\.cueIndex), [1])
         XCTAssertEqual(viewModel.appleTranslationPhase, .preparing(total: 1))
+        let operation = try XCTUnwrap(viewModel.appleTranslationOperation)
 
-        viewModel.beginAppleTranslation()
-        try viewModel.acceptAppleTranslation(cueIndex: 1, translation: "苹果翻译")
-        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["模型翻译", "苹果翻译"])
-        XCTAssertEqual(
-            try store.load(
-                entryID: "entry-1",
-                sourceCues: viewModel.entry?.analysisJson.subtitles ?? []
-            ),
-            [0: "模型翻译", 1: "苹果翻译"]
+        viewModel.beginAppleTranslation(operationID: operation.id)
+        let accepted = await viewModel.acceptAppleTranslation(
+            operationID: operation.id,
+            cueIndex: 1,
+            sourceText: "Cue 1",
+            translation: "苹果翻译"
         )
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), ["模型翻译", "苹果翻译"])
+        let restored = try await store.load(
+            entryID: "entry-1",
+            sourceCues: viewModel.entry?.analysisJson.subtitles ?? []
+        )
+        XCTAssertEqual(restored, [0: "模型翻译", 1: "苹果翻译"])
 
-        await viewModel.finishAppleTranslation(token: "token")
+        await viewModel.finishAppleTranslation(operationID: operation.id, token: "token")
 
         let syncedTranslations = await api.syncedTranslations()
         XCTAssertEqual(syncedTranslations, [["模型翻译", "苹果翻译"]])
         XCTAssertEqual(viewModel.appleTranslationPhase, .completed)
+        XCTAssertEqual(viewModel.entry?.analysisFingerprint, "source-fingerprint")
         XCTAssertNil(viewModel.managedBannerLabel)
         XCTAssertFalse(viewModel.managedEditingBlocked)
-        XCTAssertThrowsError(
-            try store.load(
+        do {
+            _ = try await store.load(
                 entryID: "entry-1",
                 sourceCues: viewModel.entry?.analysisJson.subtitles ?? []
             )
+            XCTFail("expected the completed checkpoint to be removed")
+        } catch { }
+    }
+
+    @MainActor
+    func testRefreshRejectsResponsesFromSupersededAppleOperation() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AppleTranslationCheckpointStore(directory: directory)
+        let failedJob = ManagedAnalysisJob(
+            jobId: "job-1", status: .failed, tier: .pro,
+            createdAt: 1, updatedAt: 2, completedCues: 0, totalCues: 2,
+            tokensIn: 0, tokensOut: 0, errorCode: .upstreamUnavailable,
+            resultEntryId: "entry-1"
         )
+        let failedPage = ManagedAnalysisResultsPage(
+            jobId: "job-1", entryId: "entry-1", status: .failed,
+            completedCues: 0, totalCues: 2, nextBatchCursor: -1,
+            batches: [], errorCode: .upstreamUnavailable
+        )
+        let refreshed = LibraryEntryDetail(
+            id: "entry-1",
+            youtubeId: "abcdefghijk",
+            sourceUrl: "https://youtu.be/abcdefghijk",
+            title: "Refreshed",
+            durationSec: 30,
+            transcriptSrt: "changed",
+            analysisJson: .assembled(
+                subtitles: [Cue(index: 0, time: 0, endTime: 0.5, text: "Changed source")],
+                keyPhrases: []
+            ),
+            videoUrl: nil,
+            audioUrl: nil
+        )
+        let api = API(
+            details: [entry(translations: ["", ""]), refreshed],
+            jobs: [failedJob],
+            results: [failedPage]
+        )
+        let viewModel = LibraryDetailViewModel(
+            api: api,
+            managedAPI: api,
+            cueSyncAPI: api,
+            appleTranslationStore: store
+        )
+        await viewModel.load(id: "entry-1", token: "token")
+        await viewModel.discoverManagedAnalysis(token: "token")
+        let staleOperation = try XCTUnwrap(viewModel.appleTranslationOperation)
+
+        await viewModel.load(id: "entry-1", token: "token")
+        let accepted = await viewModel.acceptAppleTranslation(
+            operationID: staleOperation.id,
+            cueIndex: 0,
+            sourceText: "Cue 0",
+            translation: "错误旧翻译"
+        )
+
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(viewModel.displayedCues.map(\.text), ["Changed source"])
+        XCTAssertEqual(viewModel.displayedCues.map(\.translation), [""])
+        XCTAssertNil(viewModel.appleTranslationOperation)
     }
 
     @MainActor
