@@ -363,11 +363,28 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, LibraryCueSyncAPI, FeatureAccess
         let keyPhrasesDicts: [[String: Any]] = analysis.keyPhrases.map { kp in
             ["expression": kp.expression, "meaningZh": kp.meaningZh, "usage": kp.usage]
         }
+        var analysisBody: [String: Any] = [
+            "subtitles": subtitlesDicts,
+            "keyPhrases": keyPhrasesDicts,
+        ]
+        // Translation-only updates keep the immutable English timeline, so an
+        // existing guide remains valid. The subtitle editor deliberately builds
+        // an AnalysisJson without these fields after text/timing edits, which
+        // still invalidates the old guide as before.
+        if let guide = analysis.learningGuide,
+           let profile = analysis.contextProfile {
+            analysisBody["learningGuide"] = try JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(guide)
+            )
+            analysisBody["contextProfile"] = try JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(profile)
+            )
+            if let fingerprint = analysis.learningGuideSourceFingerprint {
+                analysisBody["learningGuideSourceFingerprint"] = fingerprint
+            }
+        }
         let body: [String: Any] = [
-            "analysisJson": [
-                "subtitles": subtitlesDicts,
-                "keyPhrases": keyPhrasesDicts,
-            ],
+            "analysisJson": analysisBody,
             "transcriptSrt": transcriptSrt,
         ]
         let data = try JSONSerialization.data(withJSONObject: body)

@@ -21,20 +21,24 @@ private struct AppleTranslationFallbackModifier: ViewModifier {
                 let items = await viewModel.appleTranslationRequests
                 await viewModel.beginAppleTranslation()
                 do {
-                    let requests = items.map {
-                        TranslationSession.Request(
-                            sourceText: $0.sourceText,
-                            clientIdentifier: String($0.cueIndex)
-                        )
-                    }
-                    for try await response in session.translate(batch: requests) {
-                        try Task.checkCancellation()
-                        guard let identifier = response.clientIdentifier,
-                              let cueIndex = Int(identifier) else { continue }
-                        try await viewModel.acceptAppleTranslation(
-                            cueIndex: cueIndex,
-                            translation: response.targetText
-                        )
+                    // Keep each framework request bounded for long Pro videos;
+                    // every response is checkpointed before the next arrives.
+                    for start in stride(from: 0, to: items.count, by: 50) {
+                        let batch = items[start..<min(start + 50, items.count)].map {
+                            TranslationSession.Request(
+                                sourceText: $0.sourceText,
+                                clientIdentifier: String($0.cueIndex)
+                            )
+                        }
+                        for try await response in session.translate(batch: batch) {
+                            try Task.checkCancellation()
+                            guard let identifier = response.clientIdentifier,
+                                  let cueIndex = Int(identifier) else { continue }
+                            try await viewModel.acceptAppleTranslation(
+                                cueIndex: cueIndex,
+                                translation: response.targetText
+                            )
+                        }
                     }
                     try Task.checkCancellation()
                     await viewModel.finishAppleTranslation(token: token)

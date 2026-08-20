@@ -260,7 +260,7 @@ final class VideoLearningModelsTests: XCTestCase {
         XCTAssertNil(analysis["learningGuideSourceFingerprint"])
     }
 
-    func testCueUpdateDropsAllDerivedLearningFields() async throws {
+    func testCueUpdatePreservesDerivedLearningFieldsWhenCallerSuppliesThem() async throws {
         RequestCaptureProtocol.prepare()
 
         try await makeAPI().updateLibraryEntryCues(
@@ -275,6 +275,11 @@ final class VideoLearningModelsTests: XCTestCase {
             JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any]
         )
         let analysis = try XCTUnwrap(body["analysisJson"] as? [String: Any])
-        XCTAssertEqual(Set(analysis.keys), Set(["subtitles", "keyPhrases"]))
+        XCTAssertNotNil(analysis["learningGuide"])
+        XCTAssertNotNil(analysis["contextProfile"])
+        XCTAssertEqual(
+            analysis["learningGuideSourceFingerprint"] as? String,
+            "client-must-not-send"
+        )
     }
 }
