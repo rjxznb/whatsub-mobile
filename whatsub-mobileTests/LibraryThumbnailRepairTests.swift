@@ -9,14 +9,52 @@ private actor RequestedHostRecorder {
     func snapshot() -> [String] { hosts }
 }
 
+private actor ThumbnailFetchGate {
+    private var callCount = 0
+    private var firstStarted = false
+    private var startWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func fetchResult() async -> String? {
+        callCount += 1
+        guard callCount == 1 else {
+            return Data([0xff, 0xd8, 0xff, 0xd9]).base64EncodedString()
+        }
+        firstStarted = true
+        startWaiter?.resume()
+        startWaiter = nil
+        await withCheckedContinuation { releaseWaiter = $0 }
+        return Data([0xff, 0xd8, 0xff, 0xd9]).base64EncodedString()
+    }
+
+    func waitUntilFirstStarted() async {
+        if firstStarted { return }
+        await withCheckedContinuation { startWaiter = $0 }
+    }
+
+    func releaseFirst() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+
+    func calls() -> Int { callCount }
+}
+
 final class LibraryThumbnailRepairTests: XCTestCase {
-    private func entry(_ id: String, youtubeID: String? = nil, thumbURL: String? = nil) -> LibraryListItem {
+    private func entry(
+        _ id: String,
+        youtubeID: String? = nil,
+        thumbURL: String? = nil,
+        hasStoredThumbnail: Bool? = nil
+    ) -> LibraryListItem {
         let encodedThumb = thumbURL.map { "\"\($0)\"" } ?? "null"
+        let encodedStored = hasStoredThumbnail.map(String.init) ?? "null"
         return try! JSONDecoder().decode(LibraryListItem.self, from: Data("""
         {
           "id":"\(id)","youtubeId":"\(youtubeID ?? id)",
           "sourceUrl":"https://www.youtube.com/watch?v=\(youtubeID ?? id)",
           "title":"Title","durationSec":20,"thumbUrl":\(encodedThumb),
+          "hasStoredThumbnail":\(encodedStored),
           "syncedAt":1,"videoUrl":null,"audioUrl":null
         }
         """.utf8))
@@ -66,8 +104,18 @@ final class LibraryThumbnailRepairTests: XCTestCase {
             upload: { entryID, _, _ in uploaded.append(entryID) }
         )
         let entries = [
-            entry("covered", youtubeID: "covered0001", thumbURL: "https://example.com/cover.jpg"),
-            entry("missing-1", youtubeID: "video000001"),
+            entry(
+                "covered",
+                youtubeID: "covered0001",
+                thumbURL: "https://whatsub.eversay.cc/api/library/thumb/covered",
+                hasStoredThumbnail: true
+            ),
+            entry(
+                "missing-1",
+                youtubeID: "video000001",
+                thumbURL: "https://i.ytimg.com/vi/video000001/mqdefault.jpg",
+                hasStoredThumbnail: false
+            ),
             entry("missing-2", youtubeID: "video000002"),
             entry("missing-3", youtubeID: "video000003"),
             entry("missing-4", youtubeID: "video000004"),
@@ -105,5 +153,39 @@ final class LibraryThumbnailRepairTests: XCTestCase {
         XCTAssertTrue(repaired.isEmpty)
         XCTAssertFalse(cooldown.shouldAttempt(entryID: "missing", at: now.addingTimeInterval(60)))
         XCTAssertTrue(cooldown.shouldAttempt(entryID: "missing", at: now.addingTimeInterval(6 * 3600 + 1)))
+    }
+
+    @MainActor
+    func testRepairServiceDoesNotDuplicateAnEntryAlreadyInFlight() async {
+        let suite = "thumbnail-repair-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let gate = ThumbnailFetchGate()
+        var uploaded: [String] = []
+        let service = LibraryThumbnailRepairService(
+            cooldown: ThumbnailRepairCooldownStore(defaults: defaults),
+            fetch: { _ in await gate.fetchResult() },
+            upload: { entryID, _, _ in uploaded.append(entryID) }
+        )
+        let item = entry(
+            "missing",
+            youtubeID: "video000001",
+            thumbURL: "https://i.ytimg.com/vi/video000001/mqdefault.jpg",
+            hasStoredThumbnail: false
+        )
+        let first = Task { @MainActor in
+            await service.repair(entries: [item], token: "TOKEN")
+        }
+        await gate.waitUntilFirstStarted()
+
+        let duplicate = await service.repair(entries: [item], token: "TOKEN")
+        await gate.releaseFirst()
+        let initial = await first.value
+        let fetchCalls = await gate.calls()
+
+        XCTAssertTrue(duplicate.isEmpty)
+        XCTAssertEqual(initial, ["missing"])
+        XCTAssertEqual(fetchCalls, 1)
+        XCTAssertEqual(uploaded, ["missing"])
     }
 }
