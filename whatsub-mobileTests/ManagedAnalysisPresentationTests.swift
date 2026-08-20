@@ -43,6 +43,21 @@ final class ManagedAnalysisPresentationTests: XCTestCase {
         )
     }
 
+    func testExhaustedManagedModelsAnnounceDeviceTranslationFallback() {
+        XCTAssertEqual(
+            ManagedAnalysisProgressState(job: job(.failed, error: .upstreamUnavailable)).label,
+            "AI 服务不可用 · 准备设备端翻译"
+        )
+        XCTAssertEqual(
+            ManagedAnalysisProgressState(job: job(.failed, error: .invalidAnalysisCue)).label,
+            "AI 返回异常 · 准备设备端翻译"
+        )
+        XCTAssertEqual(
+            ManagedAnalysisProgressState(job: job(.failed, error: .invalidSSE)).label,
+            "AI 返回异常 · 准备设备端翻译"
+        )
+    }
+
     func testLearningGuideAvailabilityTracksManagedAnalysisLifecycle() {
         XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: nil), .available)
         XCTAssertEqual(VideoLearningGuideAnalysisAvailability.make(status: .queued), .available)
