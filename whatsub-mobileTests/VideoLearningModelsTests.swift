@@ -282,4 +282,24 @@ final class VideoLearningModelsTests: XCTestCase {
             "client-must-not-send"
         )
     }
+
+    func testThumbnailRepairUsesOwnedLightweightEndpoint() async throws {
+        RequestCaptureProtocol.prepare()
+        let jpeg = Data([0xff, 0xd8, 0xff, 0xd9]).base64EncodedString()
+
+        try await makeAPI().repairLibraryThumbnail(
+            entryID: "entry id",
+            thumbData: jpeg,
+            token: "TOKEN"
+        )
+
+        let request = try XCTUnwrap(RequestCaptureProtocol.request())
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/library/sync/entry%20id/thumb")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer TOKEN")
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: String]
+        )
+        XCTAssertEqual(body, ["thumbData": jpeg])
+    }
 }
