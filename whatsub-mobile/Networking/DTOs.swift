@@ -14,6 +14,20 @@ struct VerifyCodeResponse: Decodable {
     let expiresAt: Int64
 }
 
+struct LlmEntitlements: Decodable, Equatable {
+    enum Tier: String, Decodable, Equatable {
+        case free
+        case buyout
+        case pro
+        case buyoutPro = "buyout_pro"
+    }
+
+    let tier: Tier
+    let managedRelay: Bool
+    let byok: Bool
+    let tokenTopups: Bool
+}
+
 struct MeResponse: Decodable {
     let email: String
     let hasActiveLicense: Bool
@@ -34,6 +48,9 @@ struct MeResponse: Decodable {
     // or tempted into a second StoreKit charge. Optional — an older backend
     // that omits it decodes to nil (treated as not-subscribed).
     let hasActiveSubscription: Bool?
+    /// Server-authoritative LLM capability matrix. Optional for compatibility
+    /// with deployed backends that predate the entitlement field.
+    let llmEntitlements: LlmEntitlements?
     /// Server-authoritative Library caps for this account. Optional keeps
     /// decoding compatible with older backends; an unknown limit deliberately
     /// skips client-side replacement preflight and leaves final validation to
@@ -43,6 +60,46 @@ struct MeResponse: Decodable {
 
 /// POST body for /api/license/iap/verify.
 struct VerifyPurchaseRequest: Encodable { let signedTransactionInfo: String }
+
+/// `/api/license/iap/verify` returns this for both subscriptions and token
+/// consumables. Subscription callers only need the optional fields to remain
+/// compatible with the existing response shape.
+struct VerifyPurchaseResponse: Decodable, Equatable {
+    let ok: Bool?
+    let credited: Bool?
+    let topupBalance: Int?
+    let topupFrozen: Bool?
+}
+
+struct TokenTopupProduct: Decodable, Equatable, Identifiable {
+    let id: String
+    let tokens: Int
+    let priceCny: String
+}
+
+struct TokenTopupCatalogResponse: Decodable, Equatable {
+    let products: [TokenTopupProduct]
+}
+
+struct TokenWallet: Decodable, Equatable {
+    let monthlyUsed: Int
+    let monthlyLimit: Int
+    let topupBalance: Int
+    let topupFrozen: Bool
+    let periodResetAt: Int64
+}
+
+struct TokenTransaction: Decodable, Equatable, Identifiable {
+    let productId: String?
+    let tokenDelta: Int
+    let createdAt: Int64
+
+    var id: String { "\(productId ?? "unknown")-\(createdAt)-\(tokenDelta)" }
+}
+
+struct TokenTransactionHistoryResponse: Decodable, Equatable {
+    let transactions: [TokenTransaction]
+}
 
 /// Generic `{ ok: true }` or `{ error: "..." }` envelope used by several routes.
 struct OkResponse: Decodable { let ok: Bool? }

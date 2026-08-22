@@ -3,6 +3,7 @@ import SwiftUI
 struct ImportView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: StoreManager
+    @EnvironmentObject var tokenTopups: TokenTopupStore
     @StateObject private var vm = ImportViewModel()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -16,6 +17,7 @@ struct ImportView: View {
     @State private var diagnosticsLog: [String] = []
     @State private var showVPNHelp = false
     @State private var showLLMSettings = false
+    @State private var showTokenTopups = false
     @State private var showAnalysisDiagnostics = false
     @State private var routedManagedJobID: String?
     @State private var trackedFunnelStates = Set<String>()
@@ -120,6 +122,11 @@ struct ImportView: View {
         }
         .sheet(isPresented: $showLLMSettings, onDismiss: continueWithBYOKIfConfigured) {
             NavigationStack { LlmSettingsView() }
+        }
+        .sheet(isPresented: $showTokenTopups) {
+            TokenTopupSheet()
+                .environmentObject(appState)
+                .environmentObject(tokenTopups)
         }
         .sheet(isPresented: $showAnalysisDiagnostics) {
             if let report = vm.diagnosticReport {
@@ -413,11 +420,22 @@ struct ImportView: View {
                 })
                     .padding(.horizontal)
             }
-            Button("使用自己的 API Key（视频不限时长）") {
-                showLLMSettings = true
+            if appState.effectiveLlmEntitlements?.byok == true {
+                Button("使用自己的 API Key（视频不限时长）") {
+                    showLLMSettings = true
+                }
+                .buttonStyle(.bordered)
+                .tint(.whatsubAccent)
             }
-            .buttonStyle(.bordered)
-            .tint(.whatsubAccent)
+
+            if policy == .quotaExceeded,
+               appState.effectiveLlmEntitlements?.tokenTopups == true {
+                Button("购买 Token 加量包") {
+                    showTokenTopups = true
+                }
+                .buttonStyle(.bordered)
+                .tint(.whatsubAccent)
+            }
 
             if copy.canRetry {
                 Button(policy == .durationUnknown ? "重新获取视频时长" : "重试提交") {
@@ -438,13 +456,13 @@ struct ImportView: View {
     ) -> (icon: String, title: String, message: String, showsSubscription: Bool, canRetry: Bool) {
         switch policy {
         case .durationUnknown:
-            return ("clock", "无法确认视频时长", "托管解析需要 YouTube 返回准确时长。可以只重试时长查询，或改用自己的 API Key 在手机端解析。", false, true)
+            return ("clock", "无法确认视频时长", "托管解析需要 YouTube 返回准确时长。可以只重试时长查询。", false, true)
         case .videoTooLong(let duration, let limit):
             return ("clock.badge.exclamationmark", "免费版最长 20 分钟", "这个视频约 \(duration / 60) 分钟，免费托管上限为 \(limit / 60) 分钟。Pro 托管不限视频时长。", true, false)
         case .freeUsedUp:
-            return ("sparkles", "免费 AI 体验额度已用完", "订阅 Pro 可获得每月托管额度，或切换到自己的 API Key。", true, false)
+            return ("sparkles", "免费 AI 体验额度已用完", "订阅 Pro 后可以继续解析，已下载的字幕和当前进度会保留。", true, false)
         case .quotaExceeded:
-            return ("gauge", "本月 Pro AI 额度已用完", "下月会自动恢复；现在要继续，可切换到自己的 API Key。", false, false)
+            return ("gauge", "本月 Pro AI 额度已用完", "下月会自动恢复；Pro 用户也可以购买 Token 加量包继续。", false, false)
         case .upstreamUnavailable:
             return ("exclamationmark.icloud", "AI 服务暂时不可用", "字幕仍保留在手机里，稍后重试提交即可。", false, true)
         case .serverBusy:
@@ -460,6 +478,7 @@ struct ImportView: View {
     }
 
     private func continueWithBYOKIfConfigured() {
+        guard appState.effectiveLlmEntitlements?.byok == true else { return }
         let settings = LlmSettingsStore.load()
         guard !settings.useManagedRelay, settings.isConfigured,
               let token = appState.session?.sessionToken else { return }

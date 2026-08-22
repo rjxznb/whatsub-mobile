@@ -7,6 +7,9 @@ enum APIError: Error, Equatable {
     case decoding(String)        // response didn't match the expected shape
     case badInput(String)        // client-side validation (e.g. bad email)
     case quotaExceeded(used: Int, limit: Int)   // 403 from library sync/push — over the OSS-video cap
+    /// Stable server error code for Token top-up flows. The Chinese message
+    /// remains presentation-only; callers branch on the code.
+    case tokenTopup(String)
     /// 429 from /api/license/auth/{send,verify}-code. Wire shape:
     ///   { error: "rate_limited",
     ///     scope: "email-minute" | "email-hour" | "ip-hour",
@@ -36,13 +39,13 @@ enum APIError: Error, Equatable {
             // "quota_exceeded" exists on /library/sync (413) AND /llm/v1 (429),
             // so the 429 branch must come BEFORE the generic library branch.
             case "license_blocked":
-                return "你目前是「网站买断」用户。想用 whatSub 内置 AI 需要订阅 Pro——或者去「我的 → LLM 设置」填一个自己的 API Key 也可以。"
+                return "你目前是「网站买断」用户，托管 AI 需要订阅 Pro；也可以去「我的 → LLM 设置」使用自己的 API Key。"
             case "free_used_up":
-                return "本月免费 AI 体验额度已经用完啦。订阅 Pro 解锁完整月度配额，或者去「我的 → LLM 设置」填自己的 Key 继续用。"
+                return "免费 AI 体验额度已经用完啦。订阅 Pro 后可以继续解析，已下载的字幕和进度会保留。"
             case "trial_used_up":
                 return "桌面端试用额度已经用完。订阅 Pro 即可继续使用 AI 功能。"
             case "quota_exceeded" where code == 429:
-                return "本月 AI 额度已经用完。下个月 1 号自动重置——想现在继续，可以升级套餐。"
+                return "本月 AI 额度已经用完。Pro 用户可以购买 Token 加量包，或等下月额度重置。"
             case "quota_exceeded":
                 return "云端视频已经满了。先到 Library 删一个，或者升级 Pro 解锁更多空间。"
             default: return "服务器错误（\(code)）"
@@ -53,6 +56,15 @@ enum APIError: Error, Equatable {
             return detail
         case .quotaExceeded(let used, let limit):
             return "云端视频已经满了（\(used)/\(limit)）。先到 Library 删一个，或升级 Pro 解锁更多空间。"
+        case .tokenTopup(let code):
+            switch code {
+            case "topup_requires_pro": return "只有有效 Pro 用户可以购买 Token 加量包。"
+            case "topup_product_invalid": return "这个 Token 加量包暂时不可用。"
+            case "topup_account_mismatch": return "这笔交易与当前 whatSub 账号不匹配。"
+            case "order_not_found": return "充值订单不存在或已失效。"
+            case "alipay_unavailable": return "支付服务暂时不可用，请稍后重试。"
+            default: return "Token 加量包暂时无法完成，请稍后重试。"
+            }
         case .rateLimited(_, _, let message):
             // Server-supplied Chinese message already accounts for scope.
             return message

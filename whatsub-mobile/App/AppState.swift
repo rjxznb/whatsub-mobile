@@ -31,6 +31,18 @@ final class AppState: ObservableObject {
 
     var isAuthenticated: Bool { session?.isValid == true }
 
+    /// Effective server-authoritative LLM capabilities for the current
+    /// session. Missing on old backend responses means "unknown", never an
+    /// implicit BYOK grant.
+    var effectiveLlmEntitlements: LlmEntitlements? {
+        guard let currentUser,
+              let session,
+              currentUser.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                == session.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        else { return nil }
+        return currentUser.llmEntitlements
+    }
+
     init(
         pendingManagedCoordinator: PendingManagedAnalysisCoordinator = .shared
     ) {
@@ -51,6 +63,7 @@ final class AppState: ObservableObject {
     func setSession(_ s: Session) {
         try? KeychainStore.save(s)
         session = s
+        LlmEntitlementCache.clear()
     }
 
     func logout() {
@@ -66,6 +79,7 @@ final class AppState: ObservableObject {
             }
         }
         KeychainStore.clear()
+        LlmEntitlementCache.clear()
         session = nil
         currentUser = nil
         pendingLibraryEntryID = nil
@@ -77,6 +91,7 @@ final class AppState: ObservableObject {
         guard let token = session?.sessionToken else { return }
         do {
             currentUser = try await WhatsubAPI.shared.me(token: token)
+            LlmEntitlementCache.install(currentUser?.llmEntitlements, email: session?.email ?? "")
         } catch APIError.unauthorized {
             // Session died server-side — force re-login.
             forceLogout()
@@ -95,6 +110,7 @@ final class AppState: ObservableObject {
             }
         }
         KeychainStore.clear()
+        LlmEntitlementCache.clear()
         session = nil
         currentUser = nil
         pendingLibraryEntryID = nil

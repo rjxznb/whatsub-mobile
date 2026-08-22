@@ -10,6 +10,7 @@ struct MeView: View {
     @State private var llmQuotaError: String?
     @State private var useManagedRelay = true
     @EnvironmentObject var store: StoreManager
+    @EnvironmentObject var tokenTopups: TokenTopupStore
     @EnvironmentObject var featureAccess: FeatureAccessStore
     @State private var showManageSubscriptions = false
     @State private var showLogoutConfirm = false
@@ -17,6 +18,7 @@ struct MeView: View {
     @State private var deletingAccount = false
     @State private var deleteAccountError: String?
     @State private var showSubscribe = false
+    @State private var showTokenTopups = false
     /// Manual entry for the AI 数据使用说明 sheet. The same gate auto-shows
     /// on first authed launch (WhatsubMobileApp.ContentView), but a user
     /// who swipe-dismissed it or wants to re-read needs a non-restart path.
@@ -62,10 +64,21 @@ struct MeView: View {
     private func reloadQuota() async {
         await store.reportCurrentEntitlements()
         await appState.refreshMe()
-        useManagedRelay = LlmSettingsStore.load().useManagedRelay
+        useManagedRelay = LlmEntitlementPolicy.effectiveSettings(
+            LlmSettingsStore.load(),
+            entitlements: appState.effectiveLlmEntitlements
+        ).useManagedRelay
         if let t = appState.session?.sessionToken {
             quota = try? await WhatsubAPI.shared.libraryQuota(token: t)
             corpusQ = try? await WhatsubAPI.shared.corpusQuota(token: t)
+            tokenTopups.installWallet(try? await WhatsubAPI.shared.tokenWallet(token: t))
+            if tokenTopups.wallet != nil {
+                tokenTopups.installHistory(
+                    (try? await WhatsubAPI.shared.tokenTransactionHistory(token: t)) ?? []
+                )
+            } else {
+                tokenTopups.installHistory([])
+            }
             if useManagedRelay {
                 llmQuotaLoading = true
                 llmQuotaError = nil
@@ -115,6 +128,23 @@ struct MeView: View {
                                 .foregroundStyle(.whatsubInk)
                         }
                         managedLlmQuotaRow
+                        if appState.effectiveLlmEntitlements?.tokenTopups == true {
+                            Button {
+                                showTokenTopups = true
+                            } label: {
+                                Label("Token 加量包", systemImage: "plus.circle.fill")
+                                    .foregroundStyle(.whatsubAccent)
+                            }
+                            .buttonStyle(.borderless)
+                        } else if tokenTopups.wallet?.topupFrozen == true {
+                            Button {
+                                showTokenTopups = true
+                            } label: {
+                                Label("充值余额已冻结 · 续订 Pro 后恢复", systemImage: "pause.circle")
+                                    .foregroundStyle(.orange)
+                            }
+                            .buttonStyle(.borderless)
+                        }
                         // 2026-06-11 — was "if currentUser.hasActiveSubscription ==
                         // true". Apple Guideline 2.1(b) rejected build 299:
                         // reviewer purchased via StoreKit but the /verify
@@ -330,6 +360,11 @@ struct MeView: View {
                 SubscribeSheet(onPurchased: { Task { await reloadQuota() } })
                     .environmentObject(store)
             }
+            .sheet(isPresented: $showTokenTopups) {
+                TokenTopupSheet()
+                    .environmentObject(appState)
+                    .environmentObject(tokenTopups)
+            }
             // AI 数据使用说明 sheet — same view the app root auto-presents
             // on first launch. Mounted here so the manual entry button
             // works regardless of whether the auto-presentation already
@@ -403,7 +438,7 @@ struct MeView: View {
     }
 
     private func quotaFooter(_ quota: LlmQuota) -> String {
-        if quota.tier == "free" { return "免费体验包，用完后可订阅 Pro 或切换 BYOK" }
+        if quota.tier == "free" { return "免费体验包，用完后可订阅 Pro" }
         guard quota.periodResetAt > 0 else { return "本月托管 AI 配额" }
         let date = Date(timeIntervalSince1970: Double(quota.periodResetAt) / 1_000)
         let formatter = DateFormatter()

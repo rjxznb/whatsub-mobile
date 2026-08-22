@@ -13,4 +13,11 @@ final class APIErrorTests: XCTestCase {
     func testUnknownServerErrorFallsBackToCode() {
         XCTAssertEqual(APIError.server(500, "boom").chinese, "服务器错误（500）")
     }
+
+    func testTokenTopupUsesStableCodeForPresentation() {
+        XCTAssertEqual(
+            APIError.tokenTopup("topup_requires_pro").chinese,
+            "只有有效 Pro 用户可以购买 Token 加量包。"
+        )
+    }
 }

@@ -11,16 +11,21 @@ struct ChatMessage { let role: String; let content: String }
 struct ChatCompletionsClient {
     let settings: LlmSettings
     let session: URLSession
+    /// Server-authoritative capability matrix. When supplied, every public
+    /// call validates before reading the API key or constructing a URL.
+    let entitlements: LlmEntitlements?
     /// Optional explicit Bearer override — used by tests + special-case
     /// callers (e.g. relay LLM quota check). Production code leaves this
     /// nil and the resolver reads the session token from Keychain.
     let sessionTokenOverride: String?
 
     init(settings: LlmSettings, session: URLSession = .shared,
-         sessionTokenOverride: String? = nil) {
+         sessionTokenOverride: String? = nil,
+         entitlements: LlmEntitlements? = nil) {
         self.settings = settings
         self.session = session
         self.sessionTokenOverride = sessionTokenOverride
+        self.entitlements = entitlements
     }
 
     /// Effective wire config for one call — collapses the "use relay vs
@@ -37,27 +42,29 @@ struct ChatCompletionsClient {
         let usesRelaySSE: Bool
     }
 
-    private func resolveConfig() -> Resolved? {
-        if settings.useManagedRelay {
+    private func resolveConfig(_ effectiveSettings: LlmSettings) -> Resolved? {
+        if effectiveSettings.useManagedRelay {
             let token = sessionTokenOverride ?? KeychainStore.load()?.sessionToken ?? ""
             if !token.isEmpty {
                 return Resolved(
                     baseUrl: Endpoints.llmRelayClientBase,
                     bearer: token,
-                    model: settings.model,        // ignored server-side; sent for completeness
+                    model: effectiveSettings.model,        // ignored server-side; sent for completeness
                     usesRelaySSE: true,
                 )
             }
-            // Relay on but no token (not logged in / token expired) — fall
-            // through to BYOK if it's configured, else treat as not-configured.
+            // Relay on but no token (not logged in / token expired). Never
+            // fall through to the persisted BYOK secret: selecting managed
+            // mode must not silently bypass the entitlement-selected mode.
+            return nil
         }
-        guard !settings.apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
+        guard !effectiveSettings.apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
             return nil
         }
         return Resolved(
             baseUrl: settings.baseUrl,
             bearer: settings.apiKey,
-            model: settings.model,
+            model: effectiveSettings.model,
             usesRelaySSE: false,
         )
     }
@@ -71,7 +78,16 @@ struct ChatCompletionsClient {
         // the data-sharing disclosure. The error is mapped to a friendly
         // RemoteFailure.Kind.consentRequired so the UI can re-present the gate.
         guard AIConsentStore.hasAcceptedRaw else { throw LlmError.consentRequired }
-        guard let r = resolveConfig() else { throw LlmError.notConfigured }
+        let effectiveSettings = LlmEntitlementPolicy.effectiveSettings(
+            settings,
+            entitlements: entitlements ?? LlmEntitlementCache.current(for: KeychainStore.load()?.email)
+        )
+        if let entitlements {
+            try LlmEntitlementPolicy.validateCall(settings: effectiveSettings, entitlements: entitlements)
+        } else {
+            try LlmEntitlementPolicy.validateCall(settings: effectiveSettings)
+        }
+        guard let r = resolveConfig(effectiveSettings) else { throw LlmError.notConfigured }
         guard let url = URL(string: "\(r.baseUrl)/chat/completions") else {
             throw LlmError.notConfigured
         }
@@ -235,7 +251,16 @@ struct ChatCompletionsClient {
             let task = Task {
                 do {
                     guard AIConsentStore.hasAcceptedRaw else { throw LlmError.consentRequired }
-                    guard let r = resolveConfig() else { throw LlmError.notConfigured }
+                    let effectiveSettings = LlmEntitlementPolicy.effectiveSettings(
+                        settings,
+                        entitlements: entitlements ?? LlmEntitlementCache.current(for: KeychainStore.load()?.email)
+                    )
+                    if let entitlements {
+                        try LlmEntitlementPolicy.validateCall(settings: effectiveSettings, entitlements: entitlements)
+                    } else {
+                        try LlmEntitlementPolicy.validateCall(settings: effectiveSettings)
+                    }
+                    guard let r = resolveConfig(effectiveSettings) else { throw LlmError.notConfigured }
                     guard let url = URL(string: "\(r.baseUrl)/chat/completions") else {
                         throw LlmError.notConfigured
                     }
@@ -497,13 +522,13 @@ struct ChatCompletionsClient {
     private static func friendlyMessage(for code: LlmError.PolicyCode, fallback: String) -> String {
         switch code {
         case .licenseBlocked:
-            return "你目前是「网站买断」用户。想用 whatSub 内置 AI 需要订阅 Pro——或者去「我的 → LLM 设置」填一个自己的 API Key 也可以。"
+            return "你目前是「网站买断」用户，托管 AI 需要订阅 Pro；也可以去「我的 → LLM 设置」使用自己的 API Key。"
         case .freeUsedUp:
-            return "本月免费 AI 体验额度已经用完啦。订阅 Pro 解锁完整月度配额，或者去「我的 → LLM 设置」填自己的 Key 继续用。"
+            return "免费 AI 体验额度已经用完啦。订阅 Pro 后可以继续解析，已下载的字幕和进度会保留。"
         case .trialUsedUp:
             return "桌面端试用额度已经用完。订阅 Pro 即可继续使用 AI 功能。"
         case .quotaExceeded:
-            return "本月 AI 额度已经用完。下个月 1 号自动重置——想现在继续，可以升级套餐。"
+            return "本月 AI 额度已经用完。Pro 用户可以购买 Token 加量包，或等下月额度重置。"
         }
     }
 }

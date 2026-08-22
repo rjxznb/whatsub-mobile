@@ -97,10 +97,32 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, LibraryCueSyncAPI, FeatureAccess
 
     /// Report a StoreKit-verified transaction (signed JWS) to the backend, which
     /// re-verifies it and records the entitlement. Caller should refreshMe() after.
-    func verifyPurchase(token: String, signedTransactionInfo: String) async throws {
+    func verifyPurchase(token: String, signedTransactionInfo: String) async throws -> VerifyPurchaseResponse {
         let body = try JSONEncoder().encode(VerifyPurchaseRequest(signedTransactionInfo: signedTransactionInfo))
-        _ = try await post(Endpoints.iap("verify"), body: body, bearer: token)
+        let data = try await post(Endpoints.iap("verify"), body: body, bearer: token)
         await trackFunnel("purchase_success", token: token)
+        return (try? decode(VerifyPurchaseResponse.self, from: data))
+            ?? VerifyPurchaseResponse(ok: true, credited: nil, topupBalance: nil, topupFrozen: nil)
+    }
+
+    // ----- LLM token wallet -----
+
+    /// Public catalog. The server may return an empty list while sales are
+    /// disabled; callers must treat that as unavailable and never invent
+    /// products or prices locally.
+    func tokenTopupCatalog() async throws -> [TokenTopupProduct] {
+        let data = try await get(Endpoints.llm("topups/catalog"), bearer: nil)
+        return try decode(TokenTopupCatalogResponse.self, from: data).products
+    }
+
+    func tokenWallet(token: String) async throws -> TokenWallet {
+        let data = try await get(Endpoints.llm("topups/wallet"), bearer: token)
+        return try decode(TokenWallet.self, from: data)
+    }
+
+    func tokenTransactionHistory(token: String) async throws -> [TokenTransaction] {
+        let data = try await get(Endpoints.llm("topups/history"), bearer: token)
+        return try decode(TokenTransactionHistoryResponse.self, from: data).transactions
     }
 
     // ----- Pro AI feature trials -----
@@ -674,6 +696,15 @@ actor WhatsubAPI: LibraryDesktopReplacementAPI, LibraryCueSyncAPI, FeatureAccess
             if http.statusCode == 403, err?.error == "quota_exceeded" {
                 let q = try? JSONDecoder().decode(QuotaErrorBody.self, from: data)
                 throw APIError.quotaExceeded(used: q?.used ?? 0, limit: q?.limit ?? 0)
+            }
+            let tokenTopupCodes = Set([
+                "topup_product_invalid", "topup_requires_pro",
+                "topup_account_mismatch", "topup_transaction_refunded",
+                "topup_transaction_conflict", "topup_refund_conflict",
+                "order_not_found", "alipay_unavailable",
+            ])
+            if let code = err?.error, tokenTopupCodes.contains(code) {
+                throw APIError.tokenTopup(code)
             }
             if http.statusCode == 429 {
                 // Backend may either return the structured rate_limited body or

@@ -10,10 +10,10 @@ import Foundation
 /// server-side). New users default to true so Pro/Trial users get the
 /// zero-config experience out of the box.
 struct LlmSettings: Codable, Equatable {
-    /// When true, route via `https://whatsub.eversay.cc/api/llm/v1` using
-    /// the user's Pro session OR trial token as Bearer — BYOK fields below
-    /// are ignored. Free users (no token) will get 401 at relay → caller
-    /// surfaces the existing "AI 设置" or upsell sheet.
+/// When true, route via `https://whatsub.eversay.cc/api/llm/v1` using
+/// the current session bearer. The server-authoritative entitlement policy
+/// decides whether this mode is allowed; the persisted BYOK fields are never
+/// used as a fallback from managed mode.
     var useManagedRelay: Bool = true
     // 2026-06-09 — BYOK default values dropped to empty strings to remove
     // brand-name mentions from the UI (App Store review Guideline 5: foreign

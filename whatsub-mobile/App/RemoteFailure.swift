@@ -20,7 +20,7 @@ struct RemoteFailure: Equatable {
     let message: String
     let kind: Kind
 
-    enum Kind: Equatable {
+        enum Kind: Equatable {
         /// Plain failure — render text only.
         case generic
         /// Subscribe-to-fix — the backend told us the user's tier doesn't
@@ -34,7 +34,10 @@ struct RemoteFailure: Equatable {
         /// Global AI-feature consent hasn't been granted yet (App Store
         /// Guideline 5.1.1(i) / 5.1.2(i), 2026-06-09). UI should re-present
         /// the `AIConsentGate` sheet so the user can accept and retry.
-        case consentRequired
+            case consentRequired
+            /// The account cannot use the persisted BYOK configuration. The
+            /// UI should refresh `/me` and present the entitled mode only.
+            case byokNotEntitled
     }
 
     init(message: String, kind: Kind = .generic) {
@@ -48,6 +51,20 @@ struct RemoteFailure: Equatable {
     /// right `kind` so the UI shows the appropriate CTA. Anything unknown
     /// falls through to `.generic` with the standard `localizedDescription`.
     static func from(_ error: Error, fallback: String = "出错了，稍后再试一次") -> RemoteFailure {
+        if let entitlement = error as? LlmEntitlementError {
+            switch entitlement {
+            case .byokNotEntitled:
+                return RemoteFailure(
+                    message: entitlement.errorDescription ?? "当前账号不能使用自己的 API Key",
+                    kind: .byokNotEntitled,
+                )
+            case .managedRelayNotEntitled:
+                return RemoteFailure(
+                    message: entitlement.errorDescription ?? "当前账号不能使用 whatSub 托管 AI",
+                    kind: .subscribeUpsell,
+                )
+            }
+        }
         if let llm = error as? ChatCompletionsClient.LlmError {
             switch llm {
             case .policy(let code, let message, _):
@@ -59,8 +76,16 @@ struct RemoteFailure: Equatable {
                     return RemoteFailure(message: message, kind: .subscribeUpsell)
                 }
             case .notConfigured:
-                return RemoteFailure(message: llm.errorDescription ?? "请先在「我的 → LLM 设置」填好 API Key",
-                                     kind: .configureLLM)
+                if LlmEntitlementCache.current(for: KeychainStore.load()?.email)?.byok == true {
+                    return RemoteFailure(
+                        message: llm.errorDescription ?? "请先在「我的 → LLM 设置」填好 API Key",
+                        kind: .configureLLM
+                    )
+                }
+                return RemoteFailure(
+                    message: "托管 AI 暂时无法连接，请检查登录状态和网络后重试。",
+                    kind: .generic
+                )
             case .consentRequired:
                 return RemoteFailure(
                     message: llm.errorDescription ?? "请先同意 AI 功能的数据使用说明",

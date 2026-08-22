@@ -2,16 +2,12 @@ import SwiftUI
 
 /// LLM 设置 — two stacked surfaces:
 ///
-/// 1. **使用 whatsub 托管 LLM** (default ON, 2026-06-04). When on we route
-///    `/chat/completions` to `whatsub.eversay.cc/api/llm/v1` with the
-///    user's session bearer; the relay enforces tier-based monthly /
-///    lifetime budgets and forces the cheap DeepSeek model server-side.
-///    Monthly managed-relay quota is shown in 我的 → 云端同步 so it is
-///    visible alongside the other cloud allowances.
+/// 1. **使用 whatsub 托管 AI**. Visibility and availability come from the
+///    server-authoritative `llmEntitlements` matrix.
 ///
-/// 2. **BYOK 高级** (collapsed when relay is on). Lets a power user paste
-///    their own provider config — survives the relay being down, lets
-///    them use a cheaper model, etc. Default OFF; opt-in only.
+/// 2. **BYOK**. Only website-buyout accounts may use it; buyout + Pro users
+///    can switch modes. A stored key is retained when the account cannot use
+///    it, but it is not shown as an available mode or read by a call.
 struct LlmSettingsView: View {
     @EnvironmentObject var appState: AppState
 
@@ -26,6 +22,12 @@ struct LlmSettingsView: View {
     /// the screen a privacy-conscious user lands on to inspect data flow.
     /// 2026-06-09 (App Store Guideline 5.1.1/5.1.2 follow-up).
     @State private var showAIConsent: Bool = false
+
+    private var entitlements: LlmEntitlements? { appState.effectiveLlmEntitlements }
+    private var selectedMode: LlmMode { useManagedRelay ? .managedRelay : .byok }
+    private var presentation: LlmSettingsPresentation {
+        LlmSettingsPresentation(entitlements: entitlements, storedMode: selectedMode)
+    }
 
     var body: some View {
         Form {
@@ -60,7 +62,7 @@ struct LlmSettingsView: View {
             // entirely when relay is on. Without this banner the only
             // signal users have is the error host they see ("hmm, why
             // does it say eversay.cc?").
-            if useManagedRelay
+            if presentation.showsModePicker && useManagedRelay
                 && !apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
@@ -85,28 +87,33 @@ struct LlmSettingsView: View {
                 }
             }
 
-            Section {
-                Toggle(isOn: $useManagedRelay) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("使用 whatsub 托管 LLM")
-                            .foregroundStyle(.whatsubInk)
-                        Text("零配置开箱即用,Pro 用户用月度配额,免费 200K 体验包")
-                            .font(.caption)
-                            .foregroundStyle(.whatsubInkMuted)
+            if presentation.showsModePicker {
+                Section {
+                    Picker("AI 模式", selection: $useManagedRelay) {
+                        Text("托管 AI").tag(true)
+                        Text("自己的 Key").tag(false)
                     }
+                    .pickerStyle(.segmented)
+                    .onChange(of: useManagedRelay) { _ in autosave() }
+                } header: {
+                    Text("AI 模式").foregroundStyle(.whatsubInkMuted)
                 }
-                .tint(.whatsubAccent)
-                .onChange(of: useManagedRelay) { _ in autosave() }
+            }
+
+            if presentation.availableModes.contains(.managedRelay) {
+            Section {
+                Label("使用 whatSub 托管 AI", systemImage: "sparkles")
+                    .foregroundStyle(.whatsubInk)
+                Text("由服务端按账号权益和额度管理，无需填写 API Key。")
+                    .font(.caption)
+                    .foregroundStyle(.whatsubInkMuted)
             } header: {
-                Text("中转模式").foregroundStyle(.whatsubInkMuted)
+                Text("托管模式").foregroundStyle(.whatsubInkMuted)
             } footer: {
-                // 2026-06-10 — 显式标明接收方(Apple Guideline 5.1.2(i):
-                // "Specify who the data is sent to")。
-                // 深度求索 (DeepSeek) 是国内有 MIIT 备案的合规服务商,
-                // 跟 China DST/Guideline 5 没冲突。
-                Text("开启时:数据经 whatSub 国内服务器中转后,由「深度求索 (DeepSeek)」提供大模型处理。\n关闭后请在下方填入自己的 LLM API Key(BYOK),数据将直接从设备发给你所选择的服务商,不经过 whatSub。")
+                Text("托管模式会将 AI 功能所需的文本发送到 whatSub 托管服务处理。")
                     .font(.caption)
                     .foregroundStyle(.whatsubInkFaint)
+            }
             }
 
             // ---- BYOK fields — collapse when relay is on ----
@@ -115,7 +122,7 @@ struct LlmSettingsView: View {
             // to generic OpenAI-compatible-shaped examples. App Store review
             // Guideline 5 (China DST/MIIT compliance) requires we don't
             // promote specific foreign LLM brand names in the app UI.
-            if !useManagedRelay {
+            if presentation.showsAPIKeyFields {
                 Section(header: Text("接口地址").foregroundStyle(.whatsubInkMuted)) {
                     TextField("https://api.<your-provider>.com/v1", text: $baseUrl)
                         .autocapitalization(.none)
@@ -173,6 +180,7 @@ struct LlmSettingsView: View {
         .navigationTitle("LLM 设置")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { load() }
+        .onChange(of: entitlements) { _ in load() }
         // Re-read AI consent disclosure — same view the app auto-presents
         // on first launch. Idempotent re-accept.
         .sheet(isPresented: $showAIConsent) {
@@ -187,7 +195,9 @@ struct LlmSettingsView: View {
 
     private func load() {
         let s = LlmSettingsStore.load()
-        useManagedRelay = s.useManagedRelay
+        useManagedRelay = LlmEntitlementPolicy.effectiveSettings(
+            s, entitlements: entitlements
+        ).useManagedRelay
         baseUrl = s.baseUrl
         apiKey = s.apiKey
         model = s.model

@@ -12,6 +12,7 @@ struct IdentifiedImportURL: Identifiable {
 struct WhatsubMobileApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var store = StoreManager()
+    @StateObject private var tokenTopups = TokenTopupStore()
     @StateObject private var featureAccess = FeatureAccessStore()
 
     init() {
@@ -39,6 +40,7 @@ struct WhatsubMobileApp: App {
             ContentView()
                 .environmentObject(appState)
                 .environmentObject(store)
+                .environmentObject(tokenTopups)
                 .environmentObject(featureAccess)
                 .tint(.whatsubAccent)
                 .preferredColorScheme(.dark)
@@ -49,6 +51,7 @@ struct WhatsubMobileApp: App {
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var store: StoreManager
+    @EnvironmentObject var tokenTopups: TokenTopupStore
     @EnvironmentObject var featureAccess: FeatureAccessStore
     @Environment(\.scenePhase) private var scenePhase
     // `selectedTab` lives on AppState now so the URL handler can drive
@@ -105,9 +108,47 @@ struct ContentView: View {
                 gateReady = false
                 store.activateAccount(email: nil)
                 featureAccess.resetMemory()
+                tokenTopups.reset()
                 return
             }
             store.activateAccount(email: appState.session?.email)
+            tokenTopups.loadCatalog = {
+                try await WhatsubAPI.shared.tokenTopupCatalog()
+            }
+            tokenTopups.verifyJWS = { jws in
+                guard let token = appState.session?.sessionToken else {
+                    throw APIError.unauthorized
+                }
+                let response = try await WhatsubAPI.shared.verifyPurchase(
+                    token: token, signedTransactionInfo: jws
+                )
+                await appState.refreshMe()
+                return response
+            }
+            tokenTopups.refreshWallet = {
+                guard let token = appState.session?.sessionToken else {
+                    throw APIError.unauthorized
+                }
+                return try await WhatsubAPI.shared.tokenWallet(token: token)
+            }
+            tokenTopups.loadHistory = {
+                guard let token = appState.session?.sessionToken else {
+                    throw APIError.unauthorized
+                }
+                return try await WhatsubAPI.shared.tokenTransactionHistory(token: token)
+            }
+            tokenTopups.currentEntitlements = {
+                appState.effectiveLlmEntitlements
+            }
+            tokenTopups.resumePausedJobs = {
+                guard let token = appState.session?.sessionToken else { return }
+                guard let entitlements = appState.effectiveLlmEntitlements,
+                      entitlements.managedRelay else { return }
+                guard let jobs = try? await WhatsubAPI.shared.jobs(token: token) else { return }
+                for job in jobs where job.status == .pausedQuota {
+                    _ = try? await WhatsubAPI.shared.resume(id: job.jobId, token: token)
+                }
+            }
             // 2026-06-11 — was `try? await ...` which silently swallowed every
             // backend /verify failure. Apple's reviewer purchased successfully
             // via StoreKit but the call to /api/license/iap/verify failed
@@ -163,6 +204,7 @@ struct ContentView: View {
                 return true
             }
             store.start()
+            tokenTopups.start()
             appState.setPendingManagedRetryActive(scenePhase == .active)
             // Enter UI right away. The detached Task refreshes /me in the
             // background — UI shows mainTabs with the cached `currentUser`
@@ -345,5 +387,6 @@ struct ContentView: View {
     ContentView()
         .environmentObject(AppState())
         .environmentObject(StoreManager())
+        .environmentObject(TokenTopupStore())
         .environmentObject(FeatureAccessStore())
 }
