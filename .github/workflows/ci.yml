@@ -113,7 +113,16 @@ jobs:
             -destination "platform=iOS Simulator,id=${UDID}" \
             -derivedDataPath ./DerivedData \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-            build | xcbeautify || (echo "build failed"; exit 1)
+            build 2>&1 | tee xcode-build.log | xcbeautify
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-build-diagnostics-${{ github.sha }}
+          path: xcode-build.log
+          retention-days: 3
+          if-no-files-found: warn
 
       - name: Run unit tests
         timeout-minutes: 12
